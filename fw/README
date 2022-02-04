@@ -1,0 +1,29 @@
+In order to build firmware, you will need to have the compiler and
+libraries installed on your host.
+    Fedora:
+        sudo dnf install arm-none-eabi-gcc arm-none-eabi-newlib
+
+To build using libopencm3, simply type:
+    make
+
+To send firmware to the programmer, there are two ways supported by the
+Makefile.
+
+A. ST-Link
+    1. Connect the ST-Link to your Kicksmash's STM32 SWD header.
+    2. Connect the USB mini-B on your ST-Link to your build host.
+    3. Connect the USB type-C port on your Kicksmash to power (such as
+        your build host).
+    4. Enter the following command on your build host
+        sudo make flash
+
+B. DFU
+    1. Install a jumper between the DFU pin and the 3.3V pin (immediately
+        next to the DFU pin, at a slight angle).
+    1. Connect the USB type-C port on your Kicksmash to power (such as
+        your build host).
+    3. Wait approximately 20 seconds for the STM32 ROM to cycle all DFU
+        modes until it gets to USB. You can use "lsusb" to determine
+        when the device has appeared.
+    4. Enter the following command on your build host
+        sudo make dfu

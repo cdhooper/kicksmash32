@@ -1,0 +1,17 @@
+*~
+*.o
+*.d
+*.elf
+*.bin
+*.list
+*.srec
+*.hex
+*.map
+*.stylecheck
+generated.*.ld
+.gdb_history
+.DS_Store
+cscope.out
+.cscope_cmd.*
+objs/
+rev1/

@@ -1,0 +1,14 @@
+#!/bin/sh -p
+
+CHECKPROG=libopencm3/scripts/checkpatch.pl
+
+if [[ -z "$*" ]]; then
+    echo "You must specify the filename(s) to check for style"
+    exit 1
+fi
+
+for FILE in $*; do
+    echo -e "---- $FILE ----"
+    $CHECKPROG --no-tree -f --terse --mailback $FILE |
+    egrep -v 'code indent|no spaces at the|return is not|Avoid Camel|are needed for every statement block|externs should be avoided|do not use assignment in if condition|do not use C99|switch and case should be|are necessary for all arms|do not initialise statics to 0|space prohibited between function name and open parenthesis|do not add new typedefs|quoted string split across lines|do not initialise globals to 0|need consistent spacing around'
+done

@@ -1,0 +1,6 @@
+[submodule "fw/libopencm3"]
+	path = fw/libopencm3
+	url = https://github.com/libopencm3/libopencm3
+[submodule "fw/stutils"]
+	path = fw/stutils
+	url = https://github.com/texane/stlink.git
