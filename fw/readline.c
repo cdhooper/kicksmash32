@@ -608,8 +608,8 @@ update_input_line:
             if ((ch < 0x20) || (ch >= 0x80))
                 break;
 literal_input:
-            len = strlen(input_buf + input_pos) + 2;
-            if (len + input_pos >= sizeof (input_buf))
+            len = strlen(input_buf + input_pos) + 1;
+            if (len + 1 + input_pos >= sizeof (input_buf))
                 break;  /* End of input buffer */
 
             /* Push input following the cursor to the right */
@@ -617,7 +617,7 @@ literal_input:
             input_buf[input_pos] = (uint8_t) ch;
 
             putstr(input_buf + input_pos);
-            putchars(KEY_BACKSPACE, len - 2);
+            putchars(KEY_BACKSPACE, len - 1);
             input_pos++;
     }
     return (RC_SUCCESS);

@@ -150,7 +150,7 @@ make_arglist(const char *cmd, char *argv[])
     bool_t      in_dquotes = FALSE;
     const char *ptr;
     char        lch = '\0';
-    char        buf[128];
+    char        buf[600];
     int         cur = 0;
 
     for (ptr = cmd; *ptr != '\0'; lch = *ptr, ptr++) {

@@ -56,7 +56,7 @@ main(void)
 
     adc_init();
 
-    printf("\r\nMX29F1615 programmer %s\n", version_str);
+    printf("\r\nKicksmash 32 %s\n", version_str);
     identify_cpu();
     show_reset_reason();
     check_board_standalone();

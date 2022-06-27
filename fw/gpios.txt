@@ -25,7 +25,7 @@ PA11  USB_DM
 PA12  USB_DP
 PA13  STM_SWDIO_TMS
 PA14  STM_SWDIO_TCK
-PA15  X             Can ETR to TIM2 when Remapped but TIM2 and TIM3 in use
+PA15  X             Default config is for JTAG
 PB0   FLASH_RB2
 PB1   FLASH_RP
 PB2   GND (BOOT1)
