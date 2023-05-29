@@ -430,7 +430,7 @@ void tim8_cc_isr(void) __attribute__((alias("unknown_handler")));
 void adc3_isr(void) __attribute__((alias("unknown_handler")));
 void fsmc_isr(void) __attribute__((alias("unknown_handler")));
 void sdio_isr(void) __attribute__((alias("unknown_handler")));
-void tim5_isr(void) __attribute__((alias("unknown_handler")));
+// void tim5_isr(void) __attribute__((alias("unknown_handler")));
 void spi3_isr(void) __attribute__((alias("unknown_handler")));
 void uart4_isr(void) __attribute__((alias("unknown_handler")));
 void uart5_isr(void) __attribute__((alias("unknown_handler")));

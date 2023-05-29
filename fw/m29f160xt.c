@@ -21,6 +21,11 @@
 #include "timer.h"
 #include "gpio.h"
 #include "usb.h"
+#include "crc32.h"
+#include <libopencm3/stm32/dma.h>
+#include <libopencm3/stm32/rcc.h>
+#include <libopencm3/stm32/timer.h>
+#include <libopencm3/cm3/nvic.h>
 
 #undef  DEBUG_SIGNALS
 
@@ -80,6 +85,9 @@ check_board_standalone(void)
 
     /* Set pullup and test */
     gpio_setv(SOCKET_A0_PORT, 0xffff, 0xffff);
+#if BOARD_REV > 1
+    gpio_setv(SOCKET_A13_PORT, 0x000e, 0x000e);  // PA1-PA3 = A13-A15
+#endif
     timer_delay_msec(1);
     got = gpio_get(SOCKET_A0_PORT, 0xffff);
     if (got != 0xffff) {
@@ -89,6 +97,9 @@ check_board_standalone(void)
 
     /* Set pulldown and test */
     gpio_setv(SOCKET_A0_PORT, 0xffff, 0x0000);
+#if BOARD_REV > 1
+    gpio_setv(SOCKET_A13_PORT, 0x000e, 0x0000);  // PA1-PA3 = A13-A15
+#endif
     timer_delay_msec(1);
     got = gpio_get(SOCKET_A0_PORT, 0xffff);
     if (got != 0x0000) {
@@ -96,12 +107,15 @@ check_board_standalone(void)
         goto in_amiga;
     }
 
-    /* Leave socket address lines with weak pulldown */
     board_is_standalone = true;
-    return;
+    printf("DEBUG: not acting as standalone\n");
+//  return;  // Leave socket address lines with weak pulldown
 in_amiga:
     /* Return to floating input */
     gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT);
+#if BOARD_REV > 1
+    gpio_setmode(SOCKET_A13_PORT, 0x00fe, GPIO_SETMODE_INPUT);
+#endif
     board_is_standalone = false;
 }
 
@@ -139,7 +153,7 @@ address_input(void)
 #if BOARD_REV == 1
     uint32_t addr = GPIO_IDR(SOCKET_A0_PORT);
     addr |= ((GPIO_IDR(SOCKET_A16_PORT) & 0x03c0) << (16 - 6));
-#elif 1
+#elif 0
     /* BOARD_REV 2+ */
     uint32_t addr = GPIO_IDR(SOCKET_A0_PORT) & 0x1fff;
     addr |= ((GPIO_IDR(SOCKET_A13_PORT) & 0x00fe) << (13 - 1));
@@ -151,6 +165,60 @@ address_input(void)
     return (addr);
 }
 
+/*
+ * address_override
+ * ----------------
+ * Override the Flash A18 and A19 address
+ *
+ * override = 0  Temporarily disable override
+ * override = 1  Record new override
+ * override = 2  Restore previous override
+ */
+static void
+address_override(uint8_t bits, uint override)
+{
+    static uint8_t old  = 0;
+    static uint8_t last = 0;
+    uint8_t        val;
+
+    switch (override) {
+        default:
+        case 0:
+            val = 0;
+            break;
+        case 1:
+            val = old = bits;
+            break;
+        case 2:
+            val = old;
+            break;
+    }
+    if (val == last)
+        return;
+    last = val;
+
+    if (val & BIT(3)) {
+        uint shift = (val & BIT(7)) ? 0 : 16;
+        GPIO_BSRR(FLASH_A19_PORT) = FLASH_A19_PIN << shift;
+        gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN,
+                     GPIO_SETMODE_OUTPUT_PPULL_2);
+        printf(" A18=%d", !shift);
+    } else {
+        gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN, GPIO_SETMODE_INPUT);
+        printf(" !A19");
+    }
+    if (val & BIT(2)) {
+        uint shift = (val & 4) ? 0 : 16;
+        GPIO_BSRR(FLASH_A18_PORT) = FLASH_A18_PIN << shift;
+        gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN,
+                     GPIO_SETMODE_OUTPUT_PPULL_2);
+        printf(" A18=%d", !shift);
+    } else {
+        gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN, GPIO_SETMODE_INPUT);
+        printf(" !A18");
+    }
+    printf("\n");
+}
 
 /*
  * address_output_enable
@@ -178,9 +246,10 @@ address_output_enable(void)
 #else
     /* BOARD_REV 2+ */
     /* A0-A12=PC0-PC12 A13-A19=PA1-PA7 */
-    GPIO_CRL(SOCKET_A0_PORT)  = 0x11111111; // Output Push-Pull
+    GPIO_CRL(SOCKET_A0_PORT)  = 0x11111111;  // Output Push-Pull
     GPIO_CRH(SOCKET_A0_PORT)  = 0x00011111;
-    GPIO_CRL(SOCKET_A13_PORT) = 0x11111110;
+    GPIO_CRL(SOCKET_A13_PORT) = 0x11111118;  // PA0=SOCKET_OE = Input
+    address_override(0, 0);  // Suspend A19-A18 override
 #endif
 }
 
@@ -211,9 +280,10 @@ address_output_disable(void)
 #else
     /* BOARD_REV 2+ */
     /* A0-A12=PC0-PC12 A13-A19=PA1-PA7 */
-    GPIO_CRL(SOCKET_A0_PORT)   = 0x88888888; // Input Pull-Up / Pull-Down
-    GPIO_CRH(SOCKET_A0_PORT)   = 0x00088888;
-    GPIO_CRL(SOCKET_A13_PORT)  = 0x88888880;
+    GPIO_CRL(SOCKET_A0_PORT)   = 0x44444444;  // Input
+    GPIO_CRH(SOCKET_A0_PORT)   = 0x44444444;
+    GPIO_CRL(SOCKET_A13_PORT)  = 0x44444448;  // PA0=SOCKET_OE = Input PU
+    address_override(0, 2);  // Restore previous A19-A18 override
 #endif
 }
 
@@ -333,13 +403,11 @@ data_output_disable(void)
 #else
     /* BOARD_REV 2+ */
     /* D0-D15 = PD0-PD15, D16-D31=PE0-PE15 */
-    GPIO_CRL(SOCKET_D0_PORT)  = 0x88888888; // Input Pull-Up / Pull-Down
-    GPIO_CRH(SOCKET_D0_PORT)  = 0x88888888;
-    GPIO_CRL(SOCKET_D16_PORT) = 0x88888888;
-    GPIO_CRH(SOCKET_D16_PORT) = 0x88888888;
+    GPIO_CRL(SOCKET_D0_PORT)  = 0x44444444; // Input
+    GPIO_CRH(SOCKET_D0_PORT)  = 0x44444444;
+    GPIO_CRL(SOCKET_D16_PORT) = 0x44444444;
+    GPIO_CRH(SOCKET_D16_PORT) = 0x44444444;
 #endif
-
-    data_output(0);
 }
 
 /*
@@ -374,41 +442,48 @@ oe_output(uint value)
 #endif
 }
 
+/*
+ * oe_input
+ * --------
+ * Return the current value of the SOCKET_OE pin (either 0 or non-zero).
+ */
 static uint
 oe_input(void)
 {
-    return (gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN) ? 1 : 0);
+    return (GPIO_IDR(SOCKET_OE_PORT) & SOCKET_OE_PIN);
 }
 
 /*
  * oe_output_enable
  * ----------------
- * Enables drive of the OE# (flash output enable) pin.
+ * Enable drive of the FLASH_OE pin, which is flash output enable OE#.
  */
 static void
 oe_output_enable(void)
 {
-    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
 #if 0
-    if (board_is_standalone)
-        gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
+#else
+    /* FLASH_OE = PB13 */
+    GPIO_CRH(FLASH_OE_PORT) = (GPIO_CRH(FLASH_OE_PORT) & 0xff0fffff) |
+                              0x00100000;  // Output
 #endif
 }
 
 /*
  * oe_output_disable
  * -----------------
- * Disables drive of the OE# (flash output enable) pin.
+ * Disable drive of the FLASH_OE pin, which is flash output enable OE#.
  */
 static void
 oe_output_disable(void)
 {
-    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT);
 #if 0
-    if (board_is_standalone) {
-        gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_INPUT);
-        gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
-    }
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT);
+#else
+    /* FLASH_OE = PB13 */
+    GPIO_CRH(FLASH_OE_PORT) = (GPIO_CRH(FLASH_OE_PORT) & 0xff0fffff) |
+                              0x00400000;  // Input
 #endif
 }
 
@@ -1314,37 +1389,45 @@ fail:
 void
 ee_snoop(void)
 {
+    uint     last_oe = 1;
     uint     cons = 0;
     uint     prod = 0;
     uint     iters = 0;
     uint     no_data = 0;
     uint32_t captures[32];
     uint32_t laddr = 0xffffffff;
+
+    address_output_disable();
     while (1) {
         if (oe_input() == 0) {
-            uint32_t addr = address_input();
-            if (addr != laddr) {
-                uint nprod = prod + 1;
-                if (nprod >= ARRAY_SIZE(captures))
-                    nprod = 0;
-                if (nprod == cons)
-                    continue;  // FIFO full
-                captures[prod] = addr;
-                prod = nprod;
-                laddr = addr;
+            /* Only capture on falling edge of OE */
+            if (last_oe == 1) {
+                uint32_t addr = address_input();
+                if (addr != laddr) {
+                    uint nprod = prod + 1;
+                    if (nprod >= ARRAY_SIZE(captures))
+                        nprod = 0;
+                    if (nprod != cons) {
+                        /* FIFO has space */
+                        captures[prod] = addr;
+                        prod = nprod;
+                        laddr = addr;
+                        no_data = 0;
+                        if (iters++ >= 30) {
+                            if (getchar() > 0)
+                                goto abort;
+                            iters = 0;
+                        }
+                        continue;
+                    }
+                }
+                last_oe = 0;
             }
-            no_data = 0;
-            if (iters++ >= 30) {
-                if (input_break_pending())
-                    goto ctrl_c;
-                iters = 0;
-                continue;
-            }
-            continue;
+        } else {
+            last_oe = 1;
         }
-        if (no_data++ < 30)
+        if (no_data++ < 100)
             continue;
-        iters = 0;
         if (cons != prod) {
             while (cons != prod) {
                 printf(" %lx", captures[cons]);
@@ -1353,9 +1436,415 @@ ee_snoop(void)
             }
             printf("\n");
         }
-        if (input_break_pending())
+        if (getchar() > 0)
             break;
     }
-ctrl_c:
-    printf("^C\n");
+abort:
+    printf("\n");
+}
+
+
+/* Buffer to store the results of the ADC conversion */
+#define ADDR_BUF_COUNT 64
+volatile uint16_t addr_buffer[ADDR_BUF_COUNT];
+uint addr_cons = 0;
+uint8_t reply_buffer[256];
+
+#define KS_CMD_ID       0x01  // Reply with software ID
+#define KS_CMD_TESTPATT 0x02  // Reply with bit test pattern
+#define KS_CMD_EEPROM   0x03  // Issue command to EEPROM
+#define KS_CMD_ROMSEL   0x04  // Force or release A18 and A19
+#define KS_CMD_NOP      0x12  // Do nothing
+
+#define KS_STATUS_OK    0x0000  // Success
+#define KS_STATUS_FAIL  0x0001  // Failure
+#define KS_STATUS_CRC   0x0002  // CRC failure
+
+#define KS_FLAG_WE      0x0100  // Issue command to EEPROM (given with CMD)
+
+#define KS_ROMSEL_SAVE  0x0001  // Save setting in NVRAM
+#define KS_ROMSEL_SET   0x0f00  // ROM select bits to force
+#define KS_ROMSEL_BITS  0xf000  // ROM select bit values (A19 is high bit)
+
+static const uint16_t ks_magic[] = { 0x0011 };
+
+#if 0
+static uint8_t
+get_dma_interrupt_flags(uint32_t dma, uint channel)
+{
+    return ((DMA_ISR(dma) >> DMA_FLAG_OFFSET(channel)) & 0x1f);
+}
+
+// DMA_IFCR_CTCIF1
+void
+dma2_channel5_isr(void)
+{
+    uint32_t dma     = DMA2;
+    uint32_t channel = DMA_CHANNEL5;
+
+    uint flags = get_dma_interrupt_flags(dma, channel);
+    printf("[%x]", flags);
+    dma_clear_interrupt_flags(dma, channel, flags);
+}
+#endif
+
+static void
+oe_reply(uint hold_we, uint len, const void *reply_buf)
+{
+    uint count = 0;
+    uint pos = 0;
+    uint tlen = (ee_mode == EE_MODE_32) ? 4 : 2;
+//    uint64_t start;
+
+    for (count = 0; oe_input() == 0; count++) {
+        if (count > 100000) {
+            printf("OE timeout 01\n");
+            return;
+        }
+    }
+    if (count > 0)
+        printf("<%u>", count);
+
+    oe_output_enable();
+    if (ee_mode == EE_MODE_16_HIGH)
+        pos -= 2;  /* Change position so data is in upper 16 bits */
+
+    while ((int)len > 0) {
+        uint32_t dval = 0;
+        dval = *(uint32_t *) ((uint8_t *)reply_buf + pos);
+#if 0
+        if (ee_mode == EE_MODE_16_HIGH)
+            dval <<= 16;
+#endif
+//   printf(",%x,", dval);
+        pos += tlen;
+        len -= tlen;
+        data_output(dval);
+        for (count = 0; oe_input() != 0; count++) {
+            if (count > 100000) {
+                printf("OE timeout 0\n");
+                goto oe_reply_end;
+            }
+        }
+        data_output_enable();  // Drive data
+//        start = timer_tick_get();
+        if (hold_we)
+            we_output(0);
+        for (count = 0; oe_input() == 0; count++) {
+            if (count > 100000) {
+                if (hold_we)
+                    we_output(1);
+                printf("OE timeout 1\n");
+                goto oe_reply_end;
+            }
+        }
+        data_output_disable();
+//        printf("%u ", (unsigned int) (timer_tick_get() - start));
+//      printf("%u ", count);
+        if (hold_we)
+            we_output(1);
+    }
+oe_reply_end:
+    oe_output_disable();
+}
+
+static void
+process_addresses(uint prod)
+{
+    static uint cons = 0;
+    static uint magic_pos = 0;
+    static uint16_t len = 0;
+    static uint16_t cmd = 0;
+    static uint16_t cmd_len = 0;
+    static uint32_t crc;
+    if (prod >= ARRAY_SIZE(addr_buffer))
+        return;
+    while (cons != prod) {
+//      printf(" %x:%04x", cons, addr_buffer[cons]);
+        if (magic_pos++ < ARRAY_SIZE(ks_magic)) {
+            /* Magic phase */
+            if (addr_buffer[cons] != ks_magic[magic_pos - 1])
+                magic_pos = 0;  // No match
+        } else if (magic_pos == ARRAY_SIZE(ks_magic) + 1) {
+            /* Command phase */
+            cmd = addr_buffer[cons];
+//          printf("cmd=%x\n", cmd);
+            switch ((uint8_t) cmd) {
+                case KS_CMD_ID: {
+                    static const uint32_t reply[] = {
+                        0x12091610,  // Matches USB ID
+                        0x00000001,  // Protocol version 0.1
+                        0x00000001,  // Features
+                        0x00000000,  // Unused
+                        0x00000000,  // Unused
+                    };
+                    oe_reply(0, sizeof (reply), &reply);
+                    magic_pos = 0;
+                    break;
+                }
+                case KS_CMD_TESTPATT: {
+                    static const uint32_t reply[] = {
+                        0xaaaa5555, 0xcccc3333, 0xeeee1111, 0x66669999,
+                        0x00020001, 0x00080004, 0x00200010, 0x00800040,
+                        0x02000100, 0x08000400, 0x20001000, 0x80004000,
+                        0xfffdfffe, 0xfff7fffb, 0xffdfffef, 0xff7fffbf,
+                        0xfdfffeff, 0xf7fffbff, 0xdfffefff, 0x7fffbfff
+                    };
+                    oe_reply(0, sizeof (reply), &reply);
+                    magic_pos = 0;
+                    printf("TP\n");
+                    break;
+                }
+                case KS_CMD_EEPROM:
+                case KS_CMD_ROMSEL:
+                    break;
+                case KS_CMD_NOP:
+                    magic_pos = 0;  // Do nothing
+                    break;
+                default:
+printf("unk %x\n", cmd);
+                    magic_pos = 0;  // Unknown command
+                    break;
+            }
+            crc = crc32(0, (void *) &addr_buffer[cons], sizeof (uint16_t));
+        } else if (magic_pos == ARRAY_SIZE(ks_magic) + 2) {
+            /* Length phase */
+            len = cmd_len = addr_buffer[cons];
+            crc = crc32(crc, (void *) &addr_buffer[cons], sizeof (uint16_t));
+        } else if (len-- > 0) {
+            /* Data in phase */
+            if (len == 0) {
+                crc = crc32(crc, (void *) &addr_buffer[cons], 1);
+            } else {
+                len--;
+                crc = crc32(crc, (void *) &addr_buffer[cons], 2);
+            }
+        } else if ((uint16_t) crc != addr_buffer[cons]) {
+            /* CRC failed */
+            uint16_t error = KS_STATUS_CRC;
+            oe_reply(0, sizeof (error), &error);
+printf("%04x CRC %04x != exp %04x %x %x\n", cmd, addr_buffer[cons], (uint16_t)crc, (uint16_t)crc << 1, (uint16_t)crc << 2);
+            magic_pos = 0;  // Unknown command
+        } else {
+            /* Execution phase */
+            switch ((uint8_t) cmd) {
+                case KS_CMD_EEPROM: {
+                    const uint we = cmd & KS_FLAG_WE;
+                    uint8_t *buf1;
+                    uint8_t *buf2;
+                    uint len1;
+                    uint len2;
+                    uint cons_s = cons;
+                    if ((int) cons_s <= 0)
+                        cons_s += ARRAY_SIZE(addr_buffer);
+                    if (cons_s * 2 >= cmd_len) {
+                        /* Send data doesn't wrap */
+                        len1 = cmd_len;
+                        buf1 = ((uint8_t *) &addr_buffer[cons_s]) - len1;
+// don't write
+// dnw prom 22 1;dwn prom 6 1;dwn prom 8 1;dwn prom 1234 4;dwn prom e5d8 1;dw prom 20 10
+// MAGIC 0x11
+// CMD 0x3
+// LEN 0x4
+// DATA 0x091a 0x091b
+// CRC 72ec
+//
+// Array id mode
+// dnw prom 22 1;dwn prom 206 1;dwn prom 4 1;dwn prom 120 2;dwn prom 36ae 1;dw prom aaa 1;dw prom 0 10
+// DATA 0x0090
+// ADDR 0x0555
+                        oe_reply(we, len1, buf1);
+if (we)
+    printf("we\n");
+                    } else {
+                        /* Send data from beginning and end of buffer */
+                        len1 = cons_s * 2;
+                        buf1 = (void *) addr_buffer;
+                        len2 = cmd_len - len1;
+                        buf2 = ((uint8_t *) addr_buffer) +
+                               sizeof (addr_buffer) - len2;
+                        if (len2 != 0)
+                            oe_reply(we, len2, buf2);
+                        oe_reply(we, len1, buf1);
+                    }
+// printf("%04x %04x %04x ", *(uint16_t *)buf1, *(uint16_t *)(buf1 + 2), *(uint16_t *)(buf1 + 4));
+                    break;
+                }
+                case KS_CMD_ROMSEL: {
+                    uint16_t status = KS_STATUS_OK;
+                    uint cons_s = cons - 1;
+                    if ((int) cons_s <= 0)
+                        cons_s += ARRAY_SIZE(addr_buffer);
+printf("%04x %04x ", addr_buffer[cons_s], addr_buffer[cons_s + 1]);
+                    oe_reply(0, sizeof (status), &status);
+                    address_override(addr_buffer[cons_s] >> 8, 1);
+// 11
+// dnw prom 22 1;dwn prom 8 1;dwn prom 4 1;dwn prom 19800 1;dwn prom 2d88 1; dw prom 20 8
+// ~
+// dnw prom 22 1;dwn prom 8 1;dwn prom 4 1;dwn prom 0 1;dwn prom 3a72 1; dw prom 20 8
+                    break;
+                }
+                default:
+                    magic_pos = 0;  // Unknown command
+                    break;
+            }
+            magic_pos = 0;  // Unknown command
+        }
+        if (++cons >= ARRAY_SIZE(addr_buffer))
+            cons = 0;
+    }
+}
+
+void
+tim5_isr(void)
+{
+    uint dma_left;
+    uint producer;
+    uint flags = TIM_SR(TIM5) & TIM_DIER(TIM5);
+    TIM_SR(TIM5) = ~flags;  /* Clear interrupt */
+
+    dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
+    producer = ARRAY_SIZE(addr_buffer) - dma_left;
+    process_addresses(producer);
+}
+
+void
+ee_init(void)
+{
+    /*
+     * Configure DMA on SOCKET_OE going low
+     *
+     * ---------------- STM32F1 Table 78 lists DMA1 channels ----------------
+     * CH1      CH2       CH3       CH4       CH5        CH6       CH7
+     * ADC1     -         -         -         -          -         -
+     * -        SPI1_RX   SPI1_TX   SPI2_Tx   SPI2       -         -
+     *                              I2S2_Tx   I2S2_T
+     * -        USART3_TX USART3_RX USART1_TX USART1_RX  USART2_RX USART2_TX
+     * -        -         -         I2C2_TX   I2C2_RX    I2C1_TX   I2C1_RX
+     * -        TIM1_CH1  -         TIM1_CH4  TIM1_UP    TIM1_CH3  -
+     *                              TIM1_COM
+     *                              TIM1_TRIG
+     * TIM2_CH3 TIM2_UP   -         -         TIM2_CH1   -         TIM2_CH2
+     *                                                             TIM2_CH4
+     * -        TIM3_CH3  TIM3_CH4  -         -          TIM3_CH1  -
+     *                    TIM3_UP                        TIM3_TRIG
+     * TIM4_CH1 -         -         TIM4_CH2  TIM4_CH3   -         TIM4_UP
+     *
+     * ---------------- STM32F1 Table 79 lists DMA2 channels ----------------
+     * CH1       CH2       CH3       CH4       CH5
+     * -         -         -         -         -
+     * SPI_RX    SPI_TX    -         -         -
+     * I2S3_RX   I2S3_TX   -         -         -
+     * -         -         UART4_RX  -         UART4_TX
+     * -         -         -         SDIO      -
+     * TIM5_CH4  TIM5_CH3  -         TIM5_CH2  TIM5_CH1
+     * TIM5_TRIG TIM5_UP
+     * -         -         TIM6_UP   -         -
+     *                     DAC_CH1
+     * -         -         -         TIM7_UP   -
+     *                               DAC_CH2
+     * TIM8_CH3  TIM8_CH4  TIM8_CH1  -         TIM8_CH2
+     *           TIM8_UP   TIM8_TRIG
+     *                     TIM8_COM
+     *
+     * PA0: WKUP/USART2_CTS, ADC12_IN0/TIM2_CH1_ETR, TIM5_CH1/ETH_MII_CRS_WKUP
+     *
+     * DMA1 Channel 1 is used by ADC
+     * DMA2 Channel 5 is used by ROM OE DMA
+     */
+    uint32_t dma     = DMA2;
+    uint32_t channel = DMA_CHANNEL5;
+
+    memset((void *) addr_buffer, 0, sizeof (addr_buffer));
+    printf("ABUF 0x%x\n", (unsigned int) addr_buffer);
+
+    rcc_periph_clock_enable(RCC_DMA2);
+
+    dma_disable_channel(dma, channel);
+
+    dma_channel_reset(dma, channel);
+    dma_set_peripheral_address(dma, channel,
+                               (uintptr_t)&GPIO_IDR(SOCKET_A0_PORT));
+    dma_set_memory_address(dma, channel, (uintptr_t)addr_buffer);
+    dma_set_read_from_peripheral(dma, channel);
+    dma_set_number_of_data(dma, channel, ADDR_BUF_COUNT);
+    dma_disable_peripheral_increment_mode(dma, channel);
+    dma_enable_memory_increment_mode(dma, channel);
+    dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_16BIT);
+    dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_16BIT);
+    dma_enable_circular_mode(dma, channel);
+    dma_set_priority(dma, channel, DMA_CCR_PL_MEDIUM);
+
+    dma_disable_transfer_error_interrupt(dma, channel);
+    dma_disable_half_transfer_interrupt(dma, channel);
+    dma_disable_transfer_complete_interrupt(dma, channel);
+#if 0
+    /*
+     * Can't use DMA interrupt because that only occurs when the
+     * DMA buffer has wrapped.
+     */
+    dma_clear_interrupt_flags(dma, channel,
+                              get_dma_interrupt_flags(dma, channel));
+    dma_disable_transfer_error_interrupt(dma, channel);
+    dma_disable_half_transfer_interrupt(dma, channel);
+    dma_enable_transfer_complete_interrupt(dma, channel);
+    printf("DMA2_ISR = %p\n", &DMA2_ISR);
+    printf("DMA2_CCR(5) = %p\n", &DMA2_CCR(channel));
+#endif
+
+    dma_enable_channel(dma, channel);
+
+    /* Set up TIM5 CH1 to trigger DMA based on external PA0 pin */
+    rcc_periph_clock_enable(RCC_TIM5);
+    rcc_periph_reset_pulse(RST_TIM5);
+
+    timer_disable_counter(TIM5);
+    timer_disable_oc_output(TIM5, TIM_OC1);
+
+    /* Enable capture compare CC1 DMA and interrupt */
+    timer_enable_irq(TIM5, TIM_DIER_CC1DE | TIM_DIER_CC1IE);
+//    timer_update_on_overflow(TIM5);
+
+//    timer_set_dma_on_compare_event(TIM5);  // DMA request when CCx event occurs
+    timer_set_ti1_ch1(TIM5);               // Capture input from channel 1 only
+//  timer_slave_set_polarity(TIM5, 0);     // Slave Polarity falling edge
+
+    timer_continuous_mode(TIM5);
+    timer_set_oc_polarity_low(TIM5, TIM_OC1);
+    timer_set_oc_value(TIM5, TIM_OC1, 1);
+
+    /* Select the Input and set the filter */
+    TIM5_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
+    TIM5_CCMR1 |= TIM_CCMR1_CC1S_IN_TI1 | TIM_CCMR1_IC1F_OFF;
+
+    timer_enable_oc_output(TIM5, TIM_OC1);
+    timer_enable_counter(TIM5);
+
+    timer_clear_flag(TIM5, TIM_SR(TIM5) & TIM_DIER(TIM5));
+#if 0
+    nvic_set_priority(NVIC_DMA2_CHANNEL5_IRQ, 0x20);
+    nvic_enable_irq(NVIC_DMA2_CHANNEL5_IRQ);
+    nvic_set_pending_irq(NVIC_DMA2_CHANNEL5_IRQ);  // Debug
+#endif
+    nvic_set_priority(NVIC_TIM5_IRQ, 0x20);
+    nvic_enable_irq(NVIC_TIM5_IRQ);
+//  nvic_set_pending_irq(NVIC_TIM5_IRQ);  // Debug
+
+#if 0
+    timer_generate_event(TIM5, TIM_EGR_TG): // Generate fake Trigger event
+    timer_generate_event(TIM5, TIM_EGR_UG): // Generate fake Update event
+#endif
+
+    /*
+     * DMA/interrupt enable register (TIMx_DIER)
+     *     UDE: Update DMA request enable
+     *     CC1DE: Capture/Compare 1 DMA request enable
+     *     CC2DE: Capture/Compare 2 DMA request enable
+     *     CC3DE: Capture/Compare 3 DMA request enable
+     *     CC4DE: Capture/Compare 4 DMA request enable
+     *     COMDE: COM DMA request enable
+     *     TDE: trigger DMA request enable
+     */
+    // TIM_DIER_UDE
+    // timer_enable_irq(TIM2, TIM_DIER_UDE);
 }

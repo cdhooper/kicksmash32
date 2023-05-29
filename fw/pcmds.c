@@ -94,6 +94,7 @@ static const memmap_t memmap[] = {
 #endif
     { "DAC",    DAC_BASE },
     { "DMA1",   DMA1_BASE },
+    { "DMA2",   DMA2_BASE },
     { "EXTI",   EXTI_BASE },
     { "FLASH",  FLASH_BASE },
     { "GPIOA",  GPIOA_BASE },
@@ -111,6 +112,8 @@ static const memmap_t memmap[] = {
     { "TIM2",   TIM2_BASE },
     { "TIM3",   TIM3_BASE },
     { "TIM4",   TIM4_BASE },
+    { "TIM5",   TIM5_BASE },
+    { "TIM8",   TIM8_BASE },
     { "USART1", USART1_BASE },
     { "USART3", USART3_BASE },
     { "USB",    USB_PERIPH_BASE },
@@ -429,9 +432,9 @@ cmd_prom(int argc, char * const *argv)
 rc_t
 cmd_map(int argc, char * const *argv)
 {
-    uint third = ARRAY_SIZE(memmap) / 3;
+    uint third = (ARRAY_SIZE(memmap) + 2) / 3;
     uint ent;
-    for (ent = 0; ent <= third; ent++) {
+    for (ent = 0; ent < third; ent++) {
         printf("    %-6s %08x", memmap[ent].name, memmap[ent].addr);
         if (ent + third < ARRAY_SIZE(memmap))
             printf("    %-6s %08x",

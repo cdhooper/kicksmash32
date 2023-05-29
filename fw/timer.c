@@ -21,6 +21,38 @@
 #include <libopencm3/cm3/nvic.h>
 
 /*
+ * STM32F1 timer usage
+ *   TIM2 - bits 16-31 of tick timer (bits 32-63 are in global timer_high)
+ *   TIM3 - bits 0-15 of tick timer, OVF trigger to TIM2
+ *   TIM5 CH1 - ROM OE (PA0) trigger to DMA2 CH5 capture of address
+ *
+ * Potential uses
+ *   TIM5 - CH1 ROM OE (PA0) trigger to DMA2 CH5 send bits 0-15
+ *          TIM5 can only trigger TIM3, which can't be used without changing
+ *          to use a different timer for bits 0-15 of tick
+ *   TIM1 - UP trigger to DMA1 CH5
+ *   TIM4 - UP trigger to DMA1 CH7
+ *   TIM4 CH1 trigger to DMA1 CH1
+ *   TIM4 CH2 trigger to DMA1 CH4
+ *   TIM4 CH3 trigger to DMA1 CH5
+ *   TIM6 - UP trigger to DMA2 CH3 send bits 16-31
+ *   TIM7 - UP trigger to DMA2 CH4
+ *   TIM8 - UP trigger to DMA2 CH2
+ */
+
+/*
+ * Timer trigger possibilities
+ *
+ *       TS 000   001    010    011
+ * Slave   ITR0   ITR1   ITR2   ITR3
+ * ---------------------------------
+ *  TIM2 | TIM1 | TIM8 | TIM3 | TIM4
+ *  TIM3 | TIM1 | TIM2 | TIM5 | TIM4
+ *  TIM4 | TIM1 | TIM2 | TIM3 | TIM8
+ *  TIM5 | TIM2 | TIM3 | TIM4 | TIM8
+ */
+
+/*
  * STM32F4 TIM2 implements a 32-bit counter. This allows us to very easily
  * implement a 64-bit clock tick value by software incrementing the top
  * 32 bits on the 32-bit rollover every ~72 seconds.

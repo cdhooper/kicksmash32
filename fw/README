@@ -10,11 +10,13 @@ To send firmware to the programmer, there are two ways supported by the
 Makefile.
 
 A. ST-Link
-    1. Connect the ST-Link to your Kicksmash's STM32 SWD header.
-    2. Connect the USB mini-B on your ST-Link to your build host.
-    3. Connect the USB type-C port on your Kicksmash to power (such as
+    1. If you've not built the stutils before, you will need cmake:
+	dnf install cmake libusb-devel
+    2. Connect the ST-Link to your Kicksmash's STM32 SWD header.
+    3. Connect the USB mini-B on your ST-Link to your build host.
+    4. Connect the USB type-C port on your Kicksmash to power (such as
         your build host).
-    4. Enter the following command on your build host
+    5. Enter the following command on your build host
         sudo make flash
 
 B. DFU
@@ -27,3 +29,7 @@ B. DFU
         when the device has appeared.
     4. Enter the following command on your build host
         sudo make dfu
+
+To access the device from your Linux host as a non-root user, you will
+want to set up udev rules to open permissions on the recognized USB device.
+	sudo cp udev/70-* /etc/udev/rules.d/

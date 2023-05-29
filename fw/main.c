@@ -46,20 +46,21 @@ main(void)
     reset_everything();
     clock_init();
     timer_init();
-    timer_delay_msec(500);  // Just for development purposes
+//  timer_delay_msec(500);  // Just for development purposes
     gpio_init();
     led_init();
     uart_init();
-
-    rl_initialize();  // Enable command editing and history
-    using_history();
-
-    adc_init();
 
     printf("\r\nKicksmash 32 %s\n", version_str);
     identify_cpu();
     show_reset_reason();
     check_board_standalone();
+
+    rl_initialize();  // Enable command editing and history
+    using_history();
+
+    adc_init();
+    ee_init();
 
     if (board_is_standalone)
         printf("Standalone\n");

@@ -89,6 +89,7 @@
 #define SOCKET_A0_PORT      GPIOC   // PC0-PC15
 #define SOCKET_A13_PORT     GPIOA   // PA1-PA3
 #define SOCKET_A16_PORT     GPIOA   // PA4-PA7
+#define SOCKET_A16_PIN      GPIO4   // PA4
 #endif
 
 /* Values for gpio_setmode() */

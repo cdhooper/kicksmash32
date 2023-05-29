@@ -17,6 +17,7 @@ void     ee_disable(void);
 int      ee_read(uint32_t addr, void *data, uint count);
 int      ee_write(uint32_t addr, void *data, uint count);
 void     ee_id(uint32_t *part1, uint32_t *part2);
+void     ee_init(void);
 void     ee_read_mode(void);
 int      ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose);
 uint16_t ee_status_read(char *status, uint status_len);

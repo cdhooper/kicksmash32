@@ -1,8 +1,7 @@
-# MX29F1615 Programmer Rev 1 is STM32F407-Discovery
-# MX29F1615 Programmer Rev 2 is STM32F103
-# MX29F1615 Programmer Rev 3+ is STM32F107
+# Kicksmash Rev 1
+# Kicksmash Rev 2 replaces some address pins which have weak drive
 
-BOARD_REV ?= 1
+BOARD_REV ?= 2
 
 SRCS   := main.c clock.c gpio.c printf.c timer.c uart.c usb.c version.c \
 	  led.c irq.c mem_access.c readline.c cmdline.c cmds.c pcmds.c \

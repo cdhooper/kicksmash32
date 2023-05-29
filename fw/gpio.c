@@ -308,7 +308,7 @@ gpio_show(int whichport, int whichpin)
                "USB    V5=PA9 CC1=PA8 CC2=PA10 DM=PA11 DP=PA12\n");
 #endif
         printf("\nMODE  ");
-        for (pin = 0; pin < 16; pin++)
+        for (pin = 15; pin >= 0; pin--)
             printf("%4d", pin);
         printf("\n");
     }
@@ -319,7 +319,7 @@ gpio_show(int whichport, int whichpin)
             continue;
         if (print_all)
             printf("GPIO%c ", 'A' + port);
-        for (pin = 0; pin < 16; pin++) {
+        for (pin = 15; pin >= 0; pin--) {
             const char *mode_txt;
             if ((whichpin >= 0) && (pin != whichpin))
                 continue;
@@ -360,14 +360,14 @@ gpio_show(int whichport, int whichpin)
         return;
 
     printf("\nState ");
-    for (pin = 0; pin < 16; pin++)
+    for (pin = 15; pin >= 0; pin--)
         printf("%4d", pin);
     printf("\n");
 
     for (port = 0; port < 5; port++) {
         uint32_t gpio = gpio_num_to_gpio(port);
         printf("GPIO%c ", 'A' + port);
-        for (pin = 0; pin < 16; pin++) {
+        for (pin = 15; pin >= 0; pin--) {
             uint pinstate = !!(gpio_get(gpio, BIT(pin)));
             if ((gpio_getmode(gpio, pin) & 3) != 0) {
                 /* Not in an input mode */
