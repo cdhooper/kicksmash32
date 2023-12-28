@@ -24,7 +24,7 @@ uint16_t ee_status_read(char *status, uint status_len);
 void     ee_status_clear(void);
 void     ee_cmd(uint32_t addr, uint32_t cmd);
 void     ee_poll(void);
-void     ee_snoop(void);
+void     ee_snoop(int flag);
 int      ee_verify(int verbose);
 void     check_board_standalone(void);
 

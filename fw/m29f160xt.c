@@ -108,7 +108,7 @@ check_board_standalone(void)
     }
 
     board_is_standalone = true;
-    printf("DEBUG: not acting as standalone\n");
+    printf("DEBUG: skipping standalone\n");
 //  return;  // Leave socket address lines with weak pulldown
 in_amiga:
     /* Return to floating input */
@@ -352,7 +352,7 @@ data_input(void)
 
 /*
  * data_output_enable
- * ---------------------
+ * ------------------
  * Enables the data pins for output.
  */
 static void
@@ -411,6 +411,22 @@ data_output_disable(void)
 }
 
 /*
+ * oewe_output
+ * -----------
+ * Drives the OEWE (flash write enable on output enable) pin with the specified value.
+ * If this pin is high, when the host drives OE# low, it will result in WE# being
+ * driven low.
+ */
+static void
+oewe_output(uint value)
+{
+#ifdef DEBUG_SIGNALS
+    printf(" WE=%d", value);
+#endif
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, value);
+}
+
+/*
  * we_output
  * ---------
  * Drives the WE# (flash write enable) pin with the specified value.
@@ -422,6 +438,20 @@ we_output(uint value)
     printf(" WE=%d", value);
 #endif
     gpio_setv(FLASH_WE_PORT, FLASH_WE_PIN, value);
+}
+
+/*
+ * we_enable
+ * ---------
+ * Enables or disables WE# pin output
+ */
+static void
+we_enable(uint value)
+{
+    if (value)
+        gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
+    else
+        gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
 }
 
 /*
@@ -478,13 +508,24 @@ oe_output_enable(void)
 static void
 oe_output_disable(void)
 {
-#if 0
-    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT);
+#if 1
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
 #else
     /* FLASH_OE = PB13 */
     GPIO_CRH(FLASH_OE_PORT) = (GPIO_CRH(FLASH_OE_PORT) & 0xff0fffff) |
                               0x00400000;  // Input
 #endif
+}
+
+static void
+update_ee_cmd_mask(void)
+{
+    if (ee_mode == EE_MODE_32)
+        ee_cmd_mask = 0xffffffff;  // 32-bit
+    else if (ee_mode == EE_MODE_16_LOW)
+        ee_cmd_mask = 0x0000ffff;  // 16-bit low
+    else
+        ee_cmd_mask = 0xffff0000;  // 16-bit high
 }
 
 /*
@@ -501,12 +542,9 @@ ee_enable(void)
 #ifdef DEBUG_SIGNALS
     printf("ee_enable\n");
 #endif
-    ticks_per_15_nsec  = timer_nsec_to_tick(15);
-    ticks_per_20_nsec  = timer_nsec_to_tick(20);
-    ticks_per_30_nsec  = timer_nsec_to_tick(30);
     address_output(0);
     address_output_enable();
-    we_output(1);
+    we_output(1);  // WE# disabled
     oe_output(1);
     oe_output_enable();
     data_output_disable();
@@ -516,13 +554,7 @@ ee_enable(void)
     printf("GPIOA=%x GPIOB=%x GPIOC=%x GPIOD=%x GPIOE=%x\n",
            GPIOA, GPIOB, GPIOC, GPIOD, GPIOE);
 #endif
-
-    if (ee_mode == 0)
-        ee_cmd_mask = 0xffffffff;  // 32-bit
-    else if (ee_mode == 1)
-        ee_cmd_mask = 0x0000ffff;  // 16-bit low
-    else
-        ee_cmd_mask = 0xffff0000;  // 16-bit high
+    update_ee_cmd_mask();
 }
 
 /*
@@ -670,6 +702,7 @@ ee_write_word(uint32_t addr, uint32_t data)
     oe_output(1);
     oe_output_enable();
 
+    we_enable(1);
     we_output(0);
     data_output(data & ee_cmd_mask);
     data_output_enable();
@@ -1386,8 +1419,26 @@ fail:
     return (rc);
 }
 
+/* Buffers for DMA from/to GPIOs and Timer event generation registers */
+#define ADDR_BUF_COUNT 64
+#define ALIGN  __attribute__((aligned(16)))
+ALIGN volatile uint16_t addr_buffer[ADDR_BUF_COUNT];
+ALIGN volatile uint32_t t2up_buffer[1];
+ALIGN volatile uint16_t t2c1_buffer[1];
+ALIGN volatile uint16_t t2c2_buffer[ADDR_BUF_COUNT];
+ALIGN volatile uint16_t t2c3_buffer[ADDR_BUF_COUNT];
+ALIGN volatile uint32_t t3c1_buffer[2];
+ALIGN volatile uint32_t t3c3_buffer[2];
+ALIGN volatile uint32_t t3c4_buffer[2];
+ALIGN volatile uint16_t t5c1_buffer[1];
+ALIGN volatile uint16_t t5c2_buffer[1];
+ALIGN volatile uint32_t t5c3_buffer[2];
+ALIGN volatile uint32_t t5c4_buffer[2];
+uint addr_cons = 0;
+uint8_t reply_buffer[256];
+
 void
-ee_snoop(void)
+ee_snoop(int flag)
 {
     uint     last_oe = 1;
     uint     cons = 0;
@@ -1396,6 +1447,33 @@ ee_snoop(void)
     uint     no_data = 0;
     uint32_t captures[32];
     uint32_t laddr = 0xffffffff;
+
+    if (flag) {
+        printf("t5c1 TIM2_EGR %04lx  %04x\n", TIM2_EGR, t5c1_buffer[0]);
+#if 0
+        printf("t2c1 TIM5_EGR %04lx  %04x %08x\n", TIM5_EGR, t2c1_buffer[0], (uint)t2c1_buffer);
+        printf("t5c2 TIM3_EGR %04lx  %04x\n", TIM3_EGR, t5c2_buffer[0]);
+        printf("t5c3 WE       %x\n", (GPIO_ODR(FLASH_WE_PORT) & FLASH_WE_PIN) ? 1 : 0);
+        printf("t2c2 ODR(D0)  %04lx  DMA %04x\n", GPIO_ODR(SOCKET_D0_PORT), ARRAY_SIZE(t2c2_buffer) - dma_get_number_of_data(DMA1, DMA_CHANNEL7));
+        printf("t2c3 ODR(D16) %04lx  DMA %04x\n", GPIO_ODR(SOCKET_D16_PORT), ARRAY_SIZE(t2c3_buffer) - dma_get_number_of_data(DMA1, DMA_CHANNEL1));
+        printf("t5c4 CRL(D0)  %08lx  t3c1 CRH(D8)  %08lx\n",
+               GPIO_CRL(SOCKET_D0_PORT), GPIO_CRH(SOCKET_D0_PORT));
+        printf("t3c3 CRL(D16) %08lx  t3c4 CRH(D24) %08lx\n",
+               GPIO_CRL(SOCKET_D16_PORT), GPIO_CRH(SOCKET_D16_PORT));
+#endif
+#define DO_WE_TEST
+#ifdef DO_WE_TEST
+        /* Enable drive of flash WE */
+        t5c3_buffer[0] = FLASH_WE_PIN << 16;  // Set WE low
+        t5c3_buffer[1] = FLASH_WE_PIN;        // Set WE high
+
+        /* Disable OE for flash */
+        gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
+        gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+#endif
+        return;
+    }
+    printf("Press any key to exit\n");
 
     address_output_disable();
     while (1) {
@@ -1444,12 +1522,6 @@ abort:
 }
 
 
-/* Buffer to store the results of the ADC conversion */
-#define ADDR_BUF_COUNT 64
-volatile uint16_t addr_buffer[ADDR_BUF_COUNT];
-uint addr_cons = 0;
-uint8_t reply_buffer[256];
-
 #define KS_CMD_ID       0x01  // Reply with software ID
 #define KS_CMD_TESTPATT 0x02  // Reply with bit test pattern
 #define KS_CMD_EEPROM   0x03  // Issue command to EEPROM
@@ -1492,10 +1564,14 @@ static void
 oe_reply(uint hold_we, uint len, const void *reply_buf)
 {
     uint count = 0;
-    uint pos = 0;
     uint tlen = (ee_mode == EE_MODE_32) ? 4 : 2;
-//    uint64_t start;
+    uint8_t *dptr;
+#undef MEASURE_OE_W
+#ifdef MEASURE_OE_W
+    uint64_t start;
+#endif
 
+    /* Wait for OE to go high */
     for (count = 0; oe_input() == 0; count++) {
         if (count > 100000) {
             printf("OE timeout 01\n");
@@ -1506,20 +1582,52 @@ oe_reply(uint hold_we, uint len, const void *reply_buf)
         printf("<%u>", count);
 
     oe_output_enable();
+    dptr = (void *) reply_buf;
     if (ee_mode == EE_MODE_16_HIGH)
-        pos -= 2;  /* Change position so data is in upper 16 bits */
+        dptr -= 2;  /* Change position so data is in upper 16 bits */
+#if BOARD_REV > 2
+    /* Board rev 3 and higher have external bus tranceiver, so STM32 can always drive */
+    data_output_enable();  // Drive data pins
+    if (hold_we) {
+        we_enable(0);      // Pull up
+        oewe_output(1);
+    }
+#endif
 
     while ((int)len > 0) {
-        uint32_t dval = 0;
-        dval = *(uint32_t *) ((uint8_t *)reply_buf + pos);
+        uint32_t dval = *(uint32_t *) dptr;
 #if 0
         if (ee_mode == EE_MODE_16_HIGH)
             dval <<= 16;
 #endif
 //   printf(",%x,", dval);
-        pos += tlen;
-        len -= tlen;
+#if BOARD_REV > 2
+if (hold_we) {
+    /* WE should also be high at this point */
+    if (gpio_get(FLASH_WE_PORT, FLASH_WE_PIN) == 0)
+        printf("WE=0?\n");
+}
         data_output(dval);
+        dptr += tlen;
+        len  -= tlen;
+
+        /* Wait for OE to go low (start of this data cycle) */
+        for (count = 0; oe_input() != 0; count++) {
+            if (count > 100000) {
+                printf("OE timeout 0\n");
+                goto oe_reply_end;
+            }
+        }
+if (hold_we) {
+    /* WE should also be low at this point */
+    if (gpio_get(FLASH_WE_PORT, FLASH_WE_PIN) != 0)
+        printf("WE=1?\n");
+}
+#else
+        /* BOARD_REV <= 2 */
+        data_output(dval);
+        dptr += tlen;
+        len -= tlen;
         for (count = 0; oe_input() != 0; count++) {
             if (count > 100000) {
                 printf("OE timeout 0\n");
@@ -1527,25 +1635,54 @@ oe_reply(uint hold_we, uint len, const void *reply_buf)
             }
         }
         data_output_enable();  // Drive data
-//        start = timer_tick_get();
         if (hold_we)
             we_output(0);
+#endif
+#ifdef MEASURE_OE_W
+        start = timer_tick_get();
+#endif
+        /*
+         * Not enough time! By the point that this loop is entered, OE has already
+         * gone high, so the address lines have already been released before we
+         * can drive WE high.
+         * The only option I can see is if DMA hardware can be set up to:
+         * 1) On OE=0, drive data output, then drive WE=0
+         * 1) On OE=1, drive WE=1, load next data, maybe load next data
+         *
+         * If WE from STM32 instead drives a FET gate which connects the external
+         * OE to WE, then we could have a k
+         */
+        /* Wait for OE to go high */
         for (count = 0; oe_input() == 0; count++) {
             if (count > 100000) {
+#if BOARD_REV <= 2
                 if (hold_we)
                     we_output(1);
+#endif
                 printf("OE timeout 1\n");
                 goto oe_reply_end;
             }
         }
+#if BOARD_REV <= 2
         data_output_disable();
-//        printf("%u ", (unsigned int) (timer_tick_get() - start));
-//      printf("%u ", count);
+#endif
+#ifdef MEASURE_OE_W
+        printf("%u,%u ", (unsigned int) (timer_tick_get() - start), count);
+#endif
+#if BOARD_REV <= 2
         if (hold_we)
             we_output(1);
+#endif
     }
 oe_reply_end:
     oe_output_disable();
+#if BOARD_REV > 2
+    data_output_disable();
+    if (hold_we) {
+        oewe_output(0);
+        we_enable(1);      // Drive high
+    }
+#endif
 }
 
 static void
@@ -1582,8 +1719,13 @@ process_addresses(uint prod)
                     magic_pos = 0;
                     break;
                 }
+// dnw prom 22 1;dwn prom 4 1;dw prom 1234 40
+// 0x0022 First access is magic pattern (just a single address for now)
+// 0x0004 Second access is command << 1
+// 0x1234 is any address -- reply message is sent in order
                 case KS_CMD_TESTPATT: {
                     static const uint32_t reply[] = {
+                        0x54455354, 0x50415454, 0x20666f6c, 0x6c6f7773,
                         0xaaaa5555, 0xcccc3333, 0xeeee1111, 0x66669999,
                         0x00020001, 0x00080004, 0x00200010, 0x00800040,
                         0x02000100, 0x08000400, 0x20001000, 0x80004000,
@@ -1621,7 +1763,9 @@ printf("unk %x\n", cmd);
             }
         } else if ((uint16_t) crc != addr_buffer[cons]) {
             /* CRC failed */
-            uint16_t error = KS_STATUS_CRC;
+            uint16_t error[2];
+            error[0] = KS_STATUS_CRC;
+            error[1] = crc;
             oe_reply(0, sizeof (error), &error);
 printf("%04x CRC %04x != exp %04x %x %x\n", cmd, addr_buffer[cons], (uint16_t)crc, (uint16_t)crc << 1, (uint16_t)crc << 2);
             magic_pos = 0;  // Unknown command
@@ -1649,13 +1793,27 @@ printf("%04x CRC %04x != exp %04x %x %x\n", cmd, addr_buffer[cons], (uint16_t)cr
 // DATA 0x091a 0x091b
 // CRC 72ec
 //
-// Array id mode
+// Issue command to put flash into Array id mode (not yet working -- no unlock?)
 // dnw prom 22 1;dwn prom 206 1;dwn prom 4 1;dwn prom 120 2;dwn prom 36ae 1;dw prom aaa 1;dw prom 0 10
-// DATA 0x0090
-// ADDR 0x0555
+// 0x0022 First access is magic pattern
+// 0x0206 is KS_CMD_EEPROM with KS_FLAG_WE
+// 0x0004 is number of words of data (2)
+// 0x0120 is Flash cmd 0x0090 (ID mode)
+// 0x36ae is CRC
+// 0x0aaa ADDR 0x0555 ?
+//
+// Issue unlock command to put flash into Array id mode (not yet working)
+// dnw prom 22 1;dwn prom 206 1;dwn prom c 1;dwn prom 154 1;dwn prom aa 1;dwn prom 120 2;dwn prom d50c 1;dwA prom aaa 2;dwA prom 554 1;dwA prom aaa 2;dw prom 0 4
+
                         oe_reply(we, len1, buf1);
-if (we)
-    printf("we\n");
+                        if (we) {
+                            uint pos;
+                            printf("we l=%x b=", len1);
+                            for (pos = 0; pos < len1 && pos < 10; pos++) {
+                                printf("%02x ", buf1[pos]);
+                            }
+                            printf("\n");
+                        }
                     } else {
                         /* Send data from beginning and end of buffer */
                         len1 = cons_s * 2;
@@ -1708,6 +1866,346 @@ tim5_isr(void)
     process_addresses(producer);
 }
 
+/*
+ * config_tim5_cascade_to_tim3
+ * ---------------------------
+ * This function sets up TIM5 to trigger TIM3 so that further DMA can be
+ * triggered by TIM3.
+ */
+static void
+config_tim5_cascade_to_tim3(void)
+{
+    rcc_periph_clock_enable(RCC_TIM3);
+    rcc_periph_reset_pulse(RST_TIM3);
+    timer_disable_counter(TIM3);
+
+    timer_set_period(TIM3, 0xffff); // Set period (rollover at 1)
+    TIM_CR1(TIM5) |= TIM_CR1_URS;   // Update on overflow
+    TIM_CR1(TIM3) &= ~TIM_CR1_OPM;  // Continuous mode
+
+    /* TIM5 is master - generate TRGO to TIM3 on rollover (UEV) */
+    TIM_CR2(TIM5) &= TIM_CR2_MMS_MASK;
+    TIM_CR2(TIM5) |= TIM_CR2_MMS_UPDATE;
+
+    /* TIM3 is slave of TIM5 (ITR2) per Table 86 */
+    TIM_SMCR(TIM3) = TIM_SMCR_TS_ITR2;
+
+    /* TIM3 has External Clock Mode 1 (increment on rising edge of TRGI) */
+    TIM_SMCR(TIM3) |= TIM_SMCR_SMS_ECM1;
+
+//  timer_enable_counter(TIM3);
+}
+
+static void
+config_dma(uint32_t dma, uint32_t channel, uint to_periph, uint mode,
+           volatile void *dst, volatile void *src, uint32_t wraplen)
+{
+    dma_disable_channel(dma, channel);
+    dma_channel_reset(dma, channel);
+    dma_set_peripheral_address(dma, channel, (uintptr_t)dst);
+    dma_set_memory_address(dma, channel, (uintptr_t)src);
+    if (to_periph)
+        dma_set_read_from_memory(dma, channel);
+    else
+        dma_set_read_from_peripheral(dma, channel);
+    dma_set_number_of_data(dma, channel, wraplen);
+    dma_disable_peripheral_increment_mode(dma, channel);
+    dma_enable_memory_increment_mode(dma, channel);
+    if (mode == 16) {
+        dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_16BIT);
+        dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_16BIT);
+    } else {
+        dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_32BIT);
+        dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_32BIT);
+    }
+    dma_enable_circular_mode(dma, channel);
+    dma_set_priority(dma, channel, DMA_CCR_PL_MEDIUM);
+
+    dma_disable_transfer_error_interrupt(dma, channel);
+    dma_disable_half_transfer_interrupt(dma, channel);
+    dma_disable_transfer_complete_interrupt(dma, channel);
+
+    dma_enable_channel(dma, channel);
+}
+
+static void
+config_tim5_ch1_dma_1(void)
+{
+    /* Capture address when OE goes low */
+    memset((void *) addr_buffer, 0, sizeof (addr_buffer));
+    printf("t5c1 %p addr capture\n", (void *) addr_buffer);
+
+    /* This is the default mode: DMA from address GPIOs to memory */
+    config_dma(DMA2, DMA_CHANNEL5, 0, 16,
+               &GPIO_IDR(SOCKET_A0_PORT),
+               addr_buffer, ADDR_BUF_COUNT);
+
+#if 0
+    /*
+     * Can't use DMA interrupt because that only occurs when the
+     * DMA buffer has wrapped.
+     */
+    dma_clear_interrupt_flags(dma, channel,
+                              get_dma_interrupt_flags(dma, channel));
+    dma_disable_transfer_error_interrupt(dma, channel);
+    dma_disable_half_transfer_interrupt(dma, channel);
+    dma_enable_transfer_complete_interrupt(dma, channel);
+    printf("DMA2_ISR = %p\n", &DMA2_ISR);
+    printf("DMA2_CCR(5) = %p\n", &DMA2_CCR(channel));
+#endif
+
+    /* Set up TIM5 CH1 to trigger DMA based on external PA0 pin */
+    timer_disable_oc_output(TIM5, TIM_OC1);
+
+    /* Enable capture compare CC1 DMA and interrupt */
+    timer_enable_irq(TIM5, TIM_DIER_CC1DE | TIM_DIER_CC1IE);
+
+    timer_set_ti1_ch1(TIM5);               // Capture input from channel 1 only
+//x  timer_slave_set_polarity(TIM5, 0);    // Slave Polarity falling edge
+
+//  timer_continuous_mode(TIM5);
+    timer_set_oc_polarity_low(TIM5, TIM_OC1);
+    timer_set_oc_value(TIM5, TIM_OC1, 0);
+
+    /* Select the Input and set the filter */
+    TIM5_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
+    TIM5_CCMR1 |= TIM_CCMR1_CC1S_IN_TI1 | TIM_CCMR1_IC1F_OFF;
+    TIM5_SMCR = TIM_SMCR_ETP      | // falling edge detection
+                TIM_SMCR_ECE;       // external clock mode 2 (ETR input)
+
+    timer_enable_oc_output(TIM5, TIM_OC1);
+}
+
+#if 0
+static void
+config_tim5_ch1_dma_2(void)
+{
+    /* Trigger TIM2_CH2 and TIM2_UP on OE going high */
+    printf("t5c1 %p TIM2_EGR %p\n", (void *) t5c1_buffer, (void *)&TIM2_EGR);
+
+    /* This is the default mode: DMA from address GPIOs to memory */
+    config_dma(DMA2, DMA_CHANNEL5, 1, 32,
+               &TIM2_EGR, t5c1_buffer, ARRAY_SIZE(t5c1_buffer));
+
+    /* Set up TIM5 CH1 to trigger DMA based on external PA0 pin */
+    timer_disable_oc_output(TIM5, TIM_OC1);
+
+    timer_set_ti1_ch1(TIM5);               // Capture input from channel 1 only
+//  timer_slave_set_polarity(TIM5, 1);     // Slave Polarity rising edge
+
+//  timer_set_oc_polarity_high(TIM5, TIM_OC1);
+
+    /* Select the Input and set the filter */
+    TIM5_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
+    TIM5_CCMR1 |= TIM_CCMR1_CC1S_IN_TI1 | TIM_CCMR1_IC1F_OFF;
+    TIM5_SMCR = TIM_SMCR_ETP      | // falling edge detection
+                TIM_SMCR_ECE;       // external clock mode 2 (ETR input)
+
+    timer_enable_oc_output(TIM5, TIM_OC1);
+}
+
+static void
+config_tim5_ch2_dma(void)
+{
+    printf("t5c2 %p TIM3_EGR %p\n", (void *)t5c2_buffer, (void *)&TIM3_EGR);
+
+    config_dma(DMA2, DMA_CHANNEL4, 1, 16,
+               &TIM3_EGR, t5c2_buffer, ARRAY_SIZE(t5c2_buffer));
+
+    timer_disable_oc_output(TIM5, TIM_OC2);
+    timer_set_oc_value(TIM5, TIM_OC2, 0xffff);
+    timer_enable_oc_output(TIM5, TIM_OC2);
+    timer_enable_irq(TIM5, TIM_DIER_CC2DE);
+}
+
+static void
+config_tim5_ch3_dma(void)
+{
+    /* Set up DMA Write to WE enable register */
+    printf("t5c3 %p WE  %p\n", (void *) t5c3_buffer, (void *) &GPIO_BSRR(FLASH_WE_PORT));
+
+    config_dma(DMA2, DMA_CHANNEL2, 1, 32, (void *) &GPIO_BSRR(FLASH_WE_PORT),
+               t5c3_buffer, ARRAY_SIZE(t5c3_buffer));
+
+    timer_disable_oc_output(TIM5, TIM_OC3);
+    timer_set_oc_value(TIM5, TIM_OC3, 0xffff);
+    timer_set_oc_mode(TIM5, TIM_OC3, TIM_OCM_FROZEN);
+    timer_enable_oc_output(TIM5, TIM_OC3);
+    timer_enable_irq(TIM5, TIM_DIER_CC3DE);
+}
+
+static void
+config_tim5_ch4_dma(void)
+{
+    /* Set up DMA Write to D0-D7 output enable register */
+    printf("t5c4 %p D0-D7 OE\n", (void *) t5c4_buffer);
+
+    config_dma(DMA2, DMA_CHANNEL1, 1, 32, (void *) &GPIO_CRL(SOCKET_D0_PORT),
+               t5c4_buffer, ARRAY_SIZE(t5c4_buffer));
+
+    timer_disable_oc_output(TIM5, TIM_OC4);
+    timer_set_oc_value(TIM5, TIM_OC4, 0xffff);
+    timer_set_oc_mode(TIM5, TIM_OC4, TIM_OCM_FROZEN);
+    timer_enable_oc_output(TIM5, TIM_OC4);
+    timer_enable_irq(TIM5, TIM_DIER_CC4DE);
+}
+#endif
+
+static void
+config_tim2_ch2_dma(void)
+{
+    printf("t2c2 %p D0-D15 %p\n", (void *)t2c2_buffer, (void *)&GPIO_ODR(SOCKET_D0_PORT));
+
+    config_dma(DMA1, DMA_CHANNEL7, 1, 16,
+               &GPIO_ODR(SOCKET_D0_PORT), t2c2_buffer, ARRAY_SIZE(t2c2_buffer));
+
+    timer_disable_oc_output(TIM2, TIM_OC2);
+    timer_set_oc_value(TIM2, TIM_OC2, 0x0001);
+    timer_set_oc_mode(TIM2, TIM_OC2, TIM_OCM_ACTIVE);
+    timer_enable_oc_output(TIM2, TIM_OC2);
+    timer_enable_irq(TIM2, TIM_DIER_CC2DE);
+}
+
+static void
+config_tim2_ch3_dma(void)
+{
+#if 0
+    printf("t2c3 %p WE %p\n", (void *)t2c3_buffer, (void *)&GPIO_BSRR(FLASH_WE_PORT));
+
+    config_dma(DMA1, DMA_CHANNEL1, 1, 32,
+               &GPIO_BSRR(FLASH_WE_PORT), t2c3_buffer, ARRAY_SIZE(t2c3_buffer));
+#else
+    printf("t2c3 %p D16-D31 %p\n", (void *)t2c3_buffer, (void *)&GPIO_ODR(SOCKET_D16_PORT));
+
+    config_dma(DMA1, DMA_CHANNEL1, 1, 16,
+               &GPIO_ODR(SOCKET_D16_PORT), t2c3_buffer, ARRAY_SIZE(t2c3_buffer));
+#endif
+
+    timer_disable_oc_output(TIM2, TIM_OC2);
+    timer_set_oc_value(TIM2, TIM_OC3, 0x0001);
+    timer_set_oc_mode(TIM2, TIM_OC3, TIM_OCM_ACTIVE);
+    timer_enable_oc_output(TIM2, TIM_OC3);
+    timer_enable_irq(TIM2, TIM_DIER_CC3DE);
+}
+
+#if 0
+static void
+config_tim2_up_dma(void)
+{
+    printf("t2up %p TIM3_EGR %p\n", (void *)t2up_buffer, (void *)&TIM3_EGR);
+
+    config_dma(DMA1, DMA_CHANNEL2, 1, 32,
+               &TIM3_EGR, t2up_buffer, ARRAY_SIZE(t2up_buffer));
+
+    timer_enable_irq(TIM2, TIM_DIER_UDE);
+}
+#endif
+
+static void
+config_tim3_ch1_dma(void)
+{
+    /* Set up DMA Write to D8-D15 output enable register */
+    printf("t3c1 %p D8-D15 OE\n", (void *)t3c1_buffer);
+
+    config_dma(DMA1, DMA_CHANNEL6, 1, 32,
+               (void *) &GPIO_CRH(SOCKET_D0_PORT),
+               t3c1_buffer, ARRAY_SIZE(t3c1_buffer));
+
+    timer_disable_oc_output(TIM3, TIM_OC1);
+    timer_set_oc_value(TIM3, TIM_OC1, 0xffff);
+    timer_set_oc_mode(TIM3, TIM_OC1, TIM_OCM_FROZEN);
+    timer_enable_irq(TIM3, TIM_DIER_CC1DE);
+}
+
+static void
+config_tim3_ch3_dma(void)
+{
+    /* Set up DMA Write to D16-D23 output enable register */
+    printf("t3c3 %p D16-D23 OE\n", (void *)t3c3_buffer);
+
+    config_dma(DMA1, DMA_CHANNEL2, 1, 32,
+               (void *) &GPIO_CRL(SOCKET_D16_PORT),
+               t3c3_buffer, ARRAY_SIZE(t3c3_buffer));
+
+    timer_disable_oc_output(TIM3, TIM_OC3);
+    timer_set_oc_value(TIM3, TIM_OC3, 0xffff);
+    timer_enable_irq(TIM3, TIM_DIER_CC3DE);
+}
+
+static void
+config_tim3_ch4_dma(void)
+{
+    /* Set up DMA Write to D24-D31 output enable register */
+    printf("t3c4 %p D24-D31 OE\n", (void *)t3c4_buffer);
+
+    config_dma(DMA1, DMA_CHANNEL3, 1, 32,
+               (void *) &GPIO_CRH(SOCKET_D16_PORT),
+               t3c4_buffer, ARRAY_SIZE(t3c4_buffer));
+
+    timer_disable_oc_output(TIM3, TIM_OC4);
+    timer_set_oc_value(TIM3, TIM_OC4, 0xffff);
+    timer_set_oc_mode(TIM3, TIM_OC4, TIM_OCM_FROZEN);
+    timer_enable_irq(TIM3, TIM_DIER_CC4DE);
+}
+
+#if 0
+static void
+config_tim2_update_dma(void)
+{
+    // just trigger CH3 for now
+    static uint16_t event_gen = TIM_EGR_CC4G | TIM_EGR_CC3G |
+                                TIM_EGR_CC2G | TIM_EGR_CC1G;  // 0x001e
+    TIM2_DCR = 0x14;  // TIMx_EGR
+    TIM2_DMAR = (uintptr_t) &event_gen;
+// enable UDE
+// trigger all TIM2 capture events
+// cw 40000014 1e
+// dw 20002460 20;dw 200023e0 20;dw 20002360 20
+// d 40000000
+}
+#endif
+
+static void
+config_tim2_ch1_dma(void)
+{
+    /* Set up DMA Write to TIM5 Event Generation register */
+    printf("t2c1 %p TIM5_EGR %p\n", (void *)t2c1_buffer, (void *) &TIM5_EGR);
+
+    config_dma(DMA1, DMA_CHANNEL5, 1, 16, (void *) &TIM5_EGR,
+               t2c1_buffer, ARRAY_SIZE(t2c1_buffer));
+
+    timer_disable_oc_output(TIM2, TIM_OC1);
+    timer_set_ti1_ch1(TIM2);               // Capture input from channel 1 only
+
+    timer_set_oc_polarity_high(TIM2, TIM_OC1);
+
+    /* Select the Input and set the filter */
+    TIM2_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
+    TIM2_CCMR1 |= TIM_CCMR1_CC1S_IN_TI1 | TIM_CCMR1_IC1F_OFF;
+
+    timer_enable_oc_output(TIM2, TIM_OC1);
+
+    TIM2_SMCR = TIM_SMCR_ETP      | // falling edge detection
+                TIM_SMCR_ECE      | // external clock mode 2 (ETR input)
+                TIM_SMCR_ETPS_OFF | // no prescaler
+                TIM_SMCR_ETF_OFF;   // no filter
+    TIM2_DIER = 0;
+    timer_enable_irq(TIM2, TIM_DIER_CC1DE); // DMA on capture/compare event
+
+/*
+ * Enable the following only if I want updates at every wrap of the counter,
+ * and that only works if the max value is at least 1.
+ *      timer_set_dma_on_update_event(TIM2);   // DMA on update event occurs
+ *      TIM2_DIER |= TIM_DIER_UDE;             // DMA on update event
+ * This seems to limit DMA on all channels except the trigger channel
+ */
+    timer_set_dma_on_compare_event(TIM2);  // DMA on CCx event occurs
+
+
+//  timer_generate_event(TIM2, TIM_EGR_TG); // Generate fake Trigger event
+//  timer_generate_event(TIM2, TIM_EGR_UG); // Generate fake Update event
+}
+
 void
 ee_init(void)
 {
@@ -1717,8 +2215,8 @@ ee_init(void)
      * ---------------- STM32F1 Table 78 lists DMA1 channels ----------------
      * CH1      CH2       CH3       CH4       CH5        CH6       CH7
      * ADC1     -         -         -         -          -         -
-     * -        SPI1_RX   SPI1_TX   SPI2_Tx   SPI2       -         -
-     *                              I2S2_Tx   I2S2_T
+     * -        SPI1_RX   SPI1_TX   SPI2_RX   SPI2_TX    -         -
+     *                              I2S2_RX   I2S2_TX
      * -        USART3_TX USART3_RX USART1_TX USART1_RX  USART2_RX USART2_TX
      * -        -         -         I2C2_TX   I2C2_RX    I2C1_TX   I2C1_RX
      * -        TIM1_CH1  -         TIM1_CH4  TIM1_UP    TIM1_CH3  -
@@ -1729,6 +2227,7 @@ ee_init(void)
      * -        TIM3_CH3  TIM3_CH4  -         -          TIM3_CH1  -
      *                    TIM3_UP                        TIM3_TRIG
      * TIM4_CH1 -         -         TIM4_CH2  TIM4_CH3   -         TIM4_UP
+     *
      *
      * ---------------- STM32F1 Table 79 lists DMA2 channels ----------------
      * CH1       CH2       CH3       CH4       CH5
@@ -1749,91 +2248,181 @@ ee_init(void)
      *
      * PA0: WKUP/USART2_CTS, ADC12_IN0/TIM2_CH1_ETR, TIM5_CH1/ETH_MII_CRS_WKUP
      *
-     * DMA1 Channel 1 is used by ADC
-     * DMA2 Channel 5 is used by ROM OE DMA
+     * DMA1 Channel 1 used by ADC1, could be used by TIM2_CH3, TIM4_CH1
+     * DMA1 Channel 2 could be used by TIM1_CH1, TIM2_UP, TIM3_CH3
+     * DMA1 Channel 3 could be used by TIM3_CH4, TIM3_UP
+     * DMA1 Channel 4 could be used by TIM1_CH4, TIM4_CH2
+     * DMA1 Channel 5 used by TIM2_TRG (ROM OE DMA from ext pin)
+     * DMA1 Channel 6 could be used by TIM1_CH3, TIM3_CH1
+     * DMA1 Channel 7 could be used by TIM2_CH2, TIM2_CH4, TIM4_UP
+     * DMA2 Channel 1 used by TIM5_CH4
+     * DMA2 Channel 2 used by TIM5_CH3
+     * DMA2 Channel 3 could be used by TIM6_UP
+     * DMA2 Channel 4 used by TIM5_CH2
+     * DMA2 Channel 5 used by TIM5_CH1 (ROM OE DMA from ext pin)
+     *
+     * Only one channel may be active per stream.
+     *
+     * TIM1 could gen CH1 CH3 CH4
+     * TIM2 could gen UP?, CH2
+     * TIM3 could gen CH1, CH3, CH4
+     * TIM4 could gen UP?, CH2
+     * TIM5 is now working for DMA
+     *  CH1 is input trigger for OE
+     *  CH2-5 can be triggered with
+     *      cw 40000c14 1e
      */
-    uint32_t dma     = DMA2;
-    uint32_t channel = DMA_CHANNEL5;
 
-    memset((void *) addr_buffer, 0, sizeof (addr_buffer));
-    printf("ABUF 0x%x\n", (unsigned int) addr_buffer);
-
+    /*
+     * 2023-12-22
+     * Read-from-STM32 sequence:
+     *      Setup (as soon as OE high after command determined)
+     *              Set flash WE high
+     *              Set flash OE high
+     *              Set data pins to output
+     *              Set up DMA from reply buffer
+     *      OE high
+     *              loop_count--
+     *              If loop_count == 0
+     *                  Disable DMA
+     *                  Set data pins to input
+     *                  Flash OE = input
+     *              else
+     *                  write data pins
+     * Write to flash sequence
+     *      Setup (as soon as OE high after command determined)
+     *              Set flash WE input pullup
+     *              Set flash OEWE high
+     *              Set flash OE high
+     *              Set data pins to output
+     *              Set up DMA from reply buffer
+     *      OE high
+     *              loop_count--
+     *              If loop_count == 0
+     *                  Disable DMA
+     *                  Set data pins to input
+     *                  Flash OEWE = low
+     *                  Flash OE = input
+     *              else
+     *                  write data pins
+     *
+     * old
+     * Read-from-STM32 sequence:
+     *      OE low
+     *              2: Write data pins
+     *              1: Set WE high
+     *              2: Set data pins to output
+     *      OE high
+     *              1: Set WE high
+     *              2: Set data pins to input
+     * Write to flash sequence
+     *      OE low
+     *              2: Write data pins
+     *              1: Set WE low (address is latched by flash)
+     *              2: Set data pins to output
+     *      OE high
+     *              1: Set WE high (data is latched by flash)
+     *              2: Set data pins to input
+     *
+     * TRIGGER SEQUENCE
+     * ----------------
+     * TIM2_CH1 (primary OE low)
+     *      Trigger TIM5_CH1, TIM5_CH3, TIM5_CH4 (2 writes for D0-D31 data)
+     *      TIM5_CH2 is unused (1 write optional WE or D0-D31 OE)
+     * TIM5_CH1 (primary OE high)
+     *      Trigger TIM2_CH2, TIM2_UP (1 write for optional WE)
+     *      TIM2_CH3 could be used if ADC is removed (1 write for D0-D31 OE)
+     * TIM2_UP
+     *      Trigger TIM3_CH1, TIM3_CH4 (2 writes for D0-D31 output en/dis)
+     *
+     *
+     * Previous trigger sequence
+     * --------------------
+     * TIM5_CH1 (primary OE low)
+     *      Trigger TIM2_CH1 (EG)
+     *              TIM2_CH2 (D0-D15 data)
+     *              TIM2_CH3 (D16-D31 data)
+     * TIM2_CH1 (primary OE high)
+     *      Trigger TIM5_CH2 (EG)
+     *              TIM5_CH3 (WE)
+     *              TIM5_CH4 (D0-D7 OE)
+     * TIM5_CH2
+     *      Trigger TIM3_CH1 (D8-D15 OE)
+     *              TIM3_CH3 (D16-D23 OE)
+     *              TIM3_CH4 (D24-D31 OE)
+     *
+     * ---- DMA1 ----
+     * CH1      CH2       CH3       CH4       CH5        CH6       CH7
+     * TIM2_CH3 TIM3_CH3  TIM3_CH4  -         TIM2_CH1   TIM3_CH1  TIM2_CH2
+     * ---- DMA2 ----
+     * CH1      CH2       CH3       CH4       CH5
+     * TIM5_CH4 TIM5_CH3            TIM5_CH2  TIM5_CH1
+     *
+     * Old:
+     * TIM2_CH1 write to TIM5 event generation DMA trigger
+     * TIM5_CH1 write to TIM2 event generation DMA trigger
+     * TIM5_CH3 data D0-D15 write     (1x 16-bit write)
+     * TIM5_CH4 data D16-D31 write    (1x 16-bit write)
+     * TIM2_CH2 WE low/high           (1x 32-bit write)
+     * TIM2_UP write to TIM3 event generation DMA trigger
+     * TIM3_CH1 output enable D0-D15  (2x 32-bit writes)
+     * TIM3_CH4 output enable D16-D31 (2x 32-bit writes)
+     *
+     *
+     * ---- DMA1 ----
+     * CH1      CH2       CH3       CH4       CH5        CH6       CH7
+     * ADC1                                   TIM2_CH1
+     *          TIM2_UP                                            TIM2_CH2
+     *         [TIM3_CH3] TIM3_CH4                       TIM3_CH1
+     *                    TIM3_UP   TIM4_CH2  [TIM4_CH3]           TIM4_UP
+     * [TIM2_CH3]
+     * ---- DMA2 ----
+     * CH1      CH2       CH3       CH4       CH5
+     *                                        TIM5_CH1
+     * TIM5_CH4 TIM5_CH3
+     *                              [TIM5_CH2]
+     */
+    rcc_periph_clock_enable(RCC_DMA1);
     rcc_periph_clock_enable(RCC_DMA2);
 
-    dma_disable_channel(dma, channel);
-
-    dma_channel_reset(dma, channel);
-    dma_set_peripheral_address(dma, channel,
-                               (uintptr_t)&GPIO_IDR(SOCKET_A0_PORT));
-    dma_set_memory_address(dma, channel, (uintptr_t)addr_buffer);
-    dma_set_read_from_peripheral(dma, channel);
-    dma_set_number_of_data(dma, channel, ADDR_BUF_COUNT);
-    dma_disable_peripheral_increment_mode(dma, channel);
-    dma_enable_memory_increment_mode(dma, channel);
-    dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_16BIT);
-    dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_16BIT);
-    dma_enable_circular_mode(dma, channel);
-    dma_set_priority(dma, channel, DMA_CCR_PL_MEDIUM);
-
-    dma_disable_transfer_error_interrupt(dma, channel);
-    dma_disable_half_transfer_interrupt(dma, channel);
-    dma_disable_transfer_complete_interrupt(dma, channel);
-#if 0
-    /*
-     * Can't use DMA interrupt because that only occurs when the
-     * DMA buffer has wrapped.
-     */
-    dma_clear_interrupt_flags(dma, channel,
-                              get_dma_interrupt_flags(dma, channel));
-    dma_disable_transfer_error_interrupt(dma, channel);
-    dma_disable_half_transfer_interrupt(dma, channel);
-    dma_enable_transfer_complete_interrupt(dma, channel);
-    printf("DMA2_ISR = %p\n", &DMA2_ISR);
-    printf("DMA2_CCR(5) = %p\n", &DMA2_CCR(channel));
-#endif
-
-    dma_enable_channel(dma, channel);
-
-    /* Set up TIM5 CH1 to trigger DMA based on external PA0 pin */
     rcc_periph_clock_enable(RCC_TIM5);
     rcc_periph_reset_pulse(RST_TIM5);
+//  timer_disable_counter(TIM5);
+//  timer_set_period(TIM5, 0xffff);
 
-    timer_disable_counter(TIM5);
-    timer_disable_oc_output(TIM5, TIM_OC1);
-
-    /* Enable capture compare CC1 DMA and interrupt */
-    timer_enable_irq(TIM5, TIM_DIER_CC1DE | TIM_DIER_CC1IE);
-//    timer_update_on_overflow(TIM5);
-
-//    timer_set_dma_on_compare_event(TIM5);  // DMA request when CCx event occurs
-    timer_set_ti1_ch1(TIM5);               // Capture input from channel 1 only
-//  timer_slave_set_polarity(TIM5, 0);     // Slave Polarity falling edge
-
-    timer_continuous_mode(TIM5);
-    timer_set_oc_polarity_low(TIM5, TIM_OC1);
-    timer_set_oc_value(TIM5, TIM_OC1, 1);
-
-    /* Select the Input and set the filter */
-    TIM5_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
-    TIM5_CCMR1 |= TIM_CCMR1_CC1S_IN_TI1 | TIM_CCMR1_IC1F_OFF;
-
-    timer_enable_oc_output(TIM5, TIM_OC1);
-    timer_enable_counter(TIM5);
+    config_tim5_ch1_dma_1();  // PA0 to TIM5 CC1
+#if 0
+    config_tim5_ch1_dma_2();  // PA0 to TIM5 CC1
+    config_tim5_ch2_dma();
+    config_tim5_ch3_dma();
+    config_tim5_ch4_dma();
+#endif
+    if (0)
+        config_tim5_cascade_to_tim3();
+    timer_enable_irq(TIM5, TIM_DIER_TDE);
+//  timer_enable_counter(TIM5);
 
     timer_clear_flag(TIM5, TIM_SR(TIM5) & TIM_DIER(TIM5));
-#if 0
-    nvic_set_priority(NVIC_DMA2_CHANNEL5_IRQ, 0x20);
-    nvic_enable_irq(NVIC_DMA2_CHANNEL5_IRQ);
-    nvic_set_pending_irq(NVIC_DMA2_CHANNEL5_IRQ);  // Debug
-#endif
     nvic_set_priority(NVIC_TIM5_IRQ, 0x20);
     nvic_enable_irq(NVIC_TIM5_IRQ);
-//  nvic_set_pending_irq(NVIC_TIM5_IRQ);  // Debug
 
 #if 0
-    timer_generate_event(TIM5, TIM_EGR_TG): // Generate fake Trigger event
-    timer_generate_event(TIM5, TIM_EGR_UG): // Generate fake Update event
+    timer_generate_event(TIM5, TIM_EGR_TG); // Generate fake Trigger event
+    timer_generate_event(TIM5, TIM_EGR_UG); // Generate fake Update event
 #endif
+    rcc_periph_clock_enable(RCC_TIM2);
+    rcc_periph_reset_pulse(RST_TIM2);
+    timer_disable_counter(TIM2);
+    timer_set_period(TIM2, 0x0001);
+    config_tim2_ch1_dma();  // PA0 to TIM2_TRIG (CH1)
+    config_tim2_ch2_dma();
+    config_tim2_ch3_dma();
+//  config_tim2_up_dma();
+//  config_tim2_update_dma();
+
+//  timer_enable_irq(TIM2, TIM_DIER_TDE | TIM_DIER_UDE);
+    timer_enable_irq(TIM2, TIM_DIER_TDE);
+//  timer_enable_counter(TIM2);
 
     /*
      * DMA/interrupt enable register (TIMx_DIER)
@@ -1845,6 +2434,61 @@ ee_init(void)
      *     COMDE: COM DMA request enable
      *     TDE: trigger DMA request enable
      */
-    // TIM_DIER_UDE
-    // timer_enable_irq(TIM2, TIM_DIER_UDE);
+    rcc_periph_clock_enable(RCC_TIM3);
+    rcc_periph_reset_pulse(RST_TIM3);
+    timer_set_period(TIM3, 0xffff);
+    config_tim3_ch1_dma();
+    config_tim3_ch3_dma();
+    config_tim3_ch4_dma();
+#if 0
+    timer_disable_counter(TIM3);
+    timer_enable_counter(TIM3);
+#endif
+
+    t5c1_buffer[0] = TIM_EGR_CC1G | TIM_EGR_CC2G | TIM_EGR_CC3G;  // TIM2 C1 C2 C3
+    t2c1_buffer[0] = TIM_EGR_CC2G | TIM_EGR_CC3G | TIM_EGR_CC4G;  // TIM5 C2 C3 C4
+    t5c2_buffer[0] = TIM_EGR_CC1G | TIM_EGR_CC3G | TIM_EGR_CC4G;  // TIM3 C1 C3 C4
+
+/*
+    t5c3_buffer[0] = FLASH_WE_PIN << 16;  // Set WE low
+    t5c3_buffer[1] = FLASH_WE_PIN;        // Set WE high
+*/
+
+    /*
+     * Output enable:
+     *   CRL [0x00] = 0x11111111
+     *   CRH [0x04] = 0x11111111
+     * Output disable:
+     *   CRL [0x00] = 0x44444444 (0x8888888 is Alternate disable with PU/PD)
+     *   CRH [0x04] = 0x44444444
+     */
+    t5c4_buffer[0] = 0x44444440; // D0-D7   Output
+    t5c4_buffer[1] = 0x44444404; // D0-D7   Input
+    t3c1_buffer[0] = 0x44444044; // D8-D15  Output
+    t3c1_buffer[1] = 0x44440444; // D8-D15  Input
+    t3c3_buffer[0] = 0x44404444; // D16-D23 Output
+    t3c3_buffer[1] = 0x44044444; // D16-D23 Input
+    t3c4_buffer[0] = 0x40444444; // D24-D31 Output
+    t3c4_buffer[1] = 0x04444444; // D24-D31 Input
+#ifdef DO_WE_TEST
+    t5c4_buffer[0] = 0x11111111; // D0-D7   Output
+    t3c1_buffer[0] = 0x11111111; // D8-D15  Output
+    t3c3_buffer[0] = 0x11111111; // D16-D23 Output
+    t3c4_buffer[0] = 0x11111111; // D24-D31 Output
+
+//  t3c1_buffer[1] = 0x11111111; // D8-D15 Input
+#endif
+
+    /* Set up some default D0-D31 values for test purposes */
+    int pos;
+    for (pos = 0; pos < ARRAY_SIZE(t2c2_buffer); pos++)
+        t2c2_buffer[pos] = pos ^ 0xff00;
+    for (pos = 0; pos < ARRAY_SIZE(t2c3_buffer); pos++)
+        t2c3_buffer[pos] = pos ^ 0xffff;
+
+    ticks_per_15_nsec  = timer_nsec_to_tick(15);
+    ticks_per_20_nsec  = timer_nsec_to_tick(20);
+    ticks_per_30_nsec  = timer_nsec_to_tick(30);
+
+    update_ee_cmd_mask();
 }

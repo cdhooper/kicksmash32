@@ -59,7 +59,13 @@
 #define KBRST_PORT          GPIOB
 #define KBRST_PIN               GPIO4
 #define LED_POWER_PORT      GPIOB
+#if BOARD_REV == 2
 #define LED_POWER_PIN           GPIO9
+#else
+#define LED_POWER_PIN           GPIO8
+#endif
+#define FLASH_OEWE_PORT     GPIOB
+#define FLASH_OEWE_PIN          GPIO9
 #define FLASH_A18_PORT      GPIOB
 #define FLASH_A18_PIN           GPIO10
 #define FLASH_A19_PORT      GPIOB

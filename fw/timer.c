@@ -22,13 +22,19 @@
 
 /*
  * STM32F1 timer usage
- *   TIM2 - bits 16-31 of tick timer (bits 32-63 are in global timer_high)
- *   TIM3 - bits 0-15 of tick timer, OVF trigger to TIM2
+ *   TIM4 - bits 16-31 of tick timer (bits 32-63 are in global timer_high)
+ *   TIM1 - bits 0-15 of tick timer, OVF trigger to TIM4
  *   TIM5 CH1 - ROM OE (PA0) trigger to DMA2 CH5 capture of address
+ *   TIM2 CH1 - ROM OE (PA0) trigger to DMA1 CH5 capture of address
+ *
+ *   TIM5 OVF? trigger to TIM7
+ *      TIM7 trigger to DMA2 CH4
+ *   TIM5 OVF? trigger to TIM4
+ *      TIM4 - UP trigger to DMA2 CH2
  *
  * Potential uses
  *   TIM5 - CH1 ROM OE (PA0) trigger to DMA2 CH5 send bits 0-15
- *          TIM5 can only trigger TIM3, which can't be used without changing
+ *          TIM5 can only trigger TIM8, which can't be used without changing
  *          to use a different timer for bits 0-15 of tick
  *   TIM1 - UP trigger to DMA1 CH5
  *   TIM4 - UP trigger to DMA1 CH7
@@ -50,6 +56,10 @@
  *  TIM3 | TIM1 | TIM2 | TIM5 | TIM4
  *  TIM4 | TIM1 | TIM2 | TIM3 | TIM8
  *  TIM5 | TIM2 | TIM3 | TIM4 | TIM8
+ *
+ *  Timer Triggers in use:
+ *      ITR3 (TIM1 -> TIM4)
+ *      ITR2 (TIM5 -> TIM3)
  */
 
 /*
@@ -79,6 +89,118 @@ static inline void __dmb(void)
     __asm__ volatile("dmb");
 }
 
+#ifdef STM32F1
+void
+tim4_isr(void)
+{
+    uint32_t flags = TIM_SR(TIM4) & TIM_DIER(TIM4);
+
+    TIM_SR(TIM4) = ~flags;  // Clear observed flags
+
+    if (flags & TIM_SR_UIF)
+        timer_high++;  // Increment upper bits of 64-bit timer value
+
+    if (flags & ~TIM_SR_UIF) {
+        TIM_DIER(TIM4) &= ~(flags & ~TIM_SR_UIF);
+        printf("Unexpected TIM4 IRQ: %04lx\n", flags & ~TIM_SR_UIF);
+    }
+}
+
+uint64_t
+timer_tick_get(void)
+{
+    uint32_t high   = timer_high;
+    uint32_t high16 = TIM_CNT(TIM4);
+    uint32_t low16  = TIM_CNT(TIM1);
+
+    /*
+     * A Data Memory Barrier (ARM "dmb") here is necessary to prevent
+     * a pipeline fetch of timer_high before the TIM4 CNT fetch has
+     * completed. Without it, a timer update interrupt happening at
+     * this point could potentially exhibit a non-monotonic clock.
+     */
+    __dmb();
+
+    /*
+     * Check for unhandled timer rollover. Note this must be checked
+     * twice due to an ARM pipelining race with interrupt context.
+     */
+    if ((TIM_SR(TIM4) & TIM_SR_UIF) && (TIM_SR(TIM4) & TIM_SR_UIF)) {
+        high++;
+        if ((low16 > TIM_CNT(TIM1)) || (high16 > TIM_CNT(TIM4))) {
+            /* timer wrapped */
+            high16 = TIM_CNT(TIM4);
+            low16 = TIM_CNT(TIM1);
+        }
+    } else if ((high16 != TIM_CNT(TIM4)) || (high != timer_high)) {
+        /* TIM1 or interrupt rollover */
+        high   = timer_high;
+        high16 = TIM_CNT(TIM4);
+        low16  = TIM_CNT(TIM1);
+    }
+    return (((uint64_t) high << 32) | (high16 << 16) | low16);
+}
+
+void
+timer_init(void)
+{
+    /*
+     * TIM1 is the low 16 bits of the 32-bit counter.
+     * TIM4 is the high 16 bits of the 32-bit counter.
+     * We chain a rollover of TIM1 to increment TIM4.
+     * TIM4 rollover causes an interrupt, which software
+     * uses to then increment the upper 32-bit part of
+     * the 64-bit system tick counter.
+     */
+
+    /* Enable and reset TIM1 and TIM4 */
+    RCC_APB2ENR  |=  RCC_APB2ENR_TIM1EN;
+    RCC_APB2RSTR |=  RCC_APB2RSTR_TIM1RST;
+    RCC_APB2RSTR &= ~(RCC_APB2RSTR_TIM1RST);
+    RCC_APB1ENR  |=  RCC_APB1ENR_TIM4EN;
+    RCC_APB1RSTR |=  RCC_APB1RSTR_TIM4RST;
+    RCC_APB1RSTR &= ~(RCC_APB1RSTR_TIM4RST);
+
+    /* Set timer CR1 mode (No clock division, Edge, Dir Up) */
+    TIM_CR1(TIM4) &= ~(TIM_CR1_CKD_CK_INT_MASK | TIM_CR1_CMS_MASK | TIM_CR1_DIR_DOWN);
+    TIM_CR1(TIM1) &= ~(TIM_CR1_CKD_CK_INT_MASK | TIM_CR1_CMS_MASK | TIM_CR1_DIR_DOWN);
+
+    TIM_ARR(TIM4)  = 0xffff;       // Set period (rollover at 2^16)
+    TIM_ARR(TIM1)  = 0xffff;       // Set period (rollover at 2^16)
+    TIM_CR1(TIM1) |= TIM_CR1_URS;  // Update on overflow
+    TIM_CR1(TIM1) &= ~TIM_CR1_OPM; // Continuous mode
+
+    /* TIM1 is master - generate TRGO to TIM4 on rollover (UEV) */
+    TIM_CR2(TIM1) &= TIM_CR2_MMS_MASK;
+    TIM_CR2(TIM1) |= TIM_CR2_MMS_UPDATE;
+
+    /* TIM4 is slave of TIM1 (ITR0) per Table 86 */
+    TIM_SMCR(TIM4) = 0;
+    TIM_SMCR(TIM4) |= TIM_SMCR_TS_ITR0;
+
+    /* TIM4 has External Clock Mode 1 (increment on rising edge of TRGI) */
+    TIM_SMCR(TIM4) |= TIM_SMCR_SMS_ECM1;
+
+    /* Enable counters */
+    TIM_CR1(TIM4)  |= TIM_CR1_CEN;
+    TIM_CR1(TIM1)  |= TIM_CR1_CEN;
+
+    /* Enable TIM4 rollover interrupt, but not TIE (interrupt on trigger) */
+    TIM_DIER(TIM4) |= TIM_DIER_UIE | TIM_DIER_TDE;
+    nvic_set_priority(NVIC_TIM4_IRQ, 0x11);
+    nvic_enable_irq(NVIC_TIM4_IRQ);
+}
+
+void
+timer_delay_ticks(uint32_t ticks)
+{
+    uint32_t start = TIM_CNT(TIM1);
+    while (TIM_CNT(TIM1) - start < ticks) {
+        /* Empty */
+    }
+}
+
+#else  /* STM32F407 */
 void
 tim2_isr(void)
 {
@@ -95,100 +217,7 @@ tim2_isr(void)
     }
 }
 
-#ifdef STM32F1
-uint64_t
-timer_tick_get(void)
-{
-    uint32_t high   = timer_high;
-    uint32_t high16 = TIM_CNT(TIM2);
-    uint32_t low16  = TIM_CNT(TIM3);
-
-    /*
-     * A Data Memory Barrier (ARM "dmb") here is necessary to prevent
-     * a pipeline fetch of timer_high before the TIM2 CNT fetch has
-     * completed. Without it, a timer update interrupt happening at
-     * this point could potentially exhibit a non-monotonic clock.
-     */
-    __dmb();
-
-    /*
-     * Check for unhandled timer rollover. Note this must be checked
-     * twice due to an ARM pipelining race with interrupt context.
-     */
-    if ((TIM_SR(TIM2) & TIM_SR_UIF) && (TIM_SR(TIM2) & TIM_SR_UIF)) {
-        high++;
-        if ((low16 > TIM_CNT(TIM3)) || (high16 > TIM_CNT(TIM2))) {
-            /* timer wrapped */
-            high16 = TIM_CNT(TIM2);
-            low16 = TIM_CNT(TIM3);
-        }
-    } else if ((high16 != TIM_CNT(TIM2)) || (high != timer_high)) {
-        /* TIM3 or interrupt rollover */
-        high   = timer_high;
-        high16 = TIM_CNT(TIM2);
-        low16  = TIM_CNT(TIM3);
-    }
-    return (((uint64_t) high << 32) | (high16 << 16) | low16);
-}
-
-void
-timer_init(void)
-{
-    /*
-     * TIM3 is the low 16 bits of the 32-bit counter.
-     * TIM2 is the high 16 bits of the 32-bit counter.
-     * We chain a rollover of TIM3 to increment TIM2.
-     * TIM2 rollover causes an interrupt, which software
-     * uses to then increment the upper 32-bit part of
-     * the 64-bit system tick counter.
-     */
-
-    /* Enable and reset TIM2 and TIM3 */
-    RCC_APB1ENR  |=   RCC_APB1ENR_TIM2EN   | RCC_APB1ENR_TIM3EN;
-    RCC_APB1RSTR |=   RCC_APB1RSTR_TIM2RST | RCC_APB1RSTR_TIM2RST;
-    RCC_APB1RSTR &= ~(RCC_APB1RSTR_TIM2RST | RCC_APB1RSTR_TIM2RST);
-
-    /* Set timer CR1 mode (No clock division, Edge, Dir Up) */
-    TIM_CR1(TIM2) &= ~(TIM_CR1_CKD_CK_INT_MASK | TIM_CR1_CMS_MASK | TIM_CR1_DIR_DOWN);
-    TIM_CR1(TIM3) &= ~(TIM_CR1_CKD_CK_INT_MASK | TIM_CR1_CMS_MASK | TIM_CR1_DIR_DOWN);
-
-    TIM_ARR(TIM2)  = 0xffff;       // Set period (rollover at 2^16)
-    TIM_ARR(TIM3)  = 0xffff;       // Set period (rollover at 2^16)
-    TIM_CR1(TIM3) |= TIM_CR1_URS;  // Update on overflow
-    TIM_CR1(TIM3) &= ~TIM_CR1_OPM; // Continuous mode
-
-    /* TIM3 is master - generate TRGO to TIM2 on rollover (UEV) */
-    TIM_CR2(TIM3) &= TIM_CR2_MMS_MASK;
-    TIM_CR2(TIM3) |= TIM_CR2_MMS_UPDATE;
-
-    /* TIM2 is slave of TIM3 (ITR2) per Table 86 */
-    TIM_SMCR(TIM2) = 0;
-    TIM_SMCR(TIM2) |= TIM_SMCR_TS_ITR2;
-
-    /* TIM2 has External Clock Mode 1 (increment on rising edge of TRGI) */
-    TIM_SMCR(TIM2) |= TIM_SMCR_SMS_ECM1;
-
-    /* Enable counters */
-    TIM_CR1(TIM2)  |= TIM_CR1_CEN;
-    TIM_CR1(TIM3)  |= TIM_CR1_CEN;
-
-    /* Enable TIM2 rollover interrupt, but not TIE (interrupt on trigger) */
-    TIM_DIER(TIM2) |= TIM_DIER_UIE | TIM_DIER_TDE;
-    nvic_set_priority(NVIC_TIM2_IRQ, 0x11);
-    nvic_enable_irq(NVIC_TIM2_IRQ);
-}
-
-void
-timer_delay_ticks(uint32_t ticks)
-{
-    uint32_t start = TIM_CNT(TIM3);
-    while (TIM_CNT(TIM3) - start < ticks) {
-        /* Empty */
-    }
-}
-
-#else  /* STM32F407 */
-
+/* STM32F407 */
 uint64_t
 timer_tick_get(void)
 {
@@ -218,10 +247,11 @@ timer_tick_get(void)
     return (((uint64_t) high << 32) | low);
 }
 
+/* STM32F407 */
 void
 timer_init(void)
 {
-    /* Enable and reset TIM2 */
+    /* Enable and reset 32-bit TIM2 */
     RCC_APB1ENR  |=  RCC_APB1ENR_TIM2EN;
     RCC_APB1RSTR |=  RCC_APB1RSTR_TIM2RST;
     RCC_APB1RSTR &= ~RCC_APB1RSTR_TIM2RST;
@@ -240,6 +270,7 @@ timer_init(void)
     nvic_enable_irq(NVIC_TIM2_IRQ);
 }
 
+/* STM32F407 */
 void
 timer_delay_ticks(uint32_t ticks)
 {

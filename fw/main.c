@@ -59,7 +59,7 @@ main(void)
     rl_initialize();  // Enable command editing and history
     using_history();
 
-    adc_init();
+//  adc_init();
     ee_init();
 
     if (board_is_standalone)

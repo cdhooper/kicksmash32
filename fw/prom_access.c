@@ -503,8 +503,7 @@ prom_mode(uint mode)
 }
 
 void
-prom_snoop(void)
+prom_snoop(int flag)
 {
-    printf("Press any key to exit\n");
-    ee_snoop();
+    ee_snoop(flag);
 }

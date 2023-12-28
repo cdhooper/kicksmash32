@@ -1,7 +1,7 @@
 # Kicksmash Rev 1
 # Kicksmash Rev 2 replaces some address pins which have weak drive
 
-BOARD_REV ?= 2
+BOARD_REV ?= 3
 
 SRCS   := main.c clock.c gpio.c printf.c timer.c uart.c usb.c version.c \
 	  led.c irq.c mem_access.c readline.c cmdline.c cmds.c pcmds.c \
@@ -153,7 +153,7 @@ $(OBJDIR)/%.o: %.cpp
 
 $(OBJDIR)/%.size: $(OBJDIR)/%.elf
 	@echo "Output code size:"
-	@$(SIZE) -A -d $< | egrep 'text|data|bss' | awk ' \
+	@$(SIZE) -A -d $< | grep -e 'text|data|bss' | awk ' \
     function human(x) { \
         if (x<1000) {return x} else {x/=1024} \
         s="kMGTEPZY"; \

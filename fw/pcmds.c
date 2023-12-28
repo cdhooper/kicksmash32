@@ -69,7 +69,8 @@ const char cmd_reset_help[] =
 "reset usb  - reset and restart USB interface";
 
 const char cmd_snoop_help[] =
-"snoop - capture and report ROM transactions";
+"snoop   - capture and report ROM transactions\n"
+"snoop r - show OE state";
 
 const char cmd_usb_help[] =
 "usb disable - reset and disable USB\n"
@@ -570,7 +571,7 @@ cmd_gpio(int argc, char * const *argv)
 rc_t
 cmd_snoop(int argc, char * const *argv)
 {
-    prom_snoop();
+    prom_snoop(argc > 1);
 
     return (RC_SUCCESS);
 }
