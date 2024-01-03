@@ -54,11 +54,13 @@
 static const uint8_t channel_defs[] = {
     ADC_CHANNEL_VREF,  // 0: Vrefint (used to calibrate other readings
     ADC_CHANNEL_TEMP,  // 1: Vtemp Temperature sensor
+#if 0
     3,                 // 2: PA3 - EEPROM V10  (10k/1k divider)
     1,                 // 3: PA1 - V3P3        (1k/1k divider)
     14,                // 4: PC4 - V5          (1k/1k divider)
     15,                // 5: PC5 - EEPROM V5CL (1k/1k divider)
     2,                 // 6: PA2 - V10FB (V10 feedback for regulator)
+#endif
 };
 
 
@@ -66,37 +68,6 @@ static const uint8_t channel_defs[] = {
 
 /* Buffer to store the results of the ADC conversion */
 volatile uint16_t adc_buffer[CHANNEL_COUNT];
-
-void
-dac_setvalue(uint32_t value)
-{
-#ifdef STM32F1
-    /* Update the DAC channel1 12-bit right-aligned data holding register */
-    dac_load_data_buffer_single(DAC1, value, DAC_ALIGN_RIGHT12, DAC_CHANNEL1);
-#endif
-}
-
-static uint32_t
-dac_getvalue(void)
-{
-    return (DAC_DOR1(DAC1));
-}
-
-#ifdef STM32F1
-static void
-dac_init(void)
-{
-    /* Initialize and Enable DAC Channel 1 */
-    rcc_periph_clock_enable(RCC_DAC);
-    gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ,
-                  GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO4);
-    dac_disable(DAC1, DAC_CHANNEL1);
-    dac_enable(DAC1, DAC_CHANNEL1);
-
-    dac_setvalue(0x2d0); // Approximately 10V
-}
-#endif
-
 
 void
 adc_init(void)
@@ -219,10 +190,6 @@ adc_init(void)
 
     /* Start the ADC and triggered DMA */
     adc_start_conversion_regular(adcbase);
-
-#if defined(STM32F1)
-    dac_init();
-#endif
 }
 
 static void
@@ -287,23 +254,9 @@ adc_show_sensors(void)
      * AvgSlope  2.5                     4.3
      * Calc      * 10000 / 25 - 279000   * 10000 / 43 - 279000
      *
-     * Channel order (STM32F4):
-     *     adc_buffer[0] = Vrefint
-     *     adc_buffer[1] = Vtemperature
-     *     adc_buffer[2] = CH14 V10SENSE   (PC4)
-     *     adc_buffer[3] =      V3P3SENSE  (Vbat) (STM32F4xx only)
-     *     adc_buffer[4] = CH11 V5SENSE    (PC1) - not connected in Rev1
-     *     adc_buffer[5] = CH15 V5CLSENSE  (PC5) - not connected in Rev1
-     *     adc_buffer[6] = CH2  V10FBSENSE (PA2) - not connected in Rev1
-     *
      * Channel order (STM32F1):
      *     adc_buffer[0] = Vrefint
      *     adc_buffer[1] = Vtemperature
-     *     adc_buffer[2] =  CH3 V10SENSE   (PA3)
-     *     adc_buffer[3] =  CH1 V3P3SENSE  (PA1) - not connected in Rev2
-     *     adc_buffer[4] = CH14 V5SENSE    (PC4) - not connected in Rev2
-     *     adc_buffer[5] = CH15 V5CLSENSE  (PC5) - not connected in Rev2
-     *     adc_buffer[6] =  CH2 V10FBSENSE (PA2) - not connected in Rev2
      *
      * Algorithm:
      *  * Vrefint tells us what 1.21V (STM32F407) or 1.20V (STM32F1xx) should
@@ -312,30 +265,13 @@ adc_show_sensors(void)
      *          Because: reading * scale = 1.2V
      *  2. Report Vbat:
      *          adc_buffer[1] * scale * 2
-     *
-     * TODO:
-     *    Function to compute current sensor values
-     *       - including current for V5CL once sensors are implemented
-     * Compute current flow with diff of V5CL vs V5?
-     *
-     * Add test to MX code for overcurrent
-     *     1) Check V5CL current with VPP / VCC off
-     *     2) Check with VCC on
-     *     3) Check with VPP on
-     *     4) Check with both on
      */
     memcpy(adc, (void *)adc_buffer, sizeof (adc));
     scale = adc_get_scale(adc[0]);
 
     uint calc_temp;
-#if 0
-    uint calc_v3p3;
-#endif
     calc_temp = ((int)(TEMP_V25 * 10000 - adc[1] * scale)) / TEMP_AVGSLOPE +
                 TEMP_BASE;
-#ifdef STM32F1
-    printf("    DAC=%04lx\n", dac_getvalue());
-#endif
     printf("Vrefint=%04x scale=%d\n", adc[0], scale);
     printf("  Vtemp=%04x %8u ", adc[1], adc[1] * scale);
     print_reading(calc_temp, "C\n");

@@ -14,5 +14,6 @@ generated.*.ld
 cscope.out
 .cscope_cmd.*
 objs/
-rev1/
+rev*/
 fw/libopencm3/
+stutils/

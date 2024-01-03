@@ -59,8 +59,8 @@ const char cmd_prom_help[] =
 "prom mode 0|1|2         - set EEPROM access mode (0=32, 1=16lo, 2=16hi)\n"
 "prom read <addr> <len>  - read binary data from EEPROM (to terminal)\n"
 "prom status [clear]     - display or clear EEPROM status\n"
+"prom temp               - show STM32 die temperature\n"
 "prom verify             - verify PROM is connected\n"
-"prom vpp [<value>]      - show or set voltages (V10FBADC 0-fff around 0.54V)\n"
 "prom write <addr> <len> - write binary data to EEPROM (from terminal)";
 
 const char cmd_reset_help[] =
@@ -252,23 +252,9 @@ cmd_time(int argc, char * const *argv)
 }
 
 static rc_t
-cmd_prom_vpp(int argc, char * const *argv)
+cmd_prom_temp(int argc, char * const *argv)
 {
-    rc_t rc;
-    uint32_t value;
-
-    if (argc < 1) {
-        adc_show_sensors();
-        return (RC_SUCCESS);
-    }
-
-    rc = parse_value(argv[0], (uint8_t *) &value, 4);
-    if (rc != RC_SUCCESS)
-        return (rc);
-
-#ifndef STM32F4
-    dac_setvalue(value);
-#endif
+    adc_show_sensors();
     return (RC_SUCCESS);
 }
 
@@ -359,8 +345,8 @@ cmd_prom(int argc, char * const *argv)
         else
             prom_status();
         return (RC_SUCCESS);
-    } else if ((*arg == 'v') && (strstr("vpp", arg) != NULL)) {
-        return (cmd_prom_vpp(argc - 1, argv + 1));
+    } else if ((*arg == 't') && (strstr("temp", arg) != NULL)) {
+        return (cmd_prom_temp(argc - 1, argv + 1));
     } else if ((*arg == 'v') && (strstr("verify", arg) != NULL)) {
         int verbose = 1;
         if ((argc > 1) && (argv[1][0] == 'v'))

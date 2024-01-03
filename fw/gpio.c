@@ -307,9 +307,9 @@ gpio_show(int whichport, int whichpin)
                "Flash  CE=PB12 OE=PB13 WE=PB14\n"
                "USB    V5=PA9 CC1=PA8 CC2=PA10 DM=PA11 DP=PA12\n");
 #else
-        printf("Socket A0-A15=PC0-PC15 A13-A19=PA1-PA7\n"
-               "Socket D0-D15=PD0-PD15 D16-D23=PE0-PE15\n"
-               "Socket OE=PA0 LED=PB8 KBRST=PB4 CC1=PA8 CC2=PA10\n"
+        printf("Socket OE=PA0 LED=PB8 KBRST=PB4 CC1=PA8 CC2=PA10\n"
+               "Socket A0-A15=PC0-PC15 A13-A19=PA1-PA7\n"
+               "Flash  D0-D15=PD0-PD15 D16-D31=PE0-PE15\n"
                "Flash  A18=PB10 A19=PB11 RP=PB1 RB1=PB15 RB2=PB0\n"
                "Flash  CE=PB12 OE=PB13 WE=PB14 OEWE=PB9\n"
                "USB    V5=PA9 CC1=PA8 CC2=PA10 DM=PA11 DP=PA12\n");
@@ -557,10 +557,14 @@ gpio_init(void)
     gpio_setv(FLASH_A18_PORT, FLASH_A18_PIN | FLASH_A19_PIN, 0);
     gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN | FLASH_A19_PIN,
                  GPIO_SETMODE_INPUT_PULLUPDOWN);
-#if 0
+
+    /* Give D0-D31 weak pull up */
+    gpio_setv(FLASH_D0_PORT,  0xffff, 1);
+    gpio_setv(FLASH_D16_PORT, 0xffff, 1);
+    gpio_setmode(FLASH_D0_PORT,  0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    gpio_setmode(FLASH_D16_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
     rcc_periph_clock_enable(RCC_AFIO);
-    AFIO_MAPR |=
-    gpio_setmode();
-#endif
+    AFIO_MAPR |= AFIO_MAPR_SWJ_CFG_FULL_SWJ_NO_JNTRST;
     ee_disable();
 }

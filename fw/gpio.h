@@ -80,23 +80,15 @@
 #define FLASH_RB1_PIN           GPIO15      // RB# Ready / Busy
 #endif
 
-#if BOARD_REV == 1
-#define SOCKET_D0_PORT      GPIOD   // PD0-PD15
-#define SOCKET_A0_PORT      GPIOE   // PE0-PE15
-#define SOCKET_A16_PORT     GPIOC   // PC6-PC9
-#define SOCKET_D16_PORT     GPIOA   // PA0-PA7
-#define SOCKET_D24_PORT     GPIOC   // PC0-PC3
-#define SOCKET_D28_PORT     GPIOC   // PC10
-#define SOCKET_D29_PORT     GPIOB   // PB5
-#define SOCKET_D30_PORT     GPIOB   // PB8-PB9
-#else
-#define SOCKET_D0_PORT      GPIOD   // PD0-PD15
-#define SOCKET_D16_PORT     GPIOE   // PE0-PE15
+#define FLASH_D0_PORT       GPIOD   // PD0-PD15
+#define FLASH_D16_PORT      GPIOE   // PE0-PE15
 #define SOCKET_A0_PORT      GPIOC   // PC0-PC15
 #define SOCKET_A13_PORT     GPIOA   // PA1-PA3
 #define SOCKET_A16_PORT     GPIOA   // PA4-PA7
 #define SOCKET_A16_PIN      GPIO4   // PA4
-#endif
+#define SOCKET_A17_PIN      GPIO5   // PA5
+#define SOCKET_A18_PIN      GPIO6   // PA6
+#define SOCKET_A19_PIN      GPIO7   // PA7
 
 /* Values for gpio_setmode() */
 #ifdef STM32F1

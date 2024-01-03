@@ -26,6 +26,7 @@
 #include "readline.h"
 #include "timer.h"
 #include "utils.h"
+#include "kbrst.h"
 #include "version.h"
 
 static void
@@ -59,7 +60,7 @@ main(void)
     rl_initialize();  // Enable command editing and history
     using_history();
 
-//  adc_init();
+    adc_init();
     ee_init();
 
     if (board_is_standalone)
@@ -72,11 +73,10 @@ main(void)
 
     while (1) {
         usb_poll();
-#if 0
         adc_poll(true, false);
-#endif
         ee_poll();
         cmdline();
+        kbrst_poll();
     }
 
     return (0);

@@ -1,0 +1,68 @@
+Magic pattern test
+    dnw prom 22 1;dwn prom 4 1;dw prom 1234 80
+    // 0x0022 First access is magic pattern (just a single address for now)
+    // 0x0004 Second access is command << 1
+    // 0x1234 is any address -- reply message is sent in order
+
+// don't write
+// dnw prom 22 1;dwn prom 6 1;dwn prom 8 1;dwn prom 1234 4;dwn prom e5d8 1;dw prom 20 10
+// MAGIC 0x11
+// CMD 0x3
+// LEN 0x4
+// DATA 0x091a 0x091b
+// CRC 72ec
+
+Put flash into Read mode
+        // 555 aa
+        // 2aa 55
+        // 555 f0
+    dwn prom 22 1;dwn prom 206 1;dwn prom c 1;dwn prom 154 2;dwn prom aa 2;dwn prom 1e0 2;dwn prom 61d8 1;dwn prom aaa 1;dwn prom 554 1;dwn prom aaa 1
+
+Put flash into Array ID mode
+        // 555 aa
+        // 2aa 55
+        // 555 90
+    dwn prom 22 1;dwn prom 206 1;dwn prom c 1;dwn prom 154 2;dwn prom aa 2;dwn prom 120 2;dwn prom d50c 1;dw prom aaa 1;dw prom 554 1;dw prom aaa 1;dw prom 0 8
+    // 0x0022 First access is magic pattern
+    // 0x0206 is KS_CMD_EEPROM with KS_FLAG_WE
+    // 0x000c is number of words of data (6)
+    // 0x0154 is Flash unlock (0x00aa)
+    // 0x00aa is Flash unlock (0x0055)
+    // 0x0120 is Flash cmd 0x0090 (ID mode)
+    // 0xd50c is CRC (0x6a86)
+    // 0x0aaa ADDR 0x0555 value 0x00aa
+    // 0x0554 ADDR 0x02aa value 0x0055
+    // 0x0aaa ADDR 0x0555 value 0x00aa
+
+Write to address 0x08 in 16-bit mode
+    dwn prom 22 1;dwn prom 206 1;dwn prom 10 1;dwn prom 154 2;dwn prom aa 2;dwn prom 140 2;dwn prom 14ab4 2;dwn prom 725c 1;dwn prom aaa 1;dwn prom 554 1;dwn prom aaa 1;dwn prom 08 1;dw prom 0 10
+    // 0x0022 First access is magic pattern
+    // 0x0206 is KS_CMD_EEPROM with KS_FLAG_WE
+    // 0x0010 is number of words of data (8)
+    // 0x0154 is Flash unlock (0x00aa)
+    // 0x00aa is Flash unlock (0x0055)
+    // 0x0140 is Flash cmd 0x00a0 (write)
+    // 0x14ab4 is data to write (0xa55a)
+    // 0x725c is CRC (0x392e)
+    // 0x0aaa ADDR 0x0555 value 0x00aa
+    // 0x0554 ADDR 0x02aa value 0x0055
+    // 0x0aaa ADDR 0x0555 value 0x00aa
+    // 0x0008 ADDR 0x0008 value 0xa55a (note address matches actual!)
+
+Loopback test data
+    dwn prom 22 1;dwn prom a 1;dwn prom 20 1;dwn prom 0 6;dwn prom 8 1;dwn prom 10 1;dwn prom 20 1;dwn prom 40 1;dwn prom 80 1;dwn prom 16bda 1;dw prom 2000 20
+    // 0x000a is KS_CMD_LOOPBACK (5)
+    // 0x0020 is number of bytes of data (0x10)
+    // 0 2 4 8 10 20 40 80 -> 0 1 2 4 8 10 20 40 ffff ffff ffff ffff
+
+ROM Select Override A18=1 and A19=1
+    dnw prom 22 1;dwn prom 8 1;dwn prom 4 1;dwn prom 1e00 1;dwn prom 14108 1;dw prom 20 8;dl prom 0 10
+
+ROM Select Override A18=1 and A19=0
+    dnw prom 22 1;dwn prom 8 1;dwn prom 4 1;dwn prom 1600 1;dwn prom 1acb0 1;dw prom 20 8;dl prom 0 10
+
+ROM Select Override A18=0 and A19=1
+    dnw prom 22 1;dwn prom 8 1;dwn prom 4 1;dwn prom 1c00 1;dwn prom 17a66 1;dw prom 20 8;dl prom 0 10
+
+ROM Select Disable Override (default A18=0 and A19=0)
+    dnw prom 22 1;dwn prom 8 1;dwn prom 4 1;dwn prom 0 1;dwn prom 14108 1; dw prom 20 8;dl prom 0 10

@@ -53,6 +53,7 @@
  * EE_MODE_16_HIGH = 16-bit flash high device (bits 16-31)
  */
 uint            ee_mode = EE_MODE_16_LOW;
+uint            ee_default_mode = EE_MODE_32;
 static uint32_t ee_cmd_mask;
 static uint32_t ee_status = EE_STATUS_NORMAL;  // Status from program/erase
 
@@ -62,62 +63,7 @@ static uint32_t ticks_per_30_nsec;
 static uint64_t ee_last_access = 0;
 static bool     ee_enabled = false;
 uint8_t         board_is_standalone = 0;
-
-/*
- * check_board_standalone
- * ----------------------
- * Checks whether this board is installed in an Amiga and sets
- * board_is_standalone to FALSE if it is.
- */
-void
-check_board_standalone(void)
-{
-    uint32_t got;
-
-    /*
-     * Stand-alone test:
-     *  Pull all SOCKET_A0-A15 high, wait 1 ms
-     *  If all SOCKET_A0-A15 signals are not high, we are in a system
-     *  Pull all SOCKET_A0-A15 low, wait 1 ms
-     *  If all SOCKET_A0-A15 signals are not low, we are in a system
-     */
-    gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
-
-    /* Set pullup and test */
-    gpio_setv(SOCKET_A0_PORT, 0xffff, 0xffff);
-#if BOARD_REV > 1
-    gpio_setv(SOCKET_A13_PORT, 0x000e, 0x000e);  // PA1-PA3 = A13-A15
-#endif
-    timer_delay_msec(1);
-    got = gpio_get(SOCKET_A0_PORT, 0xffff);
-    if (got != 0xffff) {
-        printf("A0-A15 pullup got %04lx\n", got);
-        goto in_amiga;
-    }
-
-    /* Set pulldown and test */
-    gpio_setv(SOCKET_A0_PORT, 0xffff, 0x0000);
-#if BOARD_REV > 1
-    gpio_setv(SOCKET_A13_PORT, 0x000e, 0x0000);  // PA1-PA3 = A13-A15
-#endif
-    timer_delay_msec(1);
-    got = gpio_get(SOCKET_A0_PORT, 0xffff);
-    if (got != 0x0000) {
-        printf("A0-A15 pulldown got %04lx\n", got);
-        goto in_amiga;
-    }
-
-    board_is_standalone = true;
-    printf("DEBUG: skipping standalone\n");
-//  return;  // Leave socket address lines with weak pulldown
-in_amiga:
-    /* Return to floating input */
-    gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT);
-#if BOARD_REV > 1
-    gpio_setmode(SOCKET_A13_PORT, 0x00fe, GPIO_SETMODE_INPUT);
-#endif
-    board_is_standalone = false;
-}
+uint8_t         kbrst_in_amiga = 0;
 
 /*
  * address_output
@@ -127,19 +73,9 @@ in_amiga:
 static void
 address_output(uint32_t addr)
 {
-#if BOARD_REV == 1
-    /*
-     * The address bits are split across two port registers (more than 16 bits)
-     */
-    GPIO_ODR(SOCKET_A0_PORT)   = addr & 0xffff;           // Set A0-A15
-    GPIO_BSRR(SOCKET_A16_PORT) = 0x03c00000 |             // Clear A16-A19
-                                 ((addr >> 10) & 0x03c0); // Set A16-A19
-#else
-    /* BOARD_REV 2+ */
     GPIO_ODR(SOCKET_A0_PORT)   = addr & 0xffff;           // Set A0-A12
     GPIO_BSRR(SOCKET_A13_PORT) = 0x00fe0000 |             // Clear A13-A19
                                  ((addr >> 12) & 0x00fe); // Set A13-A19
-#endif
 }
 
 /*
@@ -150,18 +86,8 @@ address_output(uint32_t addr)
 static uint32_t
 address_input(void)
 {
-#if BOARD_REV == 1
-    uint32_t addr = GPIO_IDR(SOCKET_A0_PORT);
-    addr |= ((GPIO_IDR(SOCKET_A16_PORT) & 0x03c0) << (16 - 6));
-#elif 0
-    /* BOARD_REV 2+ */
-    uint32_t addr = GPIO_IDR(SOCKET_A0_PORT) & 0x1fff;
-    addr |= ((GPIO_IDR(SOCKET_A13_PORT) & 0x00fe) << (13 - 1));
-#else
-    /* Alternative to above for BOARD_REV 2+ */
     uint32_t addr = GPIO_IDR(SOCKET_A0_PORT);
     addr |= ((GPIO_IDR(SOCKET_A16_PORT) & 0x00f0) << (16 - 4));
-#endif
     return (addr);
 }
 
@@ -173,6 +99,13 @@ address_input(void)
  * override = 0  Temporarily disable override
  * override = 1  Record new override
  * override = 2  Restore previous override
+ *
+ * bits
+ *   0    1=Drive A18
+ *   1    A18 driven value
+ *   2    1=Drive A19
+ *   3    A19 driven value
+ *   4-7  Unused
  */
 static void
 address_override(uint8_t bits, uint override)
@@ -197,25 +130,31 @@ address_override(uint8_t bits, uint override)
         return;
     last = val;
 
-    if (val & BIT(3)) {
-        uint shift = (val & BIT(7)) ? 0 : 16;
-        GPIO_BSRR(FLASH_A19_PORT) = FLASH_A19_PIN << shift;
-        gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN,
-                     GPIO_SETMODE_OUTPUT_PPULL_2);
-        printf(" A18=%d", !shift);
-    } else {
-        gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN, GPIO_SETMODE_INPUT);
-        printf(" !A19");
-    }
-    if (val & BIT(2)) {
-        uint shift = (val & 4) ? 0 : 16;
+    if (val & BIT(0)) {
+        /* Drive A18 */
+        uint shift = (val & BIT(1)) ? 0 : 16;
         GPIO_BSRR(FLASH_A18_PORT) = FLASH_A18_PIN << shift;
         gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN,
                      GPIO_SETMODE_OUTPUT_PPULL_2);
         printf(" A18=%d", !shift);
     } else {
-        gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN, GPIO_SETMODE_INPUT);
+        /* Disable: Weak pull down A18 */
+        GPIO_BSRR(FLASH_A18_PORT) = FLASH_A18_PIN << 16;
+        gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
         printf(" !A18");
+    }
+    if (val & BIT(2)) {
+        /* Drive A19 */
+        uint shift = (val & BIT(3)) ? 0 : 16;
+        GPIO_BSRR(FLASH_A19_PORT) = FLASH_A19_PIN << shift;
+        gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN,
+                     GPIO_SETMODE_OUTPUT_PPULL_2);
+        printf(" A18=%d", !shift);
+    } else {
+        /* Disable: Weak pull down A19 */
+        GPIO_BSRR(FLASH_A19_PORT) = FLASH_A19_PIN << 16;
+        gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+        printf(" !A19");
     }
     printf("\n");
 }
@@ -228,29 +167,11 @@ address_override(uint8_t bits, uint override)
 static void
 address_output_enable(void)
 {
-#if BOARD_REV == 1
-    /*
-     * Each register manages up to 8 GPIOs
-     *  A0...A7  are in the first port CRL register
-     *  A8...A15 are in the first port CRH register
-     * A16...A19 are in the second port CRL register bottom half / middle
-     */
-    GPIO_CRL(SOCKET_A0_PORT)  = 0x11111111;  // Output Push-Pull
-    GPIO_CRH(SOCKET_A0_PORT)  = 0x11111111;
-
-    /* PC6...PC9 */
-    GPIO_CRL(SOCKET_A16_PORT) = (GPIO_CRL(SOCKET_A16_PORT) & 0x00ffffff) |
-                                0x11000000;
-    GPIO_CRH(SOCKET_A16_PORT) = (GPIO_CRH(SOCKET_A16_PORT) & 0xffffff00) |
-                                0x00000011;
-#else
-    /* BOARD_REV 2+ */
     /* A0-A12=PC0-PC12 A13-A19=PA1-PA7 */
     GPIO_CRL(SOCKET_A0_PORT)  = 0x11111111;  // Output Push-Pull
     GPIO_CRH(SOCKET_A0_PORT)  = 0x00011111;
     GPIO_CRL(SOCKET_A13_PORT) = 0x11111118;  // PA0=SOCKET_OE = Input
     address_override(0, 0);  // Suspend A19-A18 override
-#endif
 }
 
 /*
@@ -261,30 +182,11 @@ address_output_enable(void)
 static void
 address_output_disable(void)
 {
-#if BOARD_REV == 1
-    /*
-     * Each register manages up to 8 GPIOs
-     *  A0...A7  are in the first port CRL register
-     *  A8...A15 are in the first port CRH register
-     * A16...A19 straddle the second port CRL and CRH
-     */
-    GPIO_CRL(SOCKET_A0_PORT)   = 0x88888888; // Input Pull-Up / Pull-Down
-    GPIO_CRH(SOCKET_A0_PORT)   = 0x88888888;
-    /* PC6...PC9 */
-    GPIO_CRL(SOCKET_A16_PORT)  = (GPIO_CRL(SOCKET_A16_PORT) & 0x00ffffff) |
-                                 0x88000000;
-    GPIO_CRH(SOCKET_A16_PORT)  = (GPIO_CRH(SOCKET_A16_PORT) & 0xffffff00) |
-                                 0x00000088;
-    GPIO_ODR(SOCKET_A0_PORT)   = 0x00000000;  // Pull down A0-A15
-    GPIO_ODR(SOCKET_A16_PORT) &= 0xfffffc3f;  // Pull down A16-A19
-#else
-    /* BOARD_REV 2+ */
     /* A0-A12=PC0-PC12 A13-A19=PA1-PA7 */
     GPIO_CRL(SOCKET_A0_PORT)   = 0x44444444;  // Input
     GPIO_CRH(SOCKET_A0_PORT)   = 0x44444444;
     GPIO_CRL(SOCKET_A13_PORT)  = 0x44444448;  // PA0=SOCKET_OE = Input PU
     address_override(0, 2);  // Restore previous A19-A18 override
-#endif
 }
 
 /*
@@ -295,23 +197,8 @@ address_output_disable(void)
 static void
 data_output(uint32_t data)
 {
-#if BOARD_REV == 1
-    GPIO_ODR(SOCKET_D0_PORT)   = data;                     // Set D15-D0
-
-    GPIO_BSRR(SOCKET_D16_PORT) = 0x00ff0000 |              // Clear D16-D23
-                                 ((data >> 16) & 0x00ff);  // Set D16-D23
-    GPIO_BSRR(SOCKET_D24_PORT) = 0x000f0000 |              // Clear D24-D27
-                                 ((data >> 24) & 0x000f);  // Set D24-D27
-    GPIO_BSRR(SOCKET_D28_PORT) = 0x04000000 |              // Clear D28
-                                 ((data >> 18) & 0x0400);  // Set D28
-    GPIO_BSRR(SOCKET_D29_PORT) = 0x03200000 |              // Clear D29-D31
-                                 ((data >> 24) & 0x0020) | // Set D29
-                                 ((data >> 22) & 0x0300);  // Set D30-D31
-#else
-    /* BOARD_REV 2+ */
-    GPIO_ODR(SOCKET_D0_PORT)  = data;                      // Set D0-D15
-    GPIO_ODR(SOCKET_D16_PORT) = (data >> 16);              // Set D16-D31
-#endif
+    GPIO_ODR(FLASH_D0_PORT)  = data;                      // Set D0-D15
+    GPIO_ODR(FLASH_D16_PORT) = (data >> 16);              // Set D16-D31
 }
 
 /*
@@ -322,32 +209,13 @@ data_output(uint32_t data)
 static uint32_t
 data_input(void)
 {
-#if BOARD_REV == 1
-    /*
-     * Board Rev 1
-     *
-     * D0-D15  = PD0-PD15
-     * D16-D23 = PA0-PA7
-     * D24-D27 = PC0-PC3
-     * D28     = PC10
-     * D29     = PB5
-     * D30-D31 = PB8-PB9
-     */
-    return (GPIO_IDR(SOCKET_D0_PORT) |                      // D0-D15
-            ((GPIO_IDR(SOCKET_D16_PORT) & 0x00ff) << 16) |  // D16-D23
-            ((GPIO_IDR(SOCKET_D24_PORT) & 0x000f) << 24) |  // D24-D27
-            ((GPIO_IDR(SOCKET_D28_PORT) & 0x0400) << 18) |  // D28
-            ((GPIO_IDR(SOCKET_D29_PORT) & 0x0020) << 24) |  // D29
-            ((GPIO_IDR(SOCKET_D30_PORT) & 0x0300) << 22));  // D30-D31
-#else
     /*
      * Board Rev 2+
      *
      * D0-D15  = PD0-PD15
      * D16-D15 = PE0-PE15
      */
-    return (GPIO_IDR(SOCKET_D0_PORT) | (GPIO_IDR(SOCKET_D16_PORT) << 16));
-#endif
+    return (GPIO_IDR(FLASH_D0_PORT) | (GPIO_IDR(FLASH_D16_PORT) << 16));
 }
 
 /*
@@ -358,26 +226,10 @@ data_input(void)
 static void
 data_output_enable(void)
 {
-#if BOARD_REV == 1
-    GPIO_CRL(SOCKET_D0_PORT)  = 0x11111111; // Output Push-Pull
-    GPIO_CRH(SOCKET_D0_PORT)  = 0x11111111;
-    GPIO_CRL(SOCKET_D16_PORT) = 0x11111111;
-
-    GPIO_CRL(SOCKET_D24_PORT) = 0x00001111 |
-                                (GPIO_CRL(SOCKET_D24_PORT) & ~0x0000ffff);
-    GPIO_CRH(SOCKET_D28_PORT) = 0x00000100 |
-                                (GPIO_CRH(SOCKET_D28_PORT) & ~0x00000f00);
-    GPIO_CRL(SOCKET_D29_PORT) = 0x00100000 |
-                                (GPIO_CRL(SOCKET_D29_PORT) & ~0x00f00000);
-    GPIO_CRH(SOCKET_D30_PORT) = 0x00000011 |
-                                (GPIO_CRH(SOCKET_D30_PORT) & ~0x000000ff);
-#else
-    /* BOARD_REV 2+ */
-    GPIO_CRL(SOCKET_D0_PORT)  = 0x11111111; // Output Push-Pull
-    GPIO_CRH(SOCKET_D0_PORT)  = 0x11111111;
-    GPIO_CRL(SOCKET_D16_PORT) = 0x11111111;
-    GPIO_CRH(SOCKET_D16_PORT) = 0x11111111;
-#endif
+    GPIO_CRL(FLASH_D0_PORT)  = 0x11111111; // Output Push-Pull
+    GPIO_CRH(FLASH_D0_PORT)  = 0x11111111;
+    GPIO_CRL(FLASH_D16_PORT) = 0x11111111;
+    GPIO_CRH(FLASH_D16_PORT) = 0x11111111;
 }
 
 /*
@@ -388,26 +240,11 @@ data_output_enable(void)
 static void
 data_output_disable(void)
 {
-#if BOARD_REV == 1
-    GPIO_CRL(SOCKET_D0_PORT)  = 0x88888888; // Input Pull-Up / Pull-Down
-    GPIO_CRH(SOCKET_D0_PORT)  = 0x88888888;
-    GPIO_CRL(SOCKET_D16_PORT) = 0x88888888;
-    GPIO_CRL(SOCKET_D24_PORT) = 0x00008888 |
-                                (GPIO_CRL(SOCKET_D24_PORT) & ~0x0000ffff);
-    GPIO_CRH(SOCKET_D28_PORT) = 0x00000800 |
-                                (GPIO_CRH(SOCKET_D28_PORT) & ~0x00000f00);
-    GPIO_CRL(SOCKET_D29_PORT) = 0x00800000 |
-                                (GPIO_CRL(SOCKET_D29_PORT) & ~0x00f00000);
-    GPIO_CRH(SOCKET_D30_PORT) = 0x00000088 |
-                                (GPIO_CRH(SOCKET_D30_PORT) & ~0x000000ff);
-#else
-    /* BOARD_REV 2+ */
     /* D0-D15 = PD0-PD15, D16-D31=PE0-PE15 */
-    GPIO_CRL(SOCKET_D0_PORT)  = 0x44444444; // Input
-    GPIO_CRH(SOCKET_D0_PORT)  = 0x44444444;
-    GPIO_CRL(SOCKET_D16_PORT) = 0x44444444;
-    GPIO_CRH(SOCKET_D16_PORT) = 0x44444444;
-#endif
+    GPIO_CRL(FLASH_D0_PORT)  = 0x88888888; // Input Pull-Up / Pull-Down
+    GPIO_CRH(FLASH_D0_PORT)  = 0x88888888;
+    GPIO_CRL(FLASH_D16_PORT) = 0x88888888;
+    GPIO_CRH(FLASH_D16_PORT) = 0x88888888;
 }
 
 /*
@@ -466,10 +303,6 @@ oe_output(uint value)
     printf(" OE=%d", value);
 #endif
     gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, value);
-#if 0
-    if (board_is_standalone)
-        gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, value);
-#endif
 }
 
 /*
@@ -526,6 +359,204 @@ update_ee_cmd_mask(void)
         ee_cmd_mask = 0x0000ffff;  // 16-bit low
     else
         ee_cmd_mask = 0xffff0000;  // 16-bit high
+}
+
+/*
+ * check_board_standalone
+ * ----------------------
+ * Checks whether this board is installed in an Amiga and sets
+ * board_is_standalone to FALSE if it is.
+ */
+void
+check_board_standalone(void)
+{
+    uint     pass;
+    uint64_t timeout;
+    uint16_t got;
+    uint16_t got2;
+    uint16_t saw;
+    uint16_t conn;
+
+    /*
+     * Test if KBRST is connected. If connected, pin should be high
+     * regardless of STM32 pull-down.
+     */
+    gpio_setv(KBRST_PORT, KBRST_PIN, 0);
+    gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    timer_delay_msec(1);
+    got = gpio_get(KBRST_PORT, KBRST_PIN);
+    if (got != 0) {
+        /*
+         * Pin is high even though it's being pulled down -- there must
+         * be an external pull-up.
+         */
+        kbrst_in_amiga = true;
+    } else {
+        /* Pin is low -- try pulling up */
+        gpio_setv(KBRST_PORT, KBRST_PIN, 1);
+        timer_delay_msec(1);
+        got = gpio_get(KBRST_PORT, KBRST_PIN);
+        if (got == 0) {
+            printf("Amiga in reset\n");
+            kbrst_in_amiga = true;
+        } else {
+            kbrst_in_amiga = false;
+        }
+        gpio_setv(KBRST_PORT, KBRST_PIN, 0);
+    }
+
+    /*
+     * Test if A18 and A19 are connected.
+     *
+     * In the first test (0), set both pins high and wait for up to
+     * 1 ms for the pins to go high. If a pin was not seen high or
+     * last read was not high, then the pin is connected.
+     *
+     * In the second pass (1), set both pins low and wait for up to
+     * 1 ms for the pins to go low. If a pin was not seen low or
+     * last read was not low, then the pin is connected.
+     *
+     * In the final step, wait up to 1ms for pins to change state,
+     * which would also indicate they are connected.
+     */
+    gpio_setmode(SOCKET_A16_PORT, SOCKET_A18_PIN | SOCKET_A19_PIN,
+                 GPIO_SETMODE_INPUT_PULLUPDOWN);
+    conn = 0;
+
+    for (pass = 0; pass <= 1; pass++) {
+        gpio_setv(SOCKET_A16_PORT, SOCKET_A18_PIN | SOCKET_A19_PIN, !pass);
+        saw = 0;
+        timeout = timer_tick_plus_msec(10);
+        while (timer_tick_has_elapsed(timeout) == false) {
+            got = gpio_get(SOCKET_A16_PORT,
+                           SOCKET_A18_PIN | SOCKET_A19_PIN);
+// printf("%u got=%04x\n", pass, got);
+            if (pass == 1)
+                got = ~got;
+            saw |= got;
+// printf("%u saw=%04x\n", pass, saw);
+            if ((saw & (SOCKET_A18_PIN | SOCKET_A19_PIN)) ==
+                       (SOCKET_A18_PIN | SOCKET_A19_PIN)) {
+// printf("%u done early got=%04x saw=%04x\n", pass, got, saw);
+                break;
+            }
+        }
+        conn |= ~saw | ~got;
+// printf("%u conn %04x\n", pass, conn);
+    }
+    timeout = timer_tick_plus_msec(1);
+    while (timer_tick_has_elapsed(timeout) == false) {
+        if ((conn & (SOCKET_A18_PIN | SOCKET_A19_PIN)) ==
+                    (SOCKET_A18_PIN | SOCKET_A19_PIN)) {
+            break; // Detected both connected
+        }
+    }
+    if ((conn & (SOCKET_A18_PIN | SOCKET_A19_PIN)) ==
+                (SOCKET_A18_PIN | SOCKET_A19_PIN)) {
+        printf("A18 and A19 connected\n");
+    } else if (conn & SOCKET_A18_PIN) {
+        printf("A18 connected\n");
+    } else if (conn & SOCKET_A19_PIN) {
+        printf("A19 connected\n");
+    }
+    printf("Connected: ");
+    if (!(conn & SOCKET_A18_PIN))
+        putchar('!');
+    printf("A18 ");
+    if (!(conn & SOCKET_A19_PIN))
+        putchar('!');
+    printf("A19 ");
+    if (!kbrst_in_amiga)
+        putchar('!');
+    printf("KBRST\n");
+
+    /* Detect which flash parts are installed (default bus mode) */
+    // Not sure I can do this with GPIOs. Might need to wait until
+    // prom id can be done. Will try using FLASH_OE
+    gpio_setmode(FLASH_D0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
+gpio_setv(FLASH_D0_PORT, 0xffff, pass);
+    saw = 0;
+    for (pass = 0; pass <= 1; pass++) {
+        gpio_setv(FLASH_D0_PORT, 0xffff, pass);
+        gpio_setv(FLASH_D16_PORT, 0xffff, pass);
+        timer_delay_msec(1);
+        oe_output(0);
+        oe_output_enable();
+        got  = gpio_get(FLASH_D0_PORT, 0xffff);
+        got2 = gpio_get(FLASH_D16_PORT, 0xffff);
+        if (pass == 1) {
+            got = ~got;
+            got2 = ~got2;
+        }
+        oe_output_disable();
+        if (got != 0)
+            saw |= BIT(0);
+        if (got2 != 0)
+            saw |= BIT(1);
+    }
+    printf("Present: ");
+    if (saw & BIT(0)) {
+        if (saw & BIT(1)) {
+            printf("Flash 0 & 1 (32-bit mode)\n");
+            ee_default_mode = EE_MODE_32;
+        } else {
+            printf("Flash 0 (16-bit mode)\n");
+            ee_default_mode = EE_MODE_16_LOW;
+        }
+    } else if (saw & BIT(1)) {
+        printf("Flash 1 (16-bit mode) NOT NORMAL\n");
+        ee_default_mode = EE_MODE_16_HIGH;
+    } else {
+        ee_default_mode = EE_MODE_32;
+        printf("NO FLASH DETECTED\n");
+    }
+
+    /*
+     * Detect Amiga bus mode?
+     * This is probably not be possible now that there are bus
+     * tranceivers (unidirectional) in between the STM32 data
+     * pins and the host.
+     */
+
+    /*
+     * Stand-alone test:
+     *  Pull all SOCKET_A0-A15 high, wait 1 ms
+     *  If all SOCKET_A0-A15 signals are not high, we are in a system
+     *  Pull all SOCKET_A0-A15 low, wait 1 ms
+     *  If all SOCKET_A0-A15 signals are not low, we are in a system
+     */
+    gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    /* Set pullup and test */
+    gpio_setv(SOCKET_A0_PORT, 0xffff, 1);
+    gpio_setv(SOCKET_A13_PORT, 0x000e, 1);  // PA1-PA3 = A13-A15
+    timer_delay_msec(1);
+    got = gpio_get(SOCKET_A0_PORT, 0xffff);
+    if (got != 0xffff) {
+        printf("A0-A15 pullup got %04x\n", got);
+        goto in_amiga;
+    }
+
+    /* Set pulldown and test */
+    gpio_setv(SOCKET_A0_PORT, 0xffff, 0);
+    gpio_setv(SOCKET_A13_PORT, 0x000e, 0);  // PA1-PA3 = A13-A15
+    timer_delay_msec(1);
+    got = gpio_get(SOCKET_A0_PORT, 0xffff);
+    if (got != 0x0000) {
+        printf("A0-A15 pulldown got %04x\n", got);
+        goto in_amiga;
+    }
+
+    board_is_standalone = true;
+
+    /* Asseme "in Amiga" mode when in MX29F1615 programmer */
+    printf("DEBUG: skipping standalone\n");
+//  return;  // Leave socket address lines with weak pulldown
+in_amiga:
+    /* Return to floating input */
+    gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT);
+    gpio_setmode(SOCKET_A13_PORT, 0x00fe, GPIO_SETMODE_INPUT);
+    board_is_standalone = false;
 }
 
 /*
@@ -1420,20 +1451,10 @@ fail:
 }
 
 /* Buffers for DMA from/to GPIOs and Timer event generation registers */
-#define ADDR_BUF_COUNT 64
+#define ADDR_BUF_COUNT 512
 #define ALIGN  __attribute__((aligned(16)))
-ALIGN volatile uint16_t addr_buffer[ADDR_BUF_COUNT];
-ALIGN volatile uint32_t t2up_buffer[1];
-ALIGN volatile uint16_t t2c1_buffer[1];
-ALIGN volatile uint16_t t2c2_buffer[ADDR_BUF_COUNT];
-ALIGN volatile uint16_t t2c3_buffer[ADDR_BUF_COUNT];
-ALIGN volatile uint32_t t3c1_buffer[2];
-ALIGN volatile uint32_t t3c3_buffer[2];
-ALIGN volatile uint32_t t3c4_buffer[2];
-ALIGN volatile uint16_t t5c1_buffer[1];
-ALIGN volatile uint16_t t5c2_buffer[1];
-ALIGN volatile uint32_t t5c3_buffer[2];
-ALIGN volatile uint32_t t5c4_buffer[2];
+ALIGN volatile uint16_t addr_buffer_lo[ADDR_BUF_COUNT];
+ALIGN volatile uint8_t  addr_buffer_hi[ADDR_BUF_COUNT];
 uint addr_cons = 0;
 uint8_t reply_buffer[256];
 
@@ -1443,39 +1464,47 @@ ee_snoop(int flag)
     uint     last_oe = 1;
     uint     cons = 0;
     uint     prod = 0;
-    uint     iters = 0;
     uint     no_data = 0;
     uint32_t captures[32];
     uint32_t laddr = 0xffffffff;
 
+#if 0
     if (flag) {
         printf("t5c1 TIM2_EGR %04lx  %04x\n", TIM2_EGR, t5c1_buffer[0]);
-#if 0
-        printf("t2c1 TIM5_EGR %04lx  %04x %08x\n", TIM5_EGR, t2c1_buffer[0], (uint)t2c1_buffer);
-        printf("t5c2 TIM3_EGR %04lx  %04x\n", TIM3_EGR, t5c2_buffer[0]);
-        printf("t5c3 WE       %x\n", (GPIO_ODR(FLASH_WE_PORT) & FLASH_WE_PIN) ? 1 : 0);
-        printf("t2c2 ODR(D0)  %04lx  DMA %04x\n", GPIO_ODR(SOCKET_D0_PORT), ARRAY_SIZE(t2c2_buffer) - dma_get_number_of_data(DMA1, DMA_CHANNEL7));
-        printf("t2c3 ODR(D16) %04lx  DMA %04x\n", GPIO_ODR(SOCKET_D16_PORT), ARRAY_SIZE(t2c3_buffer) - dma_get_number_of_data(DMA1, DMA_CHANNEL1));
-        printf("t5c4 CRL(D0)  %08lx  t3c1 CRH(D8)  %08lx\n",
-               GPIO_CRL(SOCKET_D0_PORT), GPIO_CRH(SOCKET_D0_PORT));
-        printf("t3c3 CRL(D16) %08lx  t3c4 CRH(D24) %08lx\n",
-               GPIO_CRL(SOCKET_D16_PORT), GPIO_CRH(SOCKET_D16_PORT));
-#endif
-#define DO_WE_TEST
-#ifdef DO_WE_TEST
-        /* Enable drive of flash WE */
-        t5c3_buffer[0] = FLASH_WE_PIN << 16;  // Set WE low
-        t5c3_buffer[1] = FLASH_WE_PIN;        // Set WE high
-
-        /* Disable OE for flash */
-        gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
-        gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
-#endif
         return;
     }
+#endif
     printf("Press any key to exit\n");
 
     address_output_disable();
+    if (flag) {
+        uint dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
+        prod = ARRAY_SIZE(addr_buffer_lo) - dma_left;
+        if (prod > ARRAY_SIZE(addr_buffer_lo))
+            prod = 0;
+        cons = prod;
+
+        while (1) {
+            if (getchar() > 0)
+                break;
+            dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
+            prod = ARRAY_SIZE(addr_buffer_lo) - dma_left;
+            if (prod > ARRAY_SIZE(addr_buffer_lo))
+                prod = 0;
+            if (cons != prod) {
+                while (cons != prod) {
+                    uint8_t hi = addr_buffer_hi[cons] >> 4;
+                    printf(" %x%04x", hi, addr_buffer_lo[cons]);
+                    cons++;
+                    if (cons >= ARRAY_SIZE(addr_buffer_lo))
+                        cons = 0;
+                }
+                printf("\n");
+            }
+        }
+        return;
+    }
+
     while (1) {
         if (oe_input() == 0) {
             /* Only capture on falling edge of OE */
@@ -1491,11 +1520,6 @@ ee_snoop(int flag)
                         prod = nprod;
                         laddr = addr;
                         no_data = 0;
-                        if (iters++ >= 30) {
-                            if (getchar() > 0)
-                                goto abort;
-                            iters = 0;
-                        }
                         continue;
                     }
                 }
@@ -1504,7 +1528,7 @@ ee_snoop(int flag)
         } else {
             last_oe = 1;
         }
-        if (no_data++ < 100)
+        if (no_data++ < 200)
             continue;
         if (cons != prod) {
             while (cons != prod) {
@@ -1516,25 +1540,26 @@ ee_snoop(int flag)
         }
         if (getchar() > 0)
             break;
+        no_data = 0;
     }
-abort:
     printf("\n");
 }
 
 
-#define KS_CMD_ID       0x01  // Reply with software ID
-#define KS_CMD_TESTPATT 0x02  // Reply with bit test pattern
-#define KS_CMD_EEPROM   0x03  // Issue command to EEPROM
-#define KS_CMD_ROMSEL   0x04  // Force or release A18 and A19
-#define KS_CMD_NOP      0x12  // Do nothing
+#define KS_CMD_ID       0x01    // Reply with software ID
+#define KS_CMD_TESTPATT 0x02    // Reply with bit test pattern
+#define KS_CMD_EEPROM   0x03    // Issue low level command to EEPROM
+#define KS_CMD_ROMSEL   0x04    // Force or release A18 and A19
+#define KS_CMD_LOOPBACK 0x05    // Reply with sent message
+#define KS_CMD_NOP      0x12     // Do nothing
 
 #define KS_STATUS_OK    0x0000  // Success
 #define KS_STATUS_FAIL  0x0001  // Failure
 #define KS_STATUS_CRC   0x0002  // CRC failure
 
-#define KS_FLAG_WE      0x0100  // Issue command to EEPROM (given with CMD)
+#define KS_EEPROM_WE    0x0100  // Drive WE# to EEPROM (given with CMD)
 
-#define KS_ROMSEL_SAVE  0x0001  // Save setting in NVRAM
+#define KS_ROMSEL_SAVE  0x0100  // Save setting in NVRAM (given with CMD)
 #define KS_ROMSEL_SET   0x0f00  // ROM select bits to force
 #define KS_ROMSEL_BITS  0xf000  // ROM select bit values (A19 is high bit)
 
@@ -1585,14 +1610,13 @@ oe_reply(uint hold_we, uint len, const void *reply_buf)
     dptr = (void *) reply_buf;
     if (ee_mode == EE_MODE_16_HIGH)
         dptr -= 2;  /* Change position so data is in upper 16 bits */
-#if BOARD_REV > 2
+
     /* Board rev 3 and higher have external bus tranceiver, so STM32 can always drive */
     data_output_enable();  // Drive data pins
     if (hold_we) {
         we_enable(0);      // Pull up
         oewe_output(1);
     }
-#endif
 
     while ((int)len > 0) {
         uint32_t dval = *(uint32_t *) dptr;
@@ -1600,13 +1624,6 @@ oe_reply(uint hold_we, uint len, const void *reply_buf)
         if (ee_mode == EE_MODE_16_HIGH)
             dval <<= 16;
 #endif
-//   printf(",%x,", dval);
-#if BOARD_REV > 2
-if (hold_we) {
-    /* WE should also be high at this point */
-    if (gpio_get(FLASH_WE_PORT, FLASH_WE_PIN) == 0)
-        printf("WE=0?\n");
-}
         data_output(dval);
         dptr += tlen;
         len  -= tlen;
@@ -1618,26 +1635,6 @@ if (hold_we) {
                 goto oe_reply_end;
             }
         }
-if (hold_we) {
-    /* WE should also be low at this point */
-    if (gpio_get(FLASH_WE_PORT, FLASH_WE_PIN) != 0)
-        printf("WE=1?\n");
-}
-#else
-        /* BOARD_REV <= 2 */
-        data_output(dval);
-        dptr += tlen;
-        len -= tlen;
-        for (count = 0; oe_input() != 0; count++) {
-            if (count > 100000) {
-                printf("OE timeout 0\n");
-                goto oe_reply_end;
-            }
-        }
-        data_output_enable();  // Drive data
-        if (hold_we)
-            we_output(0);
-#endif
 #ifdef MEASURE_OE_W
         start = timer_tick_get();
 #endif
@@ -1655,34 +1652,21 @@ if (hold_we) {
         /* Wait for OE to go high */
         for (count = 0; oe_input() == 0; count++) {
             if (count > 100000) {
-#if BOARD_REV <= 2
-                if (hold_we)
-                    we_output(1);
-#endif
                 printf("OE timeout 1\n");
                 goto oe_reply_end;
             }
         }
-#if BOARD_REV <= 2
-        data_output_disable();
-#endif
 #ifdef MEASURE_OE_W
         printf("%u,%u ", (unsigned int) (timer_tick_get() - start), count);
-#endif
-#if BOARD_REV <= 2
-        if (hold_we)
-            we_output(1);
 #endif
     }
 oe_reply_end:
     oe_output_disable();
-#if BOARD_REV > 2
     data_output_disable();
     if (hold_we) {
         oewe_output(0);
         we_enable(1);      // Drive high
     }
-#endif
 }
 
 static void
@@ -1694,17 +1678,17 @@ process_addresses(uint prod)
     static uint16_t cmd = 0;
     static uint16_t cmd_len = 0;
     static uint32_t crc;
-    if (prod >= ARRAY_SIZE(addr_buffer))
+    if (prod >= ARRAY_SIZE(addr_buffer_lo))
         return;
     while (cons != prod) {
-//      printf(" %x:%04x", cons, addr_buffer[cons]);
+//      printf(" %x:%04x", cons, addr_buffer_lo[cons]);
         if (magic_pos++ < ARRAY_SIZE(ks_magic)) {
             /* Magic phase */
-            if (addr_buffer[cons] != ks_magic[magic_pos - 1])
+            if (addr_buffer_lo[cons] != ks_magic[magic_pos - 1])
                 magic_pos = 0;  // No match
         } else if (magic_pos == ARRAY_SIZE(ks_magic) + 1) {
             /* Command phase */
-            cmd = addr_buffer[cons];
+            cmd = addr_buffer_lo[cons];
 //          printf("cmd=%x\n", cmd);
             switch ((uint8_t) cmd) {
                 case KS_CMD_ID: {
@@ -1719,24 +1703,22 @@ process_addresses(uint prod)
                     magic_pos = 0;
                     break;
                 }
-// dnw prom 22 1;dwn prom 4 1;dw prom 1234 40
-// 0x0022 First access is magic pattern (just a single address for now)
-// 0x0004 Second access is command << 1
-// 0x1234 is any address -- reply message is sent in order
-                case KS_CMD_TESTPATT: {
+                case KS_CMD_TESTPATT: {  // Test pattern used to verify link
                     static const uint32_t reply[] = {
-                        0x54455354, 0x50415454, 0x20666f6c, 0x6c6f7773,
+                        0x54534554, 0x54544150, 0x53202d20, 0x54524154,
                         0xaaaa5555, 0xcccc3333, 0xeeee1111, 0x66669999,
                         0x00020001, 0x00080004, 0x00200010, 0x00800040,
                         0x02000100, 0x08000400, 0x20001000, 0x80004000,
                         0xfffdfffe, 0xfff7fffb, 0xffdfffef, 0xff7fffbf,
-                        0xfdfffeff, 0xf7fffbff, 0xdfffefff, 0x7fffbfff
+                        0xfdfffeff, 0xf7fffbff, 0xdfffefff, 0x7fffbfff,
+                        0x54534554, 0x54544150, 0x444e4520, 0x68646320,
                     };
                     oe_reply(0, sizeof (reply), &reply);
                     magic_pos = 0;
                     printf("TP\n");
                     break;
                 }
+                case KS_CMD_LOOPBACK:
                 case KS_CMD_EEPROM:
                 case KS_CMD_ROMSEL:
                     break;
@@ -1748,63 +1730,44 @@ printf("unk %x\n", cmd);
                     magic_pos = 0;  // Unknown command
                     break;
             }
-            crc = crc32(0, (void *) &addr_buffer[cons], sizeof (uint16_t));
+            crc = crc32(0, (void *) &addr_buffer_lo[cons], sizeof (uint16_t));
         } else if (magic_pos == ARRAY_SIZE(ks_magic) + 2) {
             /* Length phase */
-            len = cmd_len = addr_buffer[cons];
-            crc = crc32(crc, (void *) &addr_buffer[cons], sizeof (uint16_t));
+            len = cmd_len = addr_buffer_lo[cons];
+            crc = crc32(crc, (void *) &addr_buffer_lo[cons], sizeof (uint16_t));
         } else if (len-- > 0) {
             /* Data in phase */
             if (len == 0) {
-                crc = crc32(crc, (void *) &addr_buffer[cons], 1);
+                crc = crc32(crc, (void *) &addr_buffer_lo[cons], 1);
             } else {
                 len--;
-                crc = crc32(crc, (void *) &addr_buffer[cons], 2);
+                crc = crc32(crc, (void *) &addr_buffer_lo[cons], 2);
             }
-        } else if ((uint16_t) crc != addr_buffer[cons]) {
+        } else if ((uint16_t) crc != addr_buffer_lo[cons]) {
             /* CRC failed */
             uint16_t error[2];
             error[0] = KS_STATUS_CRC;
             error[1] = crc;
             oe_reply(0, sizeof (error), &error);
-printf("%04x CRC %04x != exp %04x %x %x\n", cmd, addr_buffer[cons], (uint16_t)crc, (uint16_t)crc << 1, (uint16_t)crc << 2);
+printf("c=%04x l=%02x CRC %04x != exp %04x %x %x\n", cmd, cmd_len, addr_buffer_lo[cons], (uint16_t)crc, (uint16_t)crc << 1, (uint16_t)crc << 2);
             magic_pos = 0;  // Unknown command
         } else {
             /* Execution phase */
             switch ((uint8_t) cmd) {
+                case KS_CMD_LOOPBACK:
                 case KS_CMD_EEPROM: {
-                    const uint we = cmd & KS_FLAG_WE;
+                    const uint we = cmd & KS_EEPROM_WE;
                     uint8_t *buf1;
                     uint8_t *buf2;
                     uint len1;
                     uint len2;
                     uint cons_s = cons;
                     if ((int) cons_s <= 0)
-                        cons_s += ARRAY_SIZE(addr_buffer);
+                        cons_s += ARRAY_SIZE(addr_buffer_lo);
                     if (cons_s * 2 >= cmd_len) {
                         /* Send data doesn't wrap */
                         len1 = cmd_len;
-                        buf1 = ((uint8_t *) &addr_buffer[cons_s]) - len1;
-// don't write
-// dnw prom 22 1;dwn prom 6 1;dwn prom 8 1;dwn prom 1234 4;dwn prom e5d8 1;dw prom 20 10
-// MAGIC 0x11
-// CMD 0x3
-// LEN 0x4
-// DATA 0x091a 0x091b
-// CRC 72ec
-//
-// Issue command to put flash into Array id mode (not yet working -- no unlock?)
-// dnw prom 22 1;dwn prom 206 1;dwn prom 4 1;dwn prom 120 2;dwn prom 36ae 1;dw prom aaa 1;dw prom 0 10
-// 0x0022 First access is magic pattern
-// 0x0206 is KS_CMD_EEPROM with KS_FLAG_WE
-// 0x0004 is number of words of data (2)
-// 0x0120 is Flash cmd 0x0090 (ID mode)
-// 0x36ae is CRC
-// 0x0aaa ADDR 0x0555 ?
-//
-// Issue unlock command to put flash into Array id mode (not yet working)
-// dnw prom 22 1;dwn prom 206 1;dwn prom c 1;dwn prom 154 1;dwn prom aa 1;dwn prom 120 2;dwn prom d50c 1;dwA prom aaa 2;dwA prom 554 1;dwA prom aaa 2;dw prom 0 4
-
+                        buf1 = ((uint8_t *) &addr_buffer_lo[cons_s]) - len1;
                         oe_reply(we, len1, buf1);
                         if (we) {
                             uint pos;
@@ -1815,31 +1778,26 @@ printf("%04x CRC %04x != exp %04x %x %x\n", cmd, addr_buffer[cons], (uint16_t)cr
                             printf("\n");
                         }
                     } else {
-                        /* Send data from beginning and end of buffer */
+                        /* Send data from end and beginning of buffer */
                         len1 = cons_s * 2;
-                        buf1 = (void *) addr_buffer;
+                        buf1 = (void *) addr_buffer_lo;
                         len2 = cmd_len - len1;
-                        buf2 = ((uint8_t *) addr_buffer) +
-                               sizeof (addr_buffer) - len2;
+                        buf2 = ((uint8_t *) addr_buffer_lo) +
+                               sizeof (addr_buffer_lo) - len2;
                         if (len2 != 0)
                             oe_reply(we, len2, buf2);
                         oe_reply(we, len1, buf1);
                     }
-// printf("%04x %04x %04x ", *(uint16_t *)buf1, *(uint16_t *)(buf1 + 2), *(uint16_t *)(buf1 + 4));
                     break;
                 }
                 case KS_CMD_ROMSEL: {
                     uint16_t status = KS_STATUS_OK;
                     uint cons_s = cons - 1;
                     if ((int) cons_s <= 0)
-                        cons_s += ARRAY_SIZE(addr_buffer);
-printf("%04x %04x ", addr_buffer[cons_s], addr_buffer[cons_s + 1]);
+                        cons_s += ARRAY_SIZE(addr_buffer_lo);
+printf("RS %04x %04x ", addr_buffer_lo[cons_s], addr_buffer_lo[cons_s + 1]);
                     oe_reply(0, sizeof (status), &status);
-                    address_override(addr_buffer[cons_s] >> 8, 1);
-// 11
-// dnw prom 22 1;dwn prom 8 1;dwn prom 4 1;dwn prom 19800 1;dwn prom 2d88 1; dw prom 20 8
-// ~
-// dnw prom 22 1;dwn prom 8 1;dwn prom 4 1;dwn prom 0 1;dwn prom 3a72 1; dw prom 20 8
+                    address_override(addr_buffer_lo[cons_s] >> 8, 1);
                     break;
                 }
                 default:
@@ -1848,7 +1806,7 @@ printf("%04x %04x ", addr_buffer[cons_s], addr_buffer[cons_s + 1]);
             }
             magic_pos = 0;  // Unknown command
         }
-        if (++cons >= ARRAY_SIZE(addr_buffer))
+        if (++cons >= ARRAY_SIZE(addr_buffer_lo))
             cons = 0;
     }
 }
@@ -1862,38 +1820,8 @@ tim5_isr(void)
     TIM_SR(TIM5) = ~flags;  /* Clear interrupt */
 
     dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
-    producer = ARRAY_SIZE(addr_buffer) - dma_left;
+    producer = ARRAY_SIZE(addr_buffer_lo) - dma_left;
     process_addresses(producer);
-}
-
-/*
- * config_tim5_cascade_to_tim3
- * ---------------------------
- * This function sets up TIM5 to trigger TIM3 so that further DMA can be
- * triggered by TIM3.
- */
-static void
-config_tim5_cascade_to_tim3(void)
-{
-    rcc_periph_clock_enable(RCC_TIM3);
-    rcc_periph_reset_pulse(RST_TIM3);
-    timer_disable_counter(TIM3);
-
-    timer_set_period(TIM3, 0xffff); // Set period (rollover at 1)
-    TIM_CR1(TIM5) |= TIM_CR1_URS;   // Update on overflow
-    TIM_CR1(TIM3) &= ~TIM_CR1_OPM;  // Continuous mode
-
-    /* TIM5 is master - generate TRGO to TIM3 on rollover (UEV) */
-    TIM_CR2(TIM5) &= TIM_CR2_MMS_MASK;
-    TIM_CR2(TIM5) |= TIM_CR2_MMS_UPDATE;
-
-    /* TIM3 is slave of TIM5 (ITR2) per Table 86 */
-    TIM_SMCR(TIM3) = TIM_SMCR_TS_ITR2;
-
-    /* TIM3 has External Clock Mode 1 (increment on rising edge of TRGI) */
-    TIM_SMCR(TIM3) |= TIM_SMCR_SMS_ECM1;
-
-//  timer_enable_counter(TIM3);
 }
 
 static void
@@ -1911,12 +1839,19 @@ config_dma(uint32_t dma, uint32_t channel, uint to_periph, uint mode,
     dma_set_number_of_data(dma, channel, wraplen);
     dma_disable_peripheral_increment_mode(dma, channel);
     dma_enable_memory_increment_mode(dma, channel);
-    if (mode == 16) {
-        dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_16BIT);
-        dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_16BIT);
-    } else {
-        dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_32BIT);
-        dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_32BIT);
+    switch (mode) {
+        case 8:
+            dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_8BIT);
+            dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_8BIT);
+            break;
+        case 16:
+            dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_16BIT);
+            dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_16BIT);
+            break;
+        default: // 32
+            dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_32BIT);
+            dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_32BIT);
+            break;
     }
     dma_enable_circular_mode(dma, channel);
     dma_set_priority(dma, channel, DMA_CCR_PL_MEDIUM);
@@ -1929,16 +1864,17 @@ config_dma(uint32_t dma, uint32_t channel, uint to_periph, uint mode,
 }
 
 static void
-config_tim5_ch1_dma_1(void)
+config_tim5_ch1_dma(void)
 {
     /* Capture address when OE goes low */
-    memset((void *) addr_buffer, 0, sizeof (addr_buffer));
-    printf("t5c1 %p addr capture\n", (void *) addr_buffer);
+    memset((void *) addr_buffer_lo, 0, sizeof (addr_buffer_lo));
+    printf("Addr lo capture %08x (t5c1) 16-bit\n",
+           (uintptr_t) addr_buffer_lo);
 
-    /* This is the default mode: DMA from address GPIOs to memory */
+    /* DMA from address GPIOs A0-A15 to memory */
     config_dma(DMA2, DMA_CHANNEL5, 0, 16,
                &GPIO_IDR(SOCKET_A0_PORT),
-               addr_buffer, ADDR_BUF_COUNT);
+               addr_buffer_lo, ADDR_BUF_COUNT);
 
 #if 0
     /*
@@ -1961,7 +1897,6 @@ config_tim5_ch1_dma_1(void)
     timer_enable_irq(TIM5, TIM_DIER_CC1DE | TIM_DIER_CC1IE);
 
     timer_set_ti1_ch1(TIM5);               // Capture input from channel 1 only
-//x  timer_slave_set_polarity(TIM5, 0);    // Slave Polarity falling edge
 
 //  timer_continuous_mode(TIM5);
     timer_set_oc_polarity_low(TIM5, TIM_OC1);
@@ -1976,208 +1911,23 @@ config_tim5_ch1_dma_1(void)
     timer_enable_oc_output(TIM5, TIM_OC1);
 }
 
-#if 0
-static void
-config_tim5_ch1_dma_2(void)
-{
-    /* Trigger TIM2_CH2 and TIM2_UP on OE going high */
-    printf("t5c1 %p TIM2_EGR %p\n", (void *) t5c1_buffer, (void *)&TIM2_EGR);
-
-    /* This is the default mode: DMA from address GPIOs to memory */
-    config_dma(DMA2, DMA_CHANNEL5, 1, 32,
-               &TIM2_EGR, t5c1_buffer, ARRAY_SIZE(t5c1_buffer));
-
-    /* Set up TIM5 CH1 to trigger DMA based on external PA0 pin */
-    timer_disable_oc_output(TIM5, TIM_OC1);
-
-    timer_set_ti1_ch1(TIM5);               // Capture input from channel 1 only
-//  timer_slave_set_polarity(TIM5, 1);     // Slave Polarity rising edge
-
-//  timer_set_oc_polarity_high(TIM5, TIM_OC1);
-
-    /* Select the Input and set the filter */
-    TIM5_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
-    TIM5_CCMR1 |= TIM_CCMR1_CC1S_IN_TI1 | TIM_CCMR1_IC1F_OFF;
-    TIM5_SMCR = TIM_SMCR_ETP      | // falling edge detection
-                TIM_SMCR_ECE;       // external clock mode 2 (ETR input)
-
-    timer_enable_oc_output(TIM5, TIM_OC1);
-}
-
-static void
-config_tim5_ch2_dma(void)
-{
-    printf("t5c2 %p TIM3_EGR %p\n", (void *)t5c2_buffer, (void *)&TIM3_EGR);
-
-    config_dma(DMA2, DMA_CHANNEL4, 1, 16,
-               &TIM3_EGR, t5c2_buffer, ARRAY_SIZE(t5c2_buffer));
-
-    timer_disable_oc_output(TIM5, TIM_OC2);
-    timer_set_oc_value(TIM5, TIM_OC2, 0xffff);
-    timer_enable_oc_output(TIM5, TIM_OC2);
-    timer_enable_irq(TIM5, TIM_DIER_CC2DE);
-}
-
-static void
-config_tim5_ch3_dma(void)
-{
-    /* Set up DMA Write to WE enable register */
-    printf("t5c3 %p WE  %p\n", (void *) t5c3_buffer, (void *) &GPIO_BSRR(FLASH_WE_PORT));
-
-    config_dma(DMA2, DMA_CHANNEL2, 1, 32, (void *) &GPIO_BSRR(FLASH_WE_PORT),
-               t5c3_buffer, ARRAY_SIZE(t5c3_buffer));
-
-    timer_disable_oc_output(TIM5, TIM_OC3);
-    timer_set_oc_value(TIM5, TIM_OC3, 0xffff);
-    timer_set_oc_mode(TIM5, TIM_OC3, TIM_OCM_FROZEN);
-    timer_enable_oc_output(TIM5, TIM_OC3);
-    timer_enable_irq(TIM5, TIM_DIER_CC3DE);
-}
-
-static void
-config_tim5_ch4_dma(void)
-{
-    /* Set up DMA Write to D0-D7 output enable register */
-    printf("t5c4 %p D0-D7 OE\n", (void *) t5c4_buffer);
-
-    config_dma(DMA2, DMA_CHANNEL1, 1, 32, (void *) &GPIO_CRL(SOCKET_D0_PORT),
-               t5c4_buffer, ARRAY_SIZE(t5c4_buffer));
-
-    timer_disable_oc_output(TIM5, TIM_OC4);
-    timer_set_oc_value(TIM5, TIM_OC4, 0xffff);
-    timer_set_oc_mode(TIM5, TIM_OC4, TIM_OCM_FROZEN);
-    timer_enable_oc_output(TIM5, TIM_OC4);
-    timer_enable_irq(TIM5, TIM_DIER_CC4DE);
-}
-#endif
-
-static void
-config_tim2_ch2_dma(void)
-{
-    printf("t2c2 %p D0-D15 %p\n", (void *)t2c2_buffer, (void *)&GPIO_ODR(SOCKET_D0_PORT));
-
-    config_dma(DMA1, DMA_CHANNEL7, 1, 16,
-               &GPIO_ODR(SOCKET_D0_PORT), t2c2_buffer, ARRAY_SIZE(t2c2_buffer));
-
-    timer_disable_oc_output(TIM2, TIM_OC2);
-    timer_set_oc_value(TIM2, TIM_OC2, 0x0001);
-    timer_set_oc_mode(TIM2, TIM_OC2, TIM_OCM_ACTIVE);
-    timer_enable_oc_output(TIM2, TIM_OC2);
-    timer_enable_irq(TIM2, TIM_DIER_CC2DE);
-}
-
-static void
-config_tim2_ch3_dma(void)
-{
-#if 0
-    printf("t2c3 %p WE %p\n", (void *)t2c3_buffer, (void *)&GPIO_BSRR(FLASH_WE_PORT));
-
-    config_dma(DMA1, DMA_CHANNEL1, 1, 32,
-               &GPIO_BSRR(FLASH_WE_PORT), t2c3_buffer, ARRAY_SIZE(t2c3_buffer));
-#else
-    printf("t2c3 %p D16-D31 %p\n", (void *)t2c3_buffer, (void *)&GPIO_ODR(SOCKET_D16_PORT));
-
-    config_dma(DMA1, DMA_CHANNEL1, 1, 16,
-               &GPIO_ODR(SOCKET_D16_PORT), t2c3_buffer, ARRAY_SIZE(t2c3_buffer));
-#endif
-
-    timer_disable_oc_output(TIM2, TIM_OC2);
-    timer_set_oc_value(TIM2, TIM_OC3, 0x0001);
-    timer_set_oc_mode(TIM2, TIM_OC3, TIM_OCM_ACTIVE);
-    timer_enable_oc_output(TIM2, TIM_OC3);
-    timer_enable_irq(TIM2, TIM_DIER_CC3DE);
-}
-
-#if 0
-static void
-config_tim2_up_dma(void)
-{
-    printf("t2up %p TIM3_EGR %p\n", (void *)t2up_buffer, (void *)&TIM3_EGR);
-
-    config_dma(DMA1, DMA_CHANNEL2, 1, 32,
-               &TIM3_EGR, t2up_buffer, ARRAY_SIZE(t2up_buffer));
-
-    timer_enable_irq(TIM2, TIM_DIER_UDE);
-}
-#endif
-
-static void
-config_tim3_ch1_dma(void)
-{
-    /* Set up DMA Write to D8-D15 output enable register */
-    printf("t3c1 %p D8-D15 OE\n", (void *)t3c1_buffer);
-
-    config_dma(DMA1, DMA_CHANNEL6, 1, 32,
-               (void *) &GPIO_CRH(SOCKET_D0_PORT),
-               t3c1_buffer, ARRAY_SIZE(t3c1_buffer));
-
-    timer_disable_oc_output(TIM3, TIM_OC1);
-    timer_set_oc_value(TIM3, TIM_OC1, 0xffff);
-    timer_set_oc_mode(TIM3, TIM_OC1, TIM_OCM_FROZEN);
-    timer_enable_irq(TIM3, TIM_DIER_CC1DE);
-}
-
-static void
-config_tim3_ch3_dma(void)
-{
-    /* Set up DMA Write to D16-D23 output enable register */
-    printf("t3c3 %p D16-D23 OE\n", (void *)t3c3_buffer);
-
-    config_dma(DMA1, DMA_CHANNEL2, 1, 32,
-               (void *) &GPIO_CRL(SOCKET_D16_PORT),
-               t3c3_buffer, ARRAY_SIZE(t3c3_buffer));
-
-    timer_disable_oc_output(TIM3, TIM_OC3);
-    timer_set_oc_value(TIM3, TIM_OC3, 0xffff);
-    timer_enable_irq(TIM3, TIM_DIER_CC3DE);
-}
-
-static void
-config_tim3_ch4_dma(void)
-{
-    /* Set up DMA Write to D24-D31 output enable register */
-    printf("t3c4 %p D24-D31 OE\n", (void *)t3c4_buffer);
-
-    config_dma(DMA1, DMA_CHANNEL3, 1, 32,
-               (void *) &GPIO_CRH(SOCKET_D16_PORT),
-               t3c4_buffer, ARRAY_SIZE(t3c4_buffer));
-
-    timer_disable_oc_output(TIM3, TIM_OC4);
-    timer_set_oc_value(TIM3, TIM_OC4, 0xffff);
-    timer_set_oc_mode(TIM3, TIM_OC4, TIM_OCM_FROZEN);
-    timer_enable_irq(TIM3, TIM_DIER_CC4DE);
-}
-
-#if 0
-static void
-config_tim2_update_dma(void)
-{
-    // just trigger CH3 for now
-    static uint16_t event_gen = TIM_EGR_CC4G | TIM_EGR_CC3G |
-                                TIM_EGR_CC2G | TIM_EGR_CC1G;  // 0x001e
-    TIM2_DCR = 0x14;  // TIMx_EGR
-    TIM2_DMAR = (uintptr_t) &event_gen;
-// enable UDE
-// trigger all TIM2 capture events
-// cw 40000014 1e
-// dw 20002460 20;dw 200023e0 20;dw 20002360 20
-// d 40000000
-}
-#endif
-
 static void
 config_tim2_ch1_dma(void)
 {
     /* Set up DMA Write to TIM5 Event Generation register */
-    printf("t2c1 %p TIM5_EGR %p\n", (void *)t2c1_buffer, (void *) &TIM5_EGR);
+    memset((void *) addr_buffer_hi, 0, sizeof (addr_buffer_hi));
+    printf("Addr hi capture %08x (t2c1) 8-bit\n",
+           (uintptr_t) addr_buffer_hi);
 
-    config_dma(DMA1, DMA_CHANNEL5, 1, 16, (void *) &TIM5_EGR,
-               t2c1_buffer, ARRAY_SIZE(t2c1_buffer));
+    /* Byte-wide DMA from address GPIOs A16-A19 to memory */
+    config_dma(DMA1, DMA_CHANNEL5, 0, 8,
+               &GPIO_IDR(SOCKET_A16_PORT),
+               addr_buffer_hi, ARRAY_SIZE(addr_buffer_hi));
 
     timer_disable_oc_output(TIM2, TIM_OC1);
-    timer_set_ti1_ch1(TIM2);               // Capture input from channel 1 only
+    timer_set_ti1_ch1(TIM2);        // Capture input from channel 1 only
 
-    timer_set_oc_polarity_high(TIM2, TIM_OC1);
+    timer_set_oc_polarity_low(TIM2, TIM_OC1);
 
     /* Select the Input and set the filter */
     TIM2_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
@@ -2200,7 +1950,6 @@ config_tim2_ch1_dma(void)
  * This seems to limit DMA on all channels except the trigger channel
  */
     timer_set_dma_on_compare_event(TIM2);  // DMA on CCx event occurs
-
 
 //  timer_generate_event(TIM2, TIM_EGR_TG); // Generate fake Trigger event
 //  timer_generate_event(TIM2, TIM_EGR_UG); // Generate fake Update event
@@ -2248,29 +1997,13 @@ ee_init(void)
      *
      * PA0: WKUP/USART2_CTS, ADC12_IN0/TIM2_CH1_ETR, TIM5_CH1/ETH_MII_CRS_WKUP
      *
-     * DMA1 Channel 1 used by ADC1, could be used by TIM2_CH3, TIM4_CH1
-     * DMA1 Channel 2 could be used by TIM1_CH1, TIM2_UP, TIM3_CH3
-     * DMA1 Channel 3 could be used by TIM3_CH4, TIM3_UP
-     * DMA1 Channel 4 could be used by TIM1_CH4, TIM4_CH2
+     * DMA1 Channel 1 used by ADC1
      * DMA1 Channel 5 used by TIM2_TRG (ROM OE DMA from ext pin)
-     * DMA1 Channel 6 could be used by TIM1_CH3, TIM3_CH1
-     * DMA1 Channel 7 could be used by TIM2_CH2, TIM2_CH4, TIM4_UP
-     * DMA2 Channel 1 used by TIM5_CH4
-     * DMA2 Channel 2 used by TIM5_CH3
-     * DMA2 Channel 3 could be used by TIM6_UP
-     * DMA2 Channel 4 used by TIM5_CH2
      * DMA2 Channel 5 used by TIM5_CH1 (ROM OE DMA from ext pin)
      *
      * Only one channel may be active per stream.
      *
-     * TIM1 could gen CH1 CH3 CH4
-     * TIM2 could gen UP?, CH2
-     * TIM3 could gen CH1, CH3, CH4
-     * TIM4 could gen UP?, CH2
-     * TIM5 is now working for DMA
-     *  CH1 is input trigger for OE
-     *  CH2-5 can be triggered with
-     *      cw 40000c14 1e
+     * TIM5 CH1 is input trigger for OE
      */
 
     /*
@@ -2305,186 +2038,30 @@ ee_init(void)
      *                  Flash OE = input
      *              else
      *                  write data pins
-     *
-     * old
-     * Read-from-STM32 sequence:
-     *      OE low
-     *              2: Write data pins
-     *              1: Set WE high
-     *              2: Set data pins to output
-     *      OE high
-     *              1: Set WE high
-     *              2: Set data pins to input
-     * Write to flash sequence
-     *      OE low
-     *              2: Write data pins
-     *              1: Set WE low (address is latched by flash)
-     *              2: Set data pins to output
-     *      OE high
-     *              1: Set WE high (data is latched by flash)
-     *              2: Set data pins to input
-     *
-     * TRIGGER SEQUENCE
-     * ----------------
-     * TIM2_CH1 (primary OE low)
-     *      Trigger TIM5_CH1, TIM5_CH3, TIM5_CH4 (2 writes for D0-D31 data)
-     *      TIM5_CH2 is unused (1 write optional WE or D0-D31 OE)
-     * TIM5_CH1 (primary OE high)
-     *      Trigger TIM2_CH2, TIM2_UP (1 write for optional WE)
-     *      TIM2_CH3 could be used if ADC is removed (1 write for D0-D31 OE)
-     * TIM2_UP
-     *      Trigger TIM3_CH1, TIM3_CH4 (2 writes for D0-D31 output en/dis)
-     *
-     *
-     * Previous trigger sequence
-     * --------------------
-     * TIM5_CH1 (primary OE low)
-     *      Trigger TIM2_CH1 (EG)
-     *              TIM2_CH2 (D0-D15 data)
-     *              TIM2_CH3 (D16-D31 data)
-     * TIM2_CH1 (primary OE high)
-     *      Trigger TIM5_CH2 (EG)
-     *              TIM5_CH3 (WE)
-     *              TIM5_CH4 (D0-D7 OE)
-     * TIM5_CH2
-     *      Trigger TIM3_CH1 (D8-D15 OE)
-     *              TIM3_CH3 (D16-D23 OE)
-     *              TIM3_CH4 (D24-D31 OE)
-     *
-     * ---- DMA1 ----
-     * CH1      CH2       CH3       CH4       CH5        CH6       CH7
-     * TIM2_CH3 TIM3_CH3  TIM3_CH4  -         TIM2_CH1   TIM3_CH1  TIM2_CH2
-     * ---- DMA2 ----
-     * CH1      CH2       CH3       CH4       CH5
-     * TIM5_CH4 TIM5_CH3            TIM5_CH2  TIM5_CH1
-     *
-     * Old:
-     * TIM2_CH1 write to TIM5 event generation DMA trigger
-     * TIM5_CH1 write to TIM2 event generation DMA trigger
-     * TIM5_CH3 data D0-D15 write     (1x 16-bit write)
-     * TIM5_CH4 data D16-D31 write    (1x 16-bit write)
-     * TIM2_CH2 WE low/high           (1x 32-bit write)
-     * TIM2_UP write to TIM3 event generation DMA trigger
-     * TIM3_CH1 output enable D0-D15  (2x 32-bit writes)
-     * TIM3_CH4 output enable D16-D31 (2x 32-bit writes)
-     *
-     *
-     * ---- DMA1 ----
-     * CH1      CH2       CH3       CH4       CH5        CH6       CH7
-     * ADC1                                   TIM2_CH1
-     *          TIM2_UP                                            TIM2_CH2
-     *         [TIM3_CH3] TIM3_CH4                       TIM3_CH1
-     *                    TIM3_UP   TIM4_CH2  [TIM4_CH3]           TIM4_UP
-     * [TIM2_CH3]
-     * ---- DMA2 ----
-     * CH1      CH2       CH3       CH4       CH5
-     *                                        TIM5_CH1
-     * TIM5_CH4 TIM5_CH3
-     *                              [TIM5_CH2]
      */
     rcc_periph_clock_enable(RCC_DMA1);
     rcc_periph_clock_enable(RCC_DMA2);
 
     rcc_periph_clock_enable(RCC_TIM5);
     rcc_periph_reset_pulse(RST_TIM5);
-//  timer_disable_counter(TIM5);
 //  timer_set_period(TIM5, 0xffff);
-
-    config_tim5_ch1_dma_1();  // PA0 to TIM5 CC1
-#if 0
-    config_tim5_ch1_dma_2();  // PA0 to TIM5 CC1
-    config_tim5_ch2_dma();
-    config_tim5_ch3_dma();
-    config_tim5_ch4_dma();
-#endif
-    if (0)
-        config_tim5_cascade_to_tim3();
-    timer_enable_irq(TIM5, TIM_DIER_TDE);
-//  timer_enable_counter(TIM5);
 
     timer_clear_flag(TIM5, TIM_SR(TIM5) & TIM_DIER(TIM5));
     nvic_set_priority(NVIC_TIM5_IRQ, 0x20);
     nvic_enable_irq(NVIC_TIM5_IRQ);
 
-#if 0
-    timer_generate_event(TIM5, TIM_EGR_TG); // Generate fake Trigger event
-    timer_generate_event(TIM5, TIM_EGR_UG); // Generate fake Update event
-#endif
     rcc_periph_clock_enable(RCC_TIM2);
     rcc_periph_reset_pulse(RST_TIM2);
-    timer_disable_counter(TIM2);
-    timer_set_period(TIM2, 0x0001);
+//  timer_set_period(TIM2, 0x0001);
+
     config_tim2_ch1_dma();  // PA0 to TIM2_TRIG (CH1)
-    config_tim2_ch2_dma();
-    config_tim2_ch3_dma();
-//  config_tim2_up_dma();
-//  config_tim2_update_dma();
+    config_tim5_ch1_dma();  // PA0 to TIM5 CC1
 
-//  timer_enable_irq(TIM2, TIM_DIER_TDE | TIM_DIER_UDE);
     timer_enable_irq(TIM2, TIM_DIER_TDE);
+    timer_enable_irq(TIM5, TIM_DIER_TDE);
+
+//  timer_enable_counter(TIM5);
 //  timer_enable_counter(TIM2);
-
-    /*
-     * DMA/interrupt enable register (TIMx_DIER)
-     *     UDE: Update DMA request enable
-     *     CC1DE: Capture/Compare 1 DMA request enable
-     *     CC2DE: Capture/Compare 2 DMA request enable
-     *     CC3DE: Capture/Compare 3 DMA request enable
-     *     CC4DE: Capture/Compare 4 DMA request enable
-     *     COMDE: COM DMA request enable
-     *     TDE: trigger DMA request enable
-     */
-    rcc_periph_clock_enable(RCC_TIM3);
-    rcc_periph_reset_pulse(RST_TIM3);
-    timer_set_period(TIM3, 0xffff);
-    config_tim3_ch1_dma();
-    config_tim3_ch3_dma();
-    config_tim3_ch4_dma();
-#if 0
-    timer_disable_counter(TIM3);
-    timer_enable_counter(TIM3);
-#endif
-
-    t5c1_buffer[0] = TIM_EGR_CC1G | TIM_EGR_CC2G | TIM_EGR_CC3G;  // TIM2 C1 C2 C3
-    t2c1_buffer[0] = TIM_EGR_CC2G | TIM_EGR_CC3G | TIM_EGR_CC4G;  // TIM5 C2 C3 C4
-    t5c2_buffer[0] = TIM_EGR_CC1G | TIM_EGR_CC3G | TIM_EGR_CC4G;  // TIM3 C1 C3 C4
-
-/*
-    t5c3_buffer[0] = FLASH_WE_PIN << 16;  // Set WE low
-    t5c3_buffer[1] = FLASH_WE_PIN;        // Set WE high
-*/
-
-    /*
-     * Output enable:
-     *   CRL [0x00] = 0x11111111
-     *   CRH [0x04] = 0x11111111
-     * Output disable:
-     *   CRL [0x00] = 0x44444444 (0x8888888 is Alternate disable with PU/PD)
-     *   CRH [0x04] = 0x44444444
-     */
-    t5c4_buffer[0] = 0x44444440; // D0-D7   Output
-    t5c4_buffer[1] = 0x44444404; // D0-D7   Input
-    t3c1_buffer[0] = 0x44444044; // D8-D15  Output
-    t3c1_buffer[1] = 0x44440444; // D8-D15  Input
-    t3c3_buffer[0] = 0x44404444; // D16-D23 Output
-    t3c3_buffer[1] = 0x44044444; // D16-D23 Input
-    t3c4_buffer[0] = 0x40444444; // D24-D31 Output
-    t3c4_buffer[1] = 0x04444444; // D24-D31 Input
-#ifdef DO_WE_TEST
-    t5c4_buffer[0] = 0x11111111; // D0-D7   Output
-    t3c1_buffer[0] = 0x11111111; // D8-D15  Output
-    t3c3_buffer[0] = 0x11111111; // D16-D23 Output
-    t3c4_buffer[0] = 0x11111111; // D24-D31 Output
-
-//  t3c1_buffer[1] = 0x11111111; // D8-D15 Input
-#endif
-
-    /* Set up some default D0-D31 values for test purposes */
-    int pos;
-    for (pos = 0; pos < ARRAY_SIZE(t2c2_buffer); pos++)
-        t2c2_buffer[pos] = pos ^ 0xff00;
-    for (pos = 0; pos < ARRAY_SIZE(t2c3_buffer); pos++)
-        t2c3_buffer[pos] = pos ^ 0xffff;
 
     ticks_per_15_nsec  = timer_nsec_to_tick(15);
     ticks_per_20_nsec  = timer_nsec_to_tick(20);

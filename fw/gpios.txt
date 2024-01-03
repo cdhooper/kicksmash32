@@ -1,4 +1,4 @@
-Kicksmash32 Rev 2
+Kicksmash32 Rev 3
 
 NC73  X
 VSS   GND
@@ -30,7 +30,7 @@ PB0   FLASH_RB2
 PB1   FLASH_RP
 PB2   GND (BOOT1)
 PB3   STM_SWO_TDO
-PB4   AMIGA_KBRST  Generate EXTI
+PB4   AMIGA_KBRST  Generate EXTI   Default is for NJRST.
 PB5                <Free>
 PB6   CONS_TX
 PB7   CONS_RX

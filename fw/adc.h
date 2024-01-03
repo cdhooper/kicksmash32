@@ -15,10 +15,5 @@
 void adc_init(void);
 void adc_show_sensors(void);
 void adc_poll(int verbose, int force);
-void dac_setvalue(uint32_t value);
-
-extern int v5_overcurrent; // true = V5 drawing too much current
-extern int v5_stable;      // true = V5 is within 5 percent of expected
-extern int v10_stable;     // true = V10 is within 5 percent of expected
 
 #endif /* _ADC_H */
