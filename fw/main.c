@@ -27,6 +27,7 @@
 #include "timer.h"
 #include "utils.h"
 #include "kbrst.h"
+#include "pin_tests.h"
 #include "version.h"
 
 static void

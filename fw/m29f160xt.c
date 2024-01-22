@@ -47,14 +47,23 @@
 
 #define GPIO_MODE_OUTPUT_PP GPIO_MODE_OUTPUT_10_MHZ
 
+#define CAPTURE_SW      0
+#define CAPTURE_ADDR    1
+#define CAPTURE_DATA_LO 2
+#define CAPTURE_DATA_HI 3
+
+static void config_tim2_ch1_dma(uint mode);
+static void config_tim5_ch1_dma(bool verbose);
+
 /*
  * EE_MODE_32      = 32-bit flash
  * EE_MODE_16_LOW  = 16-bit flash low device (bits 0-15)
  * EE_MODE_16_HIGH = 16-bit flash high device (bits 16-31)
  */
-uint            ee_mode = EE_MODE_16_LOW;
+uint            ee_mode = EE_MODE_32;
 uint            ee_default_mode = EE_MODE_32;
 static uint32_t ee_cmd_mask;
+static uint32_t ee_addr_shift;
 static uint32_t ee_status = EE_STATUS_NORMAL;  // Status from program/erase
 
 static uint32_t ticks_per_15_nsec;
@@ -62,8 +71,7 @@ static uint32_t ticks_per_20_nsec;
 static uint32_t ticks_per_30_nsec;
 static uint64_t ee_last_access = 0;
 static bool     ee_enabled = false;
-uint8_t         board_is_standalone = 0;
-uint8_t         kbrst_in_amiga = 0;
+static uint8_t  capture_mode = CAPTURE_ADDR;
 
 /*
  * address_output
@@ -92,8 +100,8 @@ address_input(void)
 }
 
 /*
- * address_override
- * ----------------
+ * ee_address_override
+ * -------------------
  * Override the Flash A18 and A19 address
  *
  * override = 0  Temporarily disable override
@@ -107,8 +115,8 @@ address_input(void)
  *   3    A19 driven value
  *   4-7  Unused
  */
-static void
-address_override(uint8_t bits, uint override)
+void
+ee_address_override(uint8_t bits, uint override)
 {
     static uint8_t old  = 0;
     static uint8_t last = 0;
@@ -136,12 +144,14 @@ address_override(uint8_t bits, uint override)
         GPIO_BSRR(FLASH_A18_PORT) = FLASH_A18_PIN << shift;
         gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN,
                      GPIO_SETMODE_OUTPUT_PPULL_2);
-        printf(" A18=%d", !shift);
+        if (override == 1)
+            printf(" A18=%d", !shift);
     } else {
         /* Disable: Weak pull down A18 */
         GPIO_BSRR(FLASH_A18_PORT) = FLASH_A18_PIN << 16;
         gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-        printf(" !A18");
+        if (override == 1)
+            printf(" !A18");
     }
     if (val & BIT(2)) {
         /* Drive A19 */
@@ -149,14 +159,17 @@ address_override(uint8_t bits, uint override)
         GPIO_BSRR(FLASH_A19_PORT) = FLASH_A19_PIN << shift;
         gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN,
                      GPIO_SETMODE_OUTPUT_PPULL_2);
-        printf(" A18=%d", !shift);
+        if (override == 1)
+            printf(" A19=%d", !shift);
     } else {
         /* Disable: Weak pull down A19 */
         GPIO_BSRR(FLASH_A19_PORT) = FLASH_A19_PIN << 16;
         gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-        printf(" !A19");
+        if (override == 1)
+            printf(" !A19");
     }
-    printf("\n");
+    if (override == 1)
+        printf("\n");
 }
 
 /*
@@ -171,7 +184,7 @@ address_output_enable(void)
     GPIO_CRL(SOCKET_A0_PORT)  = 0x11111111;  // Output Push-Pull
     GPIO_CRH(SOCKET_A0_PORT)  = 0x00011111;
     GPIO_CRL(SOCKET_A13_PORT) = 0x11111118;  // PA0=SOCKET_OE = Input
-    address_override(0, 0);  // Suspend A19-A18 override
+    ee_address_override(0, 0);  // Suspend A19-A18 override
 }
 
 /*
@@ -186,7 +199,7 @@ address_output_disable(void)
     GPIO_CRL(SOCKET_A0_PORT)   = 0x44444444;  // Input
     GPIO_CRH(SOCKET_A0_PORT)   = 0x44444444;
     GPIO_CRL(SOCKET_A13_PORT)  = 0x44444448;  // PA0=SOCKET_OE = Input PU
-    address_override(0, 2);  // Restore previous A19-A18 override
+    ee_address_override(0, 2);  // Restore previous A19-A18 override
 }
 
 /*
@@ -194,7 +207,7 @@ address_output_disable(void)
  * -----------
  * Writes the specified value to the data output pins.
  */
-static void
+void
 data_output(uint32_t data)
 {
     GPIO_ODR(FLASH_D0_PORT)  = data;                      // Set D0-D15
@@ -206,7 +219,7 @@ data_output(uint32_t data)
  * ----------
  * Returns the current value present on the data pins.
  */
-static uint32_t
+uint32_t
 data_input(void)
 {
     /*
@@ -237,7 +250,7 @@ data_output_enable(void)
  * -------------------
  * Reverts the data pins back to input (don't drive).
  */
-static void
+void
 data_output_disable(void)
 {
     /* D0-D15 = PD0-PD15, D16-D31=PE0-PE15 */
@@ -285,10 +298,9 @@ we_output(uint value)
 static void
 we_enable(uint value)
 {
-    if (value)
-        gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
-    else
-        gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN,
+                 (value != 0) ? GPIO_SETMODE_OUTPUT_PPULL_50 :
+                                GPIO_SETMODE_INPUT_PULLUPDOWN);
 }
 
 /*
@@ -296,7 +308,7 @@ we_enable(uint value)
  * ---------
  * Drives the OE# (flash output enable) pin with the specified value.
  */
-static void
+void
 oe_output(uint value)
 {
 #ifdef DEBUG_SIGNALS
@@ -321,16 +333,14 @@ oe_input(void)
  * ----------------
  * Enable drive of the FLASH_OE pin, which is flash output enable OE#.
  */
-static void
+void
 oe_output_enable(void)
 {
-#if 0
-    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
-#else
     /* FLASH_OE = PB13 */
     GPIO_CRH(FLASH_OE_PORT) = (GPIO_CRH(FLASH_OE_PORT) & 0xff0fffff) |
                               0x00100000;  // Output
-#endif
+
+//  gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
 }
 
 /*
@@ -338,225 +348,29 @@ oe_output_enable(void)
  * -----------------
  * Disable drive of the FLASH_OE pin, which is flash output enable OE#.
  */
-static void
+void
 oe_output_disable(void)
 {
-#if 1
-    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-#else
     /* FLASH_OE = PB13 */
     GPIO_CRH(FLASH_OE_PORT) = (GPIO_CRH(FLASH_OE_PORT) & 0xff0fffff) |
                               0x00400000;  // Input
-#endif
+
+//  gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
 }
 
 static void
 update_ee_cmd_mask(void)
 {
-    if (ee_mode == EE_MODE_32)
+    if (ee_mode == EE_MODE_32) {
         ee_cmd_mask = 0xffffffff;  // 32-bit
-    else if (ee_mode == EE_MODE_16_LOW)
+        ee_addr_shift = 2;
+    } else if (ee_mode == EE_MODE_16_LOW) {
         ee_cmd_mask = 0x0000ffff;  // 16-bit low
-    else
+        ee_addr_shift = 1;
+    } else {
         ee_cmd_mask = 0xffff0000;  // 16-bit high
-}
-
-/*
- * check_board_standalone
- * ----------------------
- * Checks whether this board is installed in an Amiga and sets
- * board_is_standalone to FALSE if it is.
- */
-void
-check_board_standalone(void)
-{
-    uint     pass;
-    uint64_t timeout;
-    uint16_t got;
-    uint16_t got2;
-    uint16_t saw;
-    uint16_t conn;
-
-    /*
-     * Test if KBRST is connected. If connected, pin should be high
-     * regardless of STM32 pull-down.
-     */
-    gpio_setv(KBRST_PORT, KBRST_PIN, 0);
-    gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-    timer_delay_msec(1);
-    got = gpio_get(KBRST_PORT, KBRST_PIN);
-    if (got != 0) {
-        /*
-         * Pin is high even though it's being pulled down -- there must
-         * be an external pull-up.
-         */
-        kbrst_in_amiga = true;
-    } else {
-        /* Pin is low -- try pulling up */
-        gpio_setv(KBRST_PORT, KBRST_PIN, 1);
-        timer_delay_msec(1);
-        got = gpio_get(KBRST_PORT, KBRST_PIN);
-        if (got == 0) {
-            printf("Amiga in reset\n");
-            kbrst_in_amiga = true;
-        } else {
-            kbrst_in_amiga = false;
-        }
-        gpio_setv(KBRST_PORT, KBRST_PIN, 0);
+        ee_addr_shift = 1;
     }
-
-    /*
-     * Test if A18 and A19 are connected.
-     *
-     * In the first test (0), set both pins high and wait for up to
-     * 1 ms for the pins to go high. If a pin was not seen high or
-     * last read was not high, then the pin is connected.
-     *
-     * In the second pass (1), set both pins low and wait for up to
-     * 1 ms for the pins to go low. If a pin was not seen low or
-     * last read was not low, then the pin is connected.
-     *
-     * In the final step, wait up to 1ms for pins to change state,
-     * which would also indicate they are connected.
-     */
-    gpio_setmode(SOCKET_A16_PORT, SOCKET_A18_PIN | SOCKET_A19_PIN,
-                 GPIO_SETMODE_INPUT_PULLUPDOWN);
-    conn = 0;
-
-    for (pass = 0; pass <= 1; pass++) {
-        gpio_setv(SOCKET_A16_PORT, SOCKET_A18_PIN | SOCKET_A19_PIN, !pass);
-        saw = 0;
-        timeout = timer_tick_plus_msec(10);
-        while (timer_tick_has_elapsed(timeout) == false) {
-            got = gpio_get(SOCKET_A16_PORT,
-                           SOCKET_A18_PIN | SOCKET_A19_PIN);
-// printf("%u got=%04x\n", pass, got);
-            if (pass == 1)
-                got = ~got;
-            saw |= got;
-// printf("%u saw=%04x\n", pass, saw);
-            if ((saw & (SOCKET_A18_PIN | SOCKET_A19_PIN)) ==
-                       (SOCKET_A18_PIN | SOCKET_A19_PIN)) {
-// printf("%u done early got=%04x saw=%04x\n", pass, got, saw);
-                break;
-            }
-        }
-        conn |= ~saw | ~got;
-// printf("%u conn %04x\n", pass, conn);
-    }
-    timeout = timer_tick_plus_msec(1);
-    while (timer_tick_has_elapsed(timeout) == false) {
-        if ((conn & (SOCKET_A18_PIN | SOCKET_A19_PIN)) ==
-                    (SOCKET_A18_PIN | SOCKET_A19_PIN)) {
-            break; // Detected both connected
-        }
-    }
-    if ((conn & (SOCKET_A18_PIN | SOCKET_A19_PIN)) ==
-                (SOCKET_A18_PIN | SOCKET_A19_PIN)) {
-        printf("A18 and A19 connected\n");
-    } else if (conn & SOCKET_A18_PIN) {
-        printf("A18 connected\n");
-    } else if (conn & SOCKET_A19_PIN) {
-        printf("A19 connected\n");
-    }
-    printf("Connected: ");
-    if (!(conn & SOCKET_A18_PIN))
-        putchar('!');
-    printf("A18 ");
-    if (!(conn & SOCKET_A19_PIN))
-        putchar('!');
-    printf("A19 ");
-    if (!kbrst_in_amiga)
-        putchar('!');
-    printf("KBRST\n");
-
-    /* Detect which flash parts are installed (default bus mode) */
-    // Not sure I can do this with GPIOs. Might need to wait until
-    // prom id can be done. Will try using FLASH_OE
-    gpio_setmode(FLASH_D0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
-gpio_setv(FLASH_D0_PORT, 0xffff, pass);
-    saw = 0;
-    for (pass = 0; pass <= 1; pass++) {
-        gpio_setv(FLASH_D0_PORT, 0xffff, pass);
-        gpio_setv(FLASH_D16_PORT, 0xffff, pass);
-        timer_delay_msec(1);
-        oe_output(0);
-        oe_output_enable();
-        got  = gpio_get(FLASH_D0_PORT, 0xffff);
-        got2 = gpio_get(FLASH_D16_PORT, 0xffff);
-        if (pass == 1) {
-            got = ~got;
-            got2 = ~got2;
-        }
-        oe_output_disable();
-        if (got != 0)
-            saw |= BIT(0);
-        if (got2 != 0)
-            saw |= BIT(1);
-    }
-    printf("Present: ");
-    if (saw & BIT(0)) {
-        if (saw & BIT(1)) {
-            printf("Flash 0 & 1 (32-bit mode)\n");
-            ee_default_mode = EE_MODE_32;
-        } else {
-            printf("Flash 0 (16-bit mode)\n");
-            ee_default_mode = EE_MODE_16_LOW;
-        }
-    } else if (saw & BIT(1)) {
-        printf("Flash 1 (16-bit mode) NOT NORMAL\n");
-        ee_default_mode = EE_MODE_16_HIGH;
-    } else {
-        ee_default_mode = EE_MODE_32;
-        printf("NO FLASH DETECTED\n");
-    }
-
-    /*
-     * Detect Amiga bus mode?
-     * This is probably not be possible now that there are bus
-     * tranceivers (unidirectional) in between the STM32 data
-     * pins and the host.
-     */
-
-    /*
-     * Stand-alone test:
-     *  Pull all SOCKET_A0-A15 high, wait 1 ms
-     *  If all SOCKET_A0-A15 signals are not high, we are in a system
-     *  Pull all SOCKET_A0-A15 low, wait 1 ms
-     *  If all SOCKET_A0-A15 signals are not low, we are in a system
-     */
-    gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
-
-    /* Set pullup and test */
-    gpio_setv(SOCKET_A0_PORT, 0xffff, 1);
-    gpio_setv(SOCKET_A13_PORT, 0x000e, 1);  // PA1-PA3 = A13-A15
-    timer_delay_msec(1);
-    got = gpio_get(SOCKET_A0_PORT, 0xffff);
-    if (got != 0xffff) {
-        printf("A0-A15 pullup got %04x\n", got);
-        goto in_amiga;
-    }
-
-    /* Set pulldown and test */
-    gpio_setv(SOCKET_A0_PORT, 0xffff, 0);
-    gpio_setv(SOCKET_A13_PORT, 0x000e, 0);  // PA1-PA3 = A13-A15
-    timer_delay_msec(1);
-    got = gpio_get(SOCKET_A0_PORT, 0xffff);
-    if (got != 0x0000) {
-        printf("A0-A15 pulldown got %04x\n", got);
-        goto in_amiga;
-    }
-
-    board_is_standalone = true;
-
-    /* Asseme "in Amiga" mode when in MX29F1615 programmer */
-    printf("DEBUG: skipping standalone\n");
-//  return;  // Leave socket address lines with weak pulldown
-in_amiga:
-    /* Return to floating input */
-    gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT);
-    gpio_setmode(SOCKET_A13_PORT, 0x00fe, GPIO_SETMODE_INPUT);
-    board_is_standalone = false;
 }
 
 /*
@@ -814,7 +628,8 @@ ee_wait_for_done_status(uint32_t timeout_usec, int verbose, int mode)
     uint     report_time = 0;
     uint64_t start;
     uint64_t now;
-    uint32_t status = 0;
+    uint32_t status;
+    uint32_t cstatus;
     uint32_t lstatus = 0;
     uint64_t usecs = 0;
     int      same_count = 0;
@@ -826,11 +641,25 @@ ee_wait_for_done_status(uint32_t timeout_usec, int verbose, int mode)
         usecs = timer_tick_to_usec(now - start);
         ee_read_word(0x000000000, &status);
         status &= ee_cmd_mask;
+
+        cstatus = status;
+        /* Filter out checking of status which is already done */
+        if (((cstatus ^ lstatus) & 0x0000ffff) == 0)
+            cstatus &= ~0x0000ffff;
+        if (((cstatus ^ lstatus) & 0xffff0000) == 0)
+            cstatus &= ~0xffff0000;
+
         if (status == lstatus) {
             if (same_count++ >= 1) {
                 /* Same for 2 tries */
-                if (verbose)
+                if (verbose) {
+                    report_time = usecs / 1000000;
+                    printf("\r%08lx %c%c %u sec", status,
+                           ((cstatus & 0xffff0000) == 0) ? '.' : '?',
+                           ((cstatus & 0x0000ffff) == 0) ? '.' : '?',
+                           report_time);
                     printf("    Done\n");
+                }
                 ee_status = EE_STATUS_NORMAL;
                 return (0);
             }
@@ -841,24 +670,30 @@ ee_wait_for_done_status(uint32_t timeout_usec, int verbose, int mode)
             lstatus = status;
         }
 
-        if (status & (BIT(5) | BIT(5 + 16)))  // Program / erase failure
+        if (cstatus & (BIT(5) | BIT(5 + 16)))  // Program / erase failure
             if (see_fail_count++ > 5)
                 break;
 
         if (verbose) {
+            /* Update once a second */
             if (report_time < usecs / 1000000) {
                 report_time = usecs / 1000000;
-                printf("\r%08lx %u", status, report_time);
+                printf("\r%08lx %c%c %u sec", status,
+                       ((cstatus & 0xffff0000) == 0) ? '.' : '?',
+                       ((cstatus & 0x0000ffff) == 0) ? '.' : '?',
+                       report_time);
             }
         }
     }
     if (verbose) {
         report_time = usecs / 1000000;
-        printf("\r%08lx %u.%03u sec", status, report_time,
-               (uint) ((usecs - report_time * 1000000) / 1000));
+        printf("\r%08lx %c%c %u.%03u sec", status,
+               ((cstatus & 0xffff0000) == 0) ? '.' : '?',
+               ((cstatus & 0x0000ffff) == 0) ? '.' : '?',
+               report_time, (uint) ((usecs - report_time * 1000000) / 1000));
     }
 
-    if (status & (BIT(5) | BIT(5 + 16))) {
+    if (cstatus & (BIT(5) | BIT(5 + 16))) {
         /* Program / erase failure */
         ee_status = (mode == EE_MODE_ERASE) ? EE_STATUS_ERASE_FAILURE :
                                               EE_STATUS_PROG_FAILURE;
@@ -932,11 +767,12 @@ try_again:
         if (rc != 0) {
             if (try_count++ < 2) {
 #ifdef DEBUG_SIGNALS
-                printf("Program failed -- trying again at 0x%lx\n", addr);
+                printf("Program failed -- trying again at 0x%lx\n",
+                       addr << ee_addr_shift);
 #endif
                 goto try_again;
             }
-            printf("  Program failed at 0x%lx\n", addr << 1);
+            printf("  Program failed at 0x%lx\n", addr << ee_addr_shift);
             return (3);
         }
 
@@ -948,11 +784,13 @@ try_again:
             if ((try_count++ < 2) && ((xvalue & ~rvalue) == 0)) {
                 /* Can try again -- bits are not 0 which need to be 1 */
 #ifdef DEBUG_SIGNALS
-                printf("Program mismatch -- trying again at 0x%lx\n", addr);
+                printf("Program mismatch -- trying again at 0x%lx\n",
+    1                  addr << ee_addr_shift);
 #endif
                 goto try_again;
             }
-            printf("  Program mismatch at 0x%lx\n", addr << 1);
+            printf("  Program mismatch at 0x%lx\n", addr << ee_addr_shift);
+            printf("      wrote=%08lx read=%08lx\n", value, rvalue);
             return (4);
         }
 
@@ -1025,21 +863,48 @@ ee_status_read(char *status, uint status_len)
 }
 
 typedef struct {
-    uint32_t cb_chipid;
-    uint8_t  cb_bbnum;   // Boot block number (0=Bottom boot)
-    uint8_t  cb_bsize;   // Common block size in Kwords (typical 32K)
-    uint8_t  cb_ssize;   // Boot block sector size in Kwords (typical 4K)
-    uint8_t  cb_map;     // Boot block sector erase map
+    uint16_t cv_id;       // Vendor code
+    char     cv_vend[12]; // Vendor string
+} chip_vendors_t;
+
+static const chip_vendors_t chip_vendors[] = {
+    { 0x0001, "AMD" },      // AMD, Alliance, ST, Micron, others
+    { 0x0004, "Fujitsu" },
+    { 0x00c2, "Macronix" }, // MXIC
+    { 0x0000, "Unknown" },  // Must remain last
+};
+
+typedef struct {
+    uint32_t ci_id;       // Vendor code
+    char     ci_dev[16];  // ID string for display
+} chip_ids_t;
+static const chip_ids_t chip_ids[] = {
+    { 0x000122D2, "M29F160FT" },   // AMD+others 2MB top boot
+    { 0x000122D8, "M29F160FB" },   // AMD+others 2MB bottom boot
+    { 0x000122D6, "M29F800FT" },   // AMD+others 1MB top boot
+    { 0x00012258, "M29F800FB" },   // AMD+others 1MB bottom boot
+    { 0x00012223, "M29F400FT" },   // AMD+others 512K top boot
+    { 0x000122ab, "M29F400FB" },   // AMD+others 512K bottom boot
+    { 0x000422d2, "M29F160TE" },   // Fujitsu 2MB top boot
+    { 0x00c222D6, "MX29F800CT" },  // Macronix 2MB top boot
+    { 0x00c22258, "MX29F800CB" },  // Macronix 2MB bottom boot
+    { 0x00000000, "Unknown" },     // Must remain last
+};
+
+typedef struct {
+    uint16_t cb_chipid;   // Chip id code
+    uint8_t  cb_bbnum;    // Boot block number (0=Bottom boot)
+    uint8_t  cb_bsize;    // Common block size in Kwords (typical 32K)
+    uint8_t  cb_ssize;    // Boot block sector size in Kwords (typical 4K)
+    uint8_t  cb_map;      // Boot block sector erase map
 } chip_blocks_t;
 
 static const chip_blocks_t chip_blocks[] = {
-    { 0x000122D2, 31, 32, 4, 0x71 },  // M29F160FT  01110001 16K 4K 4K 8K
-    { 0x000122D8,  0, 32, 4, 0x1d },  // M29F160FB  00011101 8K 4K 4K 16K
-    { 0x000122D6, 15, 32, 4, 0x71 },  // M29F800FT  01110001 16K 4K 4K 8K
-    { 0x00012258,  0, 32, 4, 0x1d },  // M29F800FB  00011101 8K 4K 4K 16K
-    { 0x00c222D6, 15, 32, 4, 0x71 },  // MX29F800CT 01110001 16K 4K 4K 8K
-    { 0x00c22258,  0, 32, 4, 0x1d },  // MX29F800CB 00011101 8K 4K 4K 16K
-    { 0x00000000,  0, 32, 4, 0x1d },  // No match: default to bottom boot 2MB
+    { 0x22D2, 31, 32, 4, 0x71 },  // 01110001 16K 4K 4K 8K (top)
+    { 0x22D8,  0, 32, 4, 0x1d },  // 00011101 8K 4K 4K 16K (bottom)
+    { 0x22D6, 15, 32, 4, 0x71 },  // 01110001 16K 4K 4K 8K (top)
+    { 0x2258,  0, 32, 4, 0x1d },  // 00011101 8K 4K 4K 16K (bottom)
+    { 0x0000,  0, 32, 4, 0x1d },  // Default to bottom boot
 };
 
 /*
@@ -1052,9 +917,12 @@ static const chip_blocks_t chip_blocks[] = {
 static const chip_blocks_t *
 get_chip_block_info(uint32_t chipid)
 {
+    uint16_t cid = (uint16_t) chipid;
     uint pos;
+
+    /* Search for exact match */
     for (pos = 0; pos < ARRAY_SIZE(chip_blocks) - 1; pos++)
-        if (chip_blocks[pos].cb_chipid == chipid)
+        if (chip_blocks[pos].cb_chipid == cid)
             break;
 
     return (&chip_blocks[pos]);
@@ -1119,7 +987,7 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
     if ((len == 0) || (mode == MX_ERASE_MODE_CHIP))
         len = 1;
 
-    /* Need to figure out if this is a top boot or bottom boot part */
+    /* Figure out if this is a top boot or bottom boot part */
     ee_id(&part1, &part2);
     cb = get_chip_block_info(part1);
 
@@ -1137,7 +1005,7 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
         ee_write_word(0x002aa, 0x00550055);
         ee_write_word(0x00555, 0x00800080);
         ee_write_word(0x00555, 0x00aa00aa);
-        ee_write_word(0x002aa, 0x00559055);
+        ee_write_word(0x002aa, 0x00550055);
 
         if (mode == MX_ERASE_MODE_CHIP) {
             ee_write_word(0x00555, 0x00100010);
@@ -1254,6 +1122,36 @@ ee_id(uint32_t *part1, uint32_t *part2)
             *part1 = (low & 0xffff0000) | (high >> 16);
             break;
     }
+}
+
+const char *
+ee_vendor_string(uint32_t id)
+{
+    uint16_t vid = id >> 16;
+    uint     pos;
+
+    for (pos = 0; pos < ARRAY_SIZE(chip_vendors) - 1; pos++)
+        if (chip_vendors[pos].cv_id == vid)
+            break;
+    return (chip_vendors[pos].cv_vend);
+}
+
+const char *
+ee_id_string(uint32_t id)
+{
+    uint pos;
+
+    for (pos = 0; pos < ARRAY_SIZE(chip_ids) - 1; pos++)
+        if (chip_ids[pos].ci_id == id)
+            break;
+
+    if (pos == ARRAY_SIZE(chip_ids)) {
+        uint16_t cid = id & 0xffff;
+        for (pos = 0; pos < ARRAY_SIZE(chip_ids) - 1; pos++)
+            if ((chip_ids[pos].ci_id & 0xffff) == cid)
+                break;
+    }
+    return (chip_ids[pos].ci_dev);
 }
 
 /*
@@ -1453,32 +1351,34 @@ fail:
 /* Buffers for DMA from/to GPIOs and Timer event generation registers */
 #define ADDR_BUF_COUNT 512
 #define ALIGN  __attribute__((aligned(16)))
+ALIGN volatile uint16_t tim2_buffer[ADDR_BUF_COUNT];
 ALIGN volatile uint16_t addr_buffer_lo[ADDR_BUF_COUNT];
-ALIGN volatile uint8_t  addr_buffer_hi[ADDR_BUF_COUNT];
+ALIGN volatile uint8_t *addr_buffer_hi = (uint8_t *)tim2_buffer;
 uint addr_cons = 0;
 uint8_t reply_buffer[256];
 
 void
-ee_snoop(int flag)
+ee_snoop(uint mode)
 {
     uint     last_oe = 1;
     uint     cons = 0;
     uint     prod = 0;
+    uint     oprod = 0;
     uint     no_data = 0;
-    uint32_t captures[32];
-    uint32_t laddr = 0xffffffff;
+    uint32_t cap_addr[32];
+    uint32_t cap_data[32];
 
-#if 0
-    if (flag) {
-        printf("t5c1 TIM2_EGR %04lx  %04x\n", TIM2_EGR, t5c1_buffer[0]);
-        return;
-    }
-#endif
-    printf("Press any key to exit\n");
+    if (mode != CAPTURE_SW)
+        printf("Press any key to exit\n");
 
     address_output_disable();
-    if (flag) {
-        uint dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
+    if ((mode == CAPTURE_ADDR) ||
+        (mode == CAPTURE_DATA_LO) ||
+        (mode == CAPTURE_DATA_HI)) {
+        uint dma_left;
+        config_tim2_ch1_dma(mode);
+        config_tim5_ch1_dma(false);
+        dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
         prod = ARRAY_SIZE(addr_buffer_lo) - dma_left;
         if (prod > ARRAY_SIZE(addr_buffer_lo))
             prod = 0;
@@ -1493,8 +1393,13 @@ ee_snoop(int flag)
                 prod = 0;
             if (cons != prod) {
                 while (cons != prod) {
-                    uint8_t hi = addr_buffer_hi[cons] >> 4;
-                    printf(" %x%04x", hi, addr_buffer_lo[cons]);
+                    if (mode == CAPTURE_ADDR) {
+                        printf(" %x%04x",
+                               addr_buffer_hi[cons] >> 4, addr_buffer_lo[cons]);
+                    } else {
+                        printf(" %04x[%04x]",
+                               addr_buffer_lo[cons], tim2_buffer[cons]);
+                    }
                     cons++;
                     if (cons >= ARRAY_SIZE(addr_buffer_lo))
                         cons = 0;
@@ -1505,43 +1410,49 @@ ee_snoop(int flag)
         return;
     }
 
+    timer_disable_irq(TIM5, TIM_DIER_CC1IE);
     while (1) {
         if (oe_input() == 0) {
-            /* Only capture on falling edge of OE */
+            /* Capture address on falling edge of OE */
             if (last_oe == 1) {
                 uint32_t addr = address_input();
-                if (addr != laddr) {
-                    uint nprod = prod + 1;
-                    if (nprod >= ARRAY_SIZE(captures))
-                        nprod = 0;
-                    if (nprod != cons) {
-                        /* FIFO has space */
-                        captures[prod] = addr;
-                        prod = nprod;
-                        laddr = addr;
-                        no_data = 0;
-                        continue;
-                    }
+                uint nprod = prod + 1;
+                if (nprod >= ARRAY_SIZE(cap_addr))
+                    nprod = 0;
+                if (nprod != cons) {
+                    /* FIFO has space */
+                    cap_addr[prod] = addr;
+                    oprod = prod;
+                    prod = nprod;
+                    no_data = 0;
+                    continue;
                 }
                 last_oe = 0;
             }
         } else {
-            last_oe = 1;
+            /* Capture data on rising edge of OE */
+            if (last_oe == 0) {
+                cap_data[oprod] = data_input();
+                last_oe = 1;
+            }
         }
-        if (no_data++ < 200)
+        if (no_data++ < 400)
             continue;
         if (cons != prod) {
             while (cons != prod) {
-                printf(" %lx", captures[cons]);
-                if (++cons >= ARRAY_SIZE(captures))
+                printf(" %lx[%08lx]", cap_addr[cons], cap_data[cons]);
+                if (++cons >= ARRAY_SIZE(cap_addr))
                     cons = 0;
             }
             printf("\n");
         }
+        if (no_data++ < 40000)
+            continue;
         if (getchar() > 0)
             break;
         no_data = 0;
     }
+    timer_enable_irq(TIM5, TIM_DIER_CC1IE);
     printf("\n");
 }
 
@@ -1563,7 +1474,7 @@ ee_snoop(int flag)
 #define KS_ROMSEL_SET   0x0f00  // ROM select bits to force
 #define KS_ROMSEL_BITS  0xf000  // ROM select bit values (A19 is high bit)
 
-static const uint16_t ks_magic[] = { 0x0011 };
+static const uint16_t ks_magic[] = { 0x0119, 0x1970 };
 
 #if 0
 static uint8_t
@@ -1726,7 +1637,7 @@ process_addresses(uint prod)
                     magic_pos = 0;  // Do nothing
                     break;
                 default:
-printf("unk %x\n", cmd);
+                    printf("Unknown cmd %x\n", cmd);
                     magic_pos = 0;  // Unknown command
                     break;
             }
@@ -1797,7 +1708,7 @@ printf("c=%04x l=%02x CRC %04x != exp %04x %x %x\n", cmd, cmd_len, addr_buffer_l
                         cons_s += ARRAY_SIZE(addr_buffer_lo);
 printf("RS %04x %04x ", addr_buffer_lo[cons_s], addr_buffer_lo[cons_s + 1]);
                     oe_reply(0, sizeof (status), &status);
-                    address_override(addr_buffer_lo[cons_s] >> 8, 1);
+                    ee_address_override(addr_buffer_lo[cons_s] >> 8, 1);
                     break;
                 }
                 default:
@@ -1864,12 +1775,14 @@ config_dma(uint32_t dma, uint32_t channel, uint to_periph, uint mode,
 }
 
 static void
-config_tim5_ch1_dma(void)
+config_tim5_ch1_dma(bool verbose)
 {
     /* Capture address when OE goes low */
     memset((void *) addr_buffer_lo, 0, sizeof (addr_buffer_lo));
-    printf("Addr lo capture %08x (t5c1) 16-bit\n",
-           (uintptr_t) addr_buffer_lo);
+    if (verbose) {
+        printf("Addr lo capture %08x (t5c1) 16-bit\n",
+               (uintptr_t) addr_buffer_lo);
+    }
 
     /* DMA from address GPIOs A0-A15 to memory */
     config_dma(DMA2, DMA_CHANNEL5, 0, 16,
@@ -1912,22 +1825,37 @@ config_tim5_ch1_dma(void)
 }
 
 static void
-config_tim2_ch1_dma(void)
+config_tim2_ch1_dma(uint mode)
 {
-    /* Set up DMA Write to TIM5 Event Generation register */
-    memset((void *) addr_buffer_hi, 0, sizeof (addr_buffer_hi));
-    printf("Addr hi capture %08x (t2c1) 8-bit\n",
-           (uintptr_t) addr_buffer_hi);
+    capture_mode = mode;
 
-    /* Byte-wide DMA from address GPIOs A16-A19 to memory */
-    config_dma(DMA1, DMA_CHANNEL5, 0, 8,
-               &GPIO_IDR(SOCKET_A16_PORT),
-               addr_buffer_hi, ARRAY_SIZE(addr_buffer_hi));
+    /* Set up DMA Write to TIM5 Event Generation register */
+    memset((void *) tim2_buffer, 0, sizeof (tim2_buffer));
+    if (mode == CAPTURE_ADDR) {
+        printf("Addr hi capture %08x (t2c1) 8-bit\n",
+               (uintptr_t) addr_buffer_hi);
+        /* Byte-wide DMA from address GPIOs A16-A19 to memory */
+        config_dma(DMA1, DMA_CHANNEL5, 0, 8,
+                   &GPIO_IDR(SOCKET_A16_PORT),
+                   addr_buffer_hi, ADDR_BUF_COUNT);
+    } else if (mode == CAPTURE_DATA_LO) {
+        /* Word-wide DMA from data GPIOs D0-D15 to memory */
+        config_dma(DMA1, DMA_CHANNEL5, 0, 16,
+                   &GPIO_IDR(FLASH_D0_PORT), tim2_buffer, ADDR_BUF_COUNT);
+    } else if (mode == CAPTURE_DATA_HI) {
+        /* Word-wide DMA from data GPIOs D16-D31 to memory */
+        config_dma(DMA1, DMA_CHANNEL5, 0, 16,
+                   &GPIO_IDR(FLASH_D16_PORT), tim2_buffer, ADDR_BUF_COUNT);
+    }
 
     timer_disable_oc_output(TIM2, TIM_OC1);
     timer_set_ti1_ch1(TIM2);        // Capture input from channel 1 only
 
-    timer_set_oc_polarity_low(TIM2, TIM_OC1);
+    if (mode == CAPTURE_ADDR) {
+        timer_set_oc_polarity_low(TIM2, TIM_OC1);
+    } else {
+        timer_set_oc_polarity_high(TIM2, TIM_OC1);
+    }
 
     /* Select the Input and set the filter */
     TIM2_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
@@ -1953,6 +1881,60 @@ config_tim2_ch1_dma(void)
 
 //  timer_generate_event(TIM2, TIM_EGR_TG); // Generate fake Trigger event
 //  timer_generate_event(TIM2, TIM_EGR_UG); // Generate fake Update event
+}
+
+int
+address_log_replay(uint max)
+{
+    uint dma_left;
+    uint prod;
+    uint cons;
+    uint addr;
+    uint count = 0;
+    uint flags = TIM_SR(TIM5) & TIM_DIER(TIM5);
+    TIM_SR(TIM5) = ~flags;  /* Clear interrupt */
+
+    dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
+    prod = ARRAY_SIZE(addr_buffer_lo) - dma_left;
+    process_addresses(prod);
+
+    if (prod >= ARRAY_SIZE(addr_buffer_lo)) {
+        printf("Invalid producer\n");
+        return (1);
+    }
+    if (max > ARRAY_SIZE(addr_buffer_lo) - 1)
+        max = ARRAY_SIZE(addr_buffer_lo) - 1;
+
+    cons = prod - max;
+    if (cons >= ARRAY_SIZE(addr_buffer_lo))
+        cons += ARRAY_SIZE(addr_buffer_lo);  // Unsigned negative wrap
+
+    printf("Ent ROMAddr AmigaAddr");
+    if (capture_mode == CAPTURE_DATA_LO)
+        printf(" DataLo");
+    else if (capture_mode == CAPTURE_DATA_HI)
+        printf(" DataHi");
+    printf("\n");
+
+    while (cons != prod) {
+        addr = addr_buffer_lo[cons];
+        if (capture_mode == CAPTURE_ADDR)
+            addr |= ((addr_buffer_hi[cons] & 0xf0) << 16);
+        printf("%3u %05x   %06x", cons,
+               addr, (ee_mode == EE_MODE_32) ? (addr << 2) : (addr << 1));
+        if ((capture_mode == CAPTURE_DATA_LO) ||
+            (capture_mode == CAPTURE_DATA_HI))
+            printf("    %04x", tim2_buffer[cons]);
+        printf("\n");
+        cons++;
+        if (cons >= ARRAY_SIZE(addr_buffer_lo))
+            cons = 0;
+        if (count++ > max) {
+            printf("bug: count=%u cons=%x prod=%x\n", count, cons, prod);
+            break;
+        }
+    }
+    return (0);
 }
 
 void
@@ -2054,8 +2036,8 @@ ee_init(void)
     rcc_periph_reset_pulse(RST_TIM2);
 //  timer_set_period(TIM2, 0x0001);
 
-    config_tim2_ch1_dma();  // PA0 to TIM2_TRIG (CH1)
-    config_tim5_ch1_dma();  // PA0 to TIM5 CC1
+    config_tim2_ch1_dma(CAPTURE_ADDR);  // PA0 to TIM2_TRIG (CH1)
+    config_tim5_ch1_dma(true);          // PA0 to TIM5 CC1
 
     timer_enable_irq(TIM2, TIM_DIER_TDE);
     timer_enable_irq(TIM5, TIM_DIER_TDE);
@@ -2066,6 +2048,9 @@ ee_init(void)
     ticks_per_15_nsec  = timer_nsec_to_tick(15);
     ticks_per_20_nsec  = timer_nsec_to_tick(20);
     ticks_per_30_nsec  = timer_nsec_to_tick(30);
+
+    /* These values for bank override should come from NVRAM */
+    ee_address_override(0x5, 0x1);
 
     update_ee_cmd_mask();
 }

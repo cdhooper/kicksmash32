@@ -17,9 +17,11 @@
 #include <stdbool.h>
 #include "timer.h"
 #include "uart.h"
+#include "printf.h"
+#else
+#include <stdio.h>
 #endif
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>

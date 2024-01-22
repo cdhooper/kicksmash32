@@ -16,7 +16,7 @@
 #define ADDR16(x)   ((uint16_t *) ((uintptr_t)(x)))
 #define ADDR32(x)   ((uint32_t *) ((uintptr_t)(x)))
 
-#define BIT(x)      (1 << (x))
+#define BIT(x)      (1U << (x))
 
 #define ARRAY_SIZE(x) (int)((sizeof (x) / sizeof ((x)[0])))
 

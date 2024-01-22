@@ -62,7 +62,8 @@ static const cmd_t cmd_list[] = {
                         "[bwlqohRS] <addr> [<len>]", "display memory" },
     { cmd_echo,    "echo",    0, NULL, " <text>", "display text" },
 #ifdef EMBEDDED_CMD
-    { cmd_gpio,    "gpio",    1, cmd_gpio_help, " show", "show GPIOs" },
+    { cmd_gpio,    "gpio",    1, cmd_gpio_help,
+                        " [p<a-f><0-15>[=<x>]", "show or set GPIOs" },
 #endif
     { cmd_ignore,  "ignore",  0, NULL, " <cmd>", "ignore result of command" },
     { cmd_help,    "help",    0, NULL, " [<cmd>]", "display help" },

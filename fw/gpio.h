@@ -24,31 +24,6 @@
 #define USB_CC2_PORT        GPIOA
 #define USB_CC2_PIN             GPIO10
 
-#if BOARD_REV == 1
-#define KBRST_PORT          GPIOB
-#define KBRST_PIN               GPIO0
-#define FLASH_RP_PORT       GPIOB
-#define FLASH_RP_PIN            GPIO1       // RP# Reset / Program
-#define FLASH_RB1_PORT      GPIOB
-#define FLASH_RB1_PIN           GPIO10      // RB# Ready / Busy
-#define FLASH_RB2_PORT      GPIOB
-#define FLASH_RB2_PIN           GPIO11      // RB# Ready / Busy
-#define FLASH_WE_PORT       GPIOB
-#define FLASH_WE_PIN            GPIO12      // WE# Write Enable
-#define FLASH_OE_PORT       GPIOB
-#define FLASH_OE_PIN            GPIO13      // OE# Output Enable (Flash)
-#define FLASH_CE_PORT       GPIOB
-#define FLASH_CE_PIN            GPIO14      // CE# Chip Enable
-#define SOCKET_OE_PORT      GPIOA
-#define SOCKET_OE_PIN           GPIO0       // OE# Output Enable (Amiga)
-
-#define FLASH_A18_PORT      GPIOC
-#define FLASH_A18_PIN           GPIO4
-#define FLASH_A19_PORT      GPIOC
-#define FLASH_A19_PIN           GPIO5
-#define LED_POWER_PORT      GPIOC
-#define LED_POWER_PIN           GPIO10
-#else
 #define SOCKET_OE_PORT      GPIOA
 #define SOCKET_OE_PIN           GPIO0       // OE# Output Enable (Amiga)
 
@@ -78,7 +53,6 @@
 #define FLASH_WE_PIN            GPIO14      // WE# Write Enable
 #define FLASH_RB1_PORT      GPIOB
 #define FLASH_RB1_PIN           GPIO15      // RB# Ready / Busy
-#endif
 
 #define FLASH_D0_PORT       GPIOD   // PD0-PD15
 #define FLASH_D16_PORT      GPIOE   // PE0-PE15
@@ -114,6 +88,7 @@ void gpio_setmode(uint32_t GPIOx, uint16_t GPIO_Pins, uint value);
 void gpio_init(void);
 void gpio_show(int whichport, int whichpin);
 void gpio_assign(int whichport, int whichpin, const char *assign);
+char *gpio_to_str(uint32_t port, uint16_t pin);
 
 #endif /* _GPIO_H */
 

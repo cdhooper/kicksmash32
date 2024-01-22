@@ -308,3 +308,11 @@ identify_cpu(void)
 #endif
 #endif
 }
+
+/* Deal with annoying newlib warnings */
+void _close(void);
+void _close(void) { }
+void _close_r(void) __attribute__((alias("_close")));
+void _lseek(void)   __attribute__((alias("_close")));
+void _read(void)    __attribute__((alias("_close")));
+void _write(void)   __attribute__((alias("_close")));

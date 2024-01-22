@@ -9,6 +9,7 @@
  * Amiga kbrst prototypes.
  */
 
-extern uint8_t kbrst_last;
+extern uint8_t amiga_not_in_reset;
 
 void kbrst_poll(void);
+void kbrst_amiga(uint hold);

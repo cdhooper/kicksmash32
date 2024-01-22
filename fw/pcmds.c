@@ -27,6 +27,8 @@
 #include "utils.h"
 #include "usb.h"
 #include "irq.h"
+#include "kbrst.h"
+#include "m29f160xt.h"
 
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/stm32/gpio.h>
@@ -52,10 +54,12 @@ const char cmd_gpio_help[] =
 "gpio [name=value/mode/?] - display or set GPIOs";
 
 const char cmd_prom_help[] =
+"prom bank <bits> <mode> - override A18 & A19 (\"5 1\" = bank 0)\n"
 "prom cmd <cmd> [<addr>] - send a 16-bit command to the EEPROM chip\n"
 "prom id                 - report EEPROM chip vendor and id\n"
 "prom disable            - disable and power off EEPROM\n"
 "prom erase chip|<addr>  - erase EEPROM chip or 128K sector; <len> optional\n"
+"prom log [<count>]      - show log of Amiga address accesses\n"
 "prom mode 0|1|2         - set EEPROM access mode (0=32, 1=16lo, 2=16hi)\n"
 "prom read <addr> <len>  - read binary data from EEPROM (to terminal)\n"
 "prom status [clear]     - display or clear EEPROM status\n"
@@ -64,13 +68,16 @@ const char cmd_prom_help[] =
 "prom write <addr> <len> - write binary data to EEPROM (from terminal)";
 
 const char cmd_reset_help[] =
-"reset      - reset CPU\n"
-"reset dfu  - reset into DFU programming mode\n"
-"reset usb  - reset and restart USB interface";
+"reset              - reset CPU\n"
+"reset amiga [hold] - reset Amiga using KBRST (hold leaves it in reset)\n"
+"reset dfu          - reset into DFU programming mode\n"
+"reset usb          - reset and restart USB interface";
 
 const char cmd_snoop_help[] =
-"snoop   - capture and report ROM transactions\n"
-"snoop r - show OE state";
+"snoop        - capture and report ROM transactions\n"
+"snoop addr   - hardware capture A0-A19\n"
+"snoop datalo - hardware capture A0-A15 D0-D15\n"
+"snoop datahi - hardware capture A0-A15 D16-D31";
 
 const char cmd_usb_help[] =
 "usb disable - reset and disable USB\n"
@@ -289,20 +296,27 @@ cmd_prom(int argc, char * const *argv)
         }
         arg = argv[0];
     }
-    if ((strncmp(arg, "erase", 2) == 0) && (strstr(arg, "erase") != NULL)) {
-        if (argc < 2) {
-            printf("error: prom erase requires either chip or "
-                   "<addr> argument\n");
-            return (RC_USER_HELP);
+    if (strcmp("bank", arg) == 0) {
+        uint bits;
+        uint mode;
+        if ((argc < 2) || (argc > 3)) {
+            printf("prom bank <bits> <mode>\n"
+                   "   bit 0   1=Drive A18        mode 0 = Temp disable override\n"
+                   "   bit 1   A18 driven value   mode 1 = Assign new override\n"
+                   "   bit 2   1=Drive A19        mode 2 = Restore override\n"
+                   "   bit 3   A19 driven value\n"
+                   "   bit 4-7 Unused\n");
+            return (RC_FAILURE);
         }
-        if (strcmp(argv[1], "chip") == 0) {
-            op_mode = OP_ERASE_CHIP;
-            argc--;
-            argv++;
-        } else {
-            op_mode = OP_ERASE_SECTOR;
-        }
-    } else if ((*arg == 'c') && (strstr("cmd", arg) != NULL)) {
+        rc = parse_value(argv[1], (uint8_t *) &bits, 2);
+        if (rc != RC_SUCCESS)
+            return (rc);
+        rc = parse_value(argv[2], (uint8_t *) &mode, 4);
+        if (rc != RC_SUCCESS)
+            return (rc);
+        ee_address_override(bits, mode);
+        return (RC_SUCCESS);
+    } else if (strcmp("cmd", arg) == 0) {
         uint16_t cmd;
         if ((argc < 2) || (argc > 3)) {
             printf("error: prom cmd <cmd> [<addr>]\n");
@@ -322,13 +336,33 @@ cmd_prom(int argc, char * const *argv)
 
         prom_cmd(addr, cmd);
         return (RC_SUCCESS);
-    } else if ((*arg == 'd') && (strstr("disable", arg) != NULL)) {
+    } else if (strcmp("disable", arg) == 0) {
         prom_disable();
         return (RC_SUCCESS);
-    } else if ((*arg == 'i') && (strstr("id", arg) != NULL)) {
-        prom_id();
-        return (RC_SUCCESS);
-    } else if ((*arg == 'm') && (strstr("mode", arg) != NULL)) {
+    } else if (strncmp(arg, "erase", 2) == 0) {
+        if (argc < 2) {
+            printf("error: prom erase requires either chip or "
+                   "<addr> argument\n");
+            return (RC_USER_HELP);
+        }
+        if (strcmp(argv[1], "chip") == 0) {
+            op_mode = OP_ERASE_CHIP;
+            argc--;
+            argv++;
+        } else {
+            op_mode = OP_ERASE_SECTOR;
+        }
+    } else if (strcmp("id", arg) == 0) {
+        return (prom_id());
+    } else if (strcmp("log", arg) == 0) {
+        uint max = 10;
+        rc = parse_value(argv[1], (uint8_t *) &max, 2);
+        if (rc != RC_SUCCESS)
+            return (rc);
+        if (max == 0)
+            max = 10;
+        return (address_log_replay(max));
+    } else if (strcmp("mode", arg) == 0) {
         if ((argc > 1) && (argv[1][0] >= '0') && (argv[1][0] <= '2')) {
             uint mode = argv[1][0] - '0';
             prom_mode(mode);
@@ -336,23 +370,22 @@ cmd_prom(int argc, char * const *argv)
             prom_show_mode();
         }
         return (RC_SUCCESS);
-    } else if ((*arg == 'r') && (strstr("read", arg) != NULL)) {
+    } else if (strcmp("read", arg) == 0) {
         op_mode = OP_READ;
-    } else if ((*arg == 's') && (strstr("status", arg) != NULL)) {
-        if ((argc > 1) &&
-            (*argv[1] == 'c') && (strstr("clear", argv[1]) != NULL))
+    } else if (strcmp("status", arg) == 0) {
+        if ((argc > 1) && (strcmp("clear", argv[1]) == 0))
             prom_status_clear();
         else
             prom_status();
         return (RC_SUCCESS);
-    } else if ((*arg == 't') && (strstr("temp", arg) != NULL)) {
+    } else if (strcmp("temp", arg) == 0) {
         return (cmd_prom_temp(argc - 1, argv + 1));
-    } else if ((*arg == 'v') && (strstr("verify", arg) != NULL)) {
+    } else if (strcmp("verify", arg) == 0) {
         int verbose = 1;
         if ((argc > 1) && (argv[1][0] == 'v'))
             verbose++;
         return (prom_verify(verbose));
-    } else if ((*arg == 'w') && (strstr("write", arg) != NULL)) {
+    } else if (strcmp("write", arg) == 0) {
         op_mode = OP_WRITE;
     } else {
         printf("error: unknown prom operation %s\n", arg);
@@ -457,6 +490,20 @@ cmd_reset(int argc, char * const *argv)
         usb_signal_reset_to_host(1);
         usb_startup();
         return (RC_SUCCESS);
+    } else if (strcmp(argv[1], "amiga") == 0) {
+        uint hold = 0;
+        if (argc > 2) {
+            if (strcmp(argv[2], "hold") == 0)
+                hold = 1;
+            else
+                printf("Invalid reset amiga \"%s\"\n", argv[2]);
+        }
+        kbrst_amiga(hold);
+        if (hold)
+            printf("Putting Amiga in reset\n");
+        else
+            printf("Amiga was reset\n");
+        return (RC_SUCCESS);
     } else {
         printf("Unknown argument %s\n", argv[1]);
         return (RC_USER_HELP);
@@ -557,7 +604,20 @@ cmd_gpio(int argc, char * const *argv)
 rc_t
 cmd_snoop(int argc, char * const *argv)
 {
-    prom_snoop(argc > 1);
+    uint mode = CAPTURE_SW;
+    if (argc > 1) {
+        if (strcmp(argv[1], "addr") == 0) {
+            mode = CAPTURE_ADDR;
+        } else if (strcmp(argv[1], "datalo") == 0) {
+            mode = CAPTURE_DATA_LO;
+        } else if (strcmp(argv[1], "datahi") == 0) {
+            mode = CAPTURE_DATA_HI;
+        } else {
+            printf("snoop \"%s\" unknown argument\n", argv[1]);
+            return (RC_USER_HELP);
+        }
+    }
+    prom_snoop(mode);
 
     return (RC_SUCCESS);
 }

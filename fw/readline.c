@@ -269,7 +269,9 @@ input_show_prompt(const char *prompt)
 {
     printf("%s%s", prompt, input_buf);
     putchars(KEY_BACKSPACE, strlen(input_buf) - input_pos);
+#ifndef EMBEDDED_CMD
     fflush(stdout);
+#endif
 }
 
 int
@@ -640,6 +642,7 @@ history_get(int line_num)
     return (&cur);
 }
 
+#if 0
 HISTORY_STATE *
 history_get_history_state(void)
 {
@@ -652,6 +655,7 @@ history_get_history_state(void)
     memcpy(state->history_buf, history_buf, sizeof (history_buf));
     return (state);
 }
+#endif
 
 void
 history_set_history_state(const HISTORY_STATE *state)

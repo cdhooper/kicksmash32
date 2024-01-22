@@ -24,9 +24,20 @@ uint16_t ee_status_read(char *status, uint status_len);
 void     ee_status_clear(void);
 void     ee_cmd(uint32_t addr, uint32_t cmd);
 void     ee_poll(void);
-void     ee_snoop(int flag);
+void     ee_snoop(uint mode);
 int      ee_verify(int verbose);
-void     check_board_standalone(void);
+void     ee_address_override(uint8_t bits, uint override);
+const char *ee_id_string(uint32_t id);
+const char *ee_vendor_string(uint32_t id);
+int      address_log_replay(uint max);
+
+/* Internal functions for manipulating GPIOs */
+void     oe_output(uint value);
+void     oe_output_enable(void);
+void     oe_output_disable(void);
+void     data_output_disable(void);
+void     data_output(uint32_t data);
+uint32_t data_input(void);
 
 #define MX_ERASE_MODE_CHIP   0
 #define MX_ERASE_MODE_SECTOR 1
@@ -36,7 +47,6 @@ void     check_board_standalone(void);
 #define EE_MODE_16_HIGH 2  // 16-bit flash high device (bits 16-31)
 
 extern uint ee_mode;
-
-extern uint8_t board_is_standalone;
+extern uint ee_default_mode;
 
 #endif /* __MX29F1615_H */

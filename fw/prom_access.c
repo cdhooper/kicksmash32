@@ -19,13 +19,27 @@
 #include "uart.h"
 #include "timer.h"
 #include "crc32.h"
+#include "kbrst.h"
 
 #define DATA_CRC_INTERVAL 256
+
+static int
+warn_amiga_not_in_reset(void)
+{
+    if (amiga_not_in_reset) {
+        printf("Fail: Amiga is not in reset\n");
+        return (1);
+    }
+    return (0);
+}
 
 static rc_t
 prom_read_32(uint32_t addr, uint width, uint8_t *buf)
 {
     uint8_t tbuf[4];
+
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
 
     /* Handle odd start address */
     if (addr & 3) {
@@ -62,6 +76,9 @@ prom_read_16(uint32_t addr, uint width, uint8_t *buf)
 {
     uint8_t tbuf[2];
 
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
     if (addr & 1) {
         /* Handle odd start address */
         if (ee_read(addr >> 1, tbuf, 1))
@@ -92,6 +109,9 @@ prom_read(uint32_t addr, uint width, void *bufp)
 {
     uint8_t *buf = (uint8_t *) bufp;
 
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
 #undef DEBUG_PROM_READ
 #ifdef DEBUG_PROM_READ
     int pos;
@@ -113,6 +133,10 @@ static rc_t
 prom_write_16(uint32_t addr, uint width, uint8_t *buf)
 {
     uint8_t tbuf[2];
+
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
     if (addr & 1) {
         /* Handle odd start address */
         if (ee_read(addr >> 1, tbuf, 1))
@@ -147,6 +171,9 @@ static rc_t
 prom_write_32(uint32_t addr, uint width, uint8_t *buf)
 {
     uint8_t tbuf[2];
+
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
 
     if (addr & 3) {
         /* Handle odd start address */
@@ -185,6 +212,9 @@ prom_write_32(uint32_t addr, uint width, uint8_t *buf)
 rc_t
 prom_write(uint32_t addr, uint width, void *bufp)
 {
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
     ee_enable();
     if (ee_mode == EE_MODE_32)
         return (prom_write_32(addr, width, bufp));
@@ -195,6 +225,9 @@ prom_write(uint32_t addr, uint width, void *bufp)
 rc_t
 prom_erase(uint mode, uint32_t addr, uint32_t len)
 {
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
     ee_enable();
     return (ee_erase(mode, addr >> 1, len >> 1, 1));
 }
@@ -202,42 +235,60 @@ prom_erase(uint mode, uint32_t addr, uint32_t len)
 void
 prom_cmd(uint32_t addr, uint16_t cmd)
 {
+    if (warn_amiga_not_in_reset())
+        return;
+
     ee_enable();
     ee_cmd(addr, cmd);
 }
 
-void
+rc_t
 prom_id(void)
 {
     uint32_t part1;
     uint32_t part2;
+
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
     ee_enable();
     ee_id(&part1, &part2);
 
     switch (ee_mode) {
         case EE_MODE_16_LOW:
         case EE_MODE_16_HIGH:
-            printf("%08lx\n", part1);
+            printf("%08lx %s\n", part1, ee_id_string(part1));
             break;
         case EE_MODE_32:
-            printf("%08lx %08lx\n", part1, part2);
+            printf("%08lx %08lx %s %s\n",
+                   part1, part2, ee_id_string(part1), ee_id_string(part2));
             break;
     }
+    return (RC_SUCCESS);
 }
 
-void
+rc_t
 prom_status(void)
 {
     char status[64];
+
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
     ee_enable();
     printf("%04x %s\n", ee_status_read(status, sizeof (status)), status);
+    return (RC_SUCCESS);
 }
 
-void
+rc_t
 prom_status_clear(void)
 {
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
     ee_enable();
     ee_status_clear();
+    return (RC_SUCCESS);
 }
 
 static int
@@ -309,6 +360,9 @@ prom_read_binary(uint32_t addr, uint32_t len)
     uint     cap_prod  = 0;  // producer
     uint     cap_cons  = 0;  // consumer
     uint     pos = 0;
+
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
 
     ee_enable();
     while (len > 0) {
@@ -401,6 +455,9 @@ prom_write_binary(uint32_t addr, uint32_t len)
     uint32_t saddr = addr;
     uint     crc_next = DATA_CRC_INTERVAL;
 
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
     ee_enable();
     while (len > 0) {
         uint32_t tlen    = len;
@@ -471,6 +528,9 @@ prom_disable(void)
 int
 prom_verify(int verbose)
 {
+    if (warn_amiga_not_in_reset())
+        return (RC_BUSY);
+
     return (ee_verify(verbose));
 }
 
@@ -503,7 +563,7 @@ prom_mode(uint mode)
 }
 
 void
-prom_snoop(int flag)
+prom_snoop(uint mode)
 {
-    ee_snoop(flag);
+    ee_snoop(mode);
 }

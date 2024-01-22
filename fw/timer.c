@@ -430,3 +430,10 @@ timer_delay_usec(uint usec)
         /* Empty */
     }
 }
+
+#include <time.h>
+time_t
+time(time_t *ptr)
+{
+    return (timer_tick_get());
+}

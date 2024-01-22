@@ -259,6 +259,26 @@ gpio_num_to_gpio(uint num)
     return (gpios[num]);
 }
 
+char *
+gpio_to_str(uint32_t port, uint16_t pin)
+{
+    uint gpio;
+    uint bit;
+    static char name[8];
+    static const uint32_t gpios[] = {
+        GPIOA, GPIOB, GPIOC, GPIOD, GPIOE, GPIOF
+    };
+    for (gpio = 0; gpio < ARRAY_SIZE(gpios); gpio++)
+        if (gpios[gpio] == port)
+            break;
+    for (bit = 0; bit < 16; bit++)
+        if (pin & BIT(bit))
+            break;
+    sprintf(name, "P%c%u", gpio + 'A', bit);
+    return (name);
+}
+
+
 #ifdef STM32F1
 static const char * const gpio_mode_short[] = {
     "A", "O1", "O2", "O5",      // AnalogI, Output {10, 2, 50} MHz

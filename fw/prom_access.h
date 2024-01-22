@@ -18,17 +18,22 @@ rc_t prom_erase(uint mode, uint32_t addr, uint32_t len);
 rc_t prom_read_binary(uint32_t addr, uint32_t len);
 rc_t prom_write_binary(uint32_t addr, uint32_t len);
 void prom_cmd(uint32_t addr, uint16_t cmd);
-void prom_id(void);
+rc_t prom_id(void);
 void prom_disable(void);
-void prom_status(void);
-void prom_status_clear(void);
+rc_t prom_status(void);
+rc_t prom_status_clear(void);
 void prom_show_mode(void);
 void prom_mode(uint mode);
 int  prom_verify(int verbose);
-void prom_snoop(int flag);
+void prom_snoop(uint mode);
 
 #define ERASE_MODE_CHIP   0
 #define ERASE_MODE_SECTOR 1
 #define ERASE_MODE_BLOCK  2
+
+#define CAPTURE_SW        0
+#define CAPTURE_ADDR      1
+#define CAPTURE_DATA_LO   2
+#define CAPTURE_DATA_HI   3
 
 #endif /* _PROM_ACCESS_H */

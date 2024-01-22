@@ -5,7 +5,8 @@ BOARD_REV ?= 3
 
 SRCS   := main.c clock.c gpio.c printf.c timer.c uart.c usb.c version.c \
 	  led.c irq.c mem_access.c readline.c cmdline.c cmds.c pcmds.c \
-	  prom_access.c m29f160xt.c utils.c crc32.c adc.c kbrst.c
+	  prom_access.c m29f160xt.c utils.c crc32.c adc.c kbrst.c scanf.c \
+	  pin_tests.c
 
 OBJDIR := objs
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
@@ -153,7 +154,7 @@ $(OBJDIR)/%.o: %.cpp
 
 $(OBJDIR)/%.size: $(OBJDIR)/%.elf
 	@echo "Output code size:"
-	@$(SIZE) -A -d $< | grep -e 'text|data|bss' | awk ' \
+	@$(SIZE) -A -d $< | grep -Ee 'text|data|bss' | awk ' \
     function human(x) { \
         if (x<1000) {return x} else {x/=1024} \
         s="kMGTEPZY"; \
@@ -206,6 +207,12 @@ just-dfu: $(UDEV_FILE_PATHS)
 dfu-unprotect: $(UDEV_FILE_PATHS)
 	$(DFU_UTIL) -s 0:force:unprotect -a 0 --device 0483:df11 --alt 0 --download $(BINARY).bin
 
+dfu-clobber: $(UDEV_FILE_PATHS)
+	$(DFU_UTIL) -s 0:force:unprotect --alt 1 --download flash_clobber.bin -Z 0x10 --dfuse-address 0x1ffff800:leave
+
+#dfu-clobber: $(UDEV_FILE_PATHS)
+#	$(DFU_UTIL) -s 0:force:unprotect --alt 1 --download flash_clobber.bin -Z 0xd --dfuse-address 0x1ffff800:leave
+
 # Write STM32 flash using ST-Link
 just-flash: just-erase $(ST_TOOLS_PATH)/st-flash | $(BINARY).bin $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash --reset write $(BINARY).bin 0x08000000
@@ -225,6 +232,7 @@ just-protect: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash --reset write flash_protect.bin 0x1ffff800
 just-clobber: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash --reset write flash_clobber.bin 0x1ffff800
+just-clobber2:
 
 dfu: all just-dfu
 flash: all just-flash
