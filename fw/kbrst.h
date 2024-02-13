@@ -8,8 +8,13 @@
  *
  * Amiga kbrst prototypes.
  */
+#ifndef _KBRST_H
+#define _KBRST_H
+
+void kbrst_poll(void);
+void kbrst_amiga(uint hold, uint longreset);
 
 extern uint8_t amiga_not_in_reset;
 
-void kbrst_poll(void);
-void kbrst_amiga(uint hold);
+#endif /* _KBRST_H */
+

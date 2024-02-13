@@ -45,7 +45,7 @@ typedef uint32_t USART_TypeDef_P;
 static volatile uint cons_in_rb_producer; // Console input current writer pos
 static uint          cons_in_rb_consumer; // Console input current reader pos
 static uint8_t       cons_in_rb[1024];    // Console input ring buffer (FIFO)
-static uint8_t       usb_out_buf[1024];   // USB output buffer
+static uint8_t       usb_out_buf[4096];   // USB output buffer
 static uint16_t      usb_out_bufpos = 0;  // USB output buffer position
 static bool          uart_console_active = false;
 

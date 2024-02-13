@@ -20,6 +20,7 @@
 #include "timer.h"
 #include "crc32.h"
 #include "kbrst.h"
+#include "config.h"
 
 #define DATA_CRC_INTERVAL 256
 
@@ -229,11 +230,14 @@ prom_erase(uint mode, uint32_t addr, uint32_t len)
         return (RC_BUSY);
 
     ee_enable();
-    return (ee_erase(mode, addr >> 1, len >> 1, 1));
+    if (ee_mode == EE_MODE_32)
+        return (ee_erase(mode, addr >> 2, len >> 2, 1));
+    else
+        return (ee_erase(mode, addr >> 1, len >> 1, 1));
 }
 
 void
-prom_cmd(uint32_t addr, uint16_t cmd)
+prom_cmd(uint32_t addr, uint32_t cmd)
 {
     if (warn_amiga_not_in_reset())
         return;
@@ -538,28 +542,59 @@ void
 prom_show_mode(void)
 {
     const char *mode;
-    switch (ee_mode) {
-        case 0:
+
+    switch (config.ee_mode) {
+        case EE_MODE_32:
             mode = "32-bit";
             break;
-        case 1:
+        case EE_MODE_16_LOW:
             mode = "16-bit low";
             break;
-        case 2:
+        case EE_MODE_16_HIGH:
             mode = "16-bit high";
+            break;
+        case EE_MODE_AUTO:
+            mode = "auto";
             break;
         default:
             mode = "unknown";
             break;
     }
-    printf("%d = %s\n", ee_mode, mode);
+    printf("%d = %s", config.ee_mode, mode);
+
+    if (config.ee_mode == EE_MODE_AUTO) {
+        switch (ee_mode) {
+            case 0:
+                mode = "32-bit";
+                break;
+            case 1:
+                mode = "16-bit low";
+                break;
+            case 2:
+                mode = "16-bit high";
+                break;
+            case 3:
+                mode = "auto";
+                break;
+            default:
+                mode = "unknown";
+                break;
+        }
+        printf(" (%s)", mode);
+    }
+    printf("\n");
 }
 
 void
 prom_mode(uint mode)
 {
-    ee_mode = mode;
     ee_disable();
+    if (mode != EE_MODE_AUTO)
+        ee_set_mode(ee_mode);
+    if (config.ee_mode != mode) {
+        config.ee_mode = mode;
+        config_updated();
+    }
 }
 
 void

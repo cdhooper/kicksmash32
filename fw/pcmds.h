@@ -13,6 +13,7 @@
 #define _PCMDS_H
 
 #define HAVE_SPACE_PROM
+#define HAVE_SPACE_FLASH
 
 rc_t cmd_cpu(int argc, char * const *argv);
 rc_t cmd_gpio(int argc, char * const *argv);

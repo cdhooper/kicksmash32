@@ -28,6 +28,7 @@
 #include "utils.h"
 #include "kbrst.h"
 #include "pin_tests.h"
+#include "config.h"
 #include "version.h"
 
 static void
@@ -56,6 +57,7 @@ main(void)
     printf("\r\nKicksmash 32 %s\n", version_str);
     identify_cpu();
     show_reset_reason();
+    config_read();
     check_board_standalone();
 
     rl_initialize();  // Enable command editing and history
@@ -78,6 +80,7 @@ main(void)
         ee_poll();
         cmdline();
         kbrst_poll();
+        config_poll();
     }
 
     return (0);

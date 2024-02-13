@@ -2,7 +2,7 @@
  * This is free and unencumbered software released into the public domain.
  * See the LICENSE file for additional details.
  *
- * Designed by Chris Hooper in 2022.
+ * Designed by Chris Hooper in 2024.
  *
  * ---------------------------------------------------------------------
  *
@@ -16,12 +16,16 @@
 #include <stdbool.h>
 #include <string.h>
 #include "m29f160xt.h"
-#include "adc.h"
+#include "irq.h"
 #include "utils.h"
 #include "timer.h"
 #include "gpio.h"
 #include "usb.h"
 #include "crc32.h"
+#include "smash_cmd.h"
+#include "pin_tests.h"
+#include "config.h"
+#include "kbrst.h"
 #include <libopencm3/stm32/dma.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/timer.h>
@@ -47,20 +51,34 @@
 
 #define GPIO_MODE_OUTPUT_PP GPIO_MODE_OUTPUT_10_MHZ
 
-#define CAPTURE_SW      0
-#define CAPTURE_ADDR    1
-#define CAPTURE_DATA_LO 2
-#define CAPTURE_DATA_HI 3
+#define CAPTURE_SW       0
+#define CAPTURE_ADDR     1
+#define CAPTURE_DATA_LO  2
+#define CAPTURE_DATA_HI  3
 
-static void config_tim2_ch1_dma(uint mode);
+#define SWAP16(x) __builtin_bswap16(x)
+#define SWAP32(x) __builtin_bswap32(x)
+
+#define LOG_DMA_CONTROLLER DMA2
+#define LOG_DMA_CHANNEL    DMA_CHANNEL5
+
+/* Inline speed-critical code */
+#define dma_get_number_of_data(x, y) DMA_CNDTR(x, y)
+
+static void config_tim2_ch1_dma(bool verbose);
 static void config_tim5_ch1_dma(bool verbose);
+static void config_dma(uint32_t dma, uint32_t channel, uint to_periph,
+                       uint mode, volatile void *dst, volatile void *src,
+                       uint32_t wraplen);
+
+static const uint16_t sm_magic[] = { 0x0117, 0x0119, 0x1017, 0x0204 };
 
 /*
  * EE_MODE_32      = 32-bit flash
  * EE_MODE_16_LOW  = 16-bit flash low device (bits 0-15)
  * EE_MODE_16_HIGH = 16-bit flash high device (bits 16-31)
  */
-uint            ee_mode = EE_MODE_32;
+uint            ee_mode         = EE_MODE_32;
 uint            ee_default_mode = EE_MODE_32;
 static uint32_t ee_cmd_mask;
 static uint32_t ee_addr_shift;
@@ -69,10 +87,15 @@ static uint32_t ee_status = EE_STATUS_NORMAL;  // Status from program/erase
 static uint32_t ticks_per_15_nsec;
 static uint32_t ticks_per_20_nsec;
 static uint32_t ticks_per_30_nsec;
+static uint32_t ticks_per_200_nsec;
 static uint64_t ee_last_access = 0;
 static bool     ee_enabled = false;
 static uint8_t  capture_mode = CAPTURE_ADDR;
+static uint     consumer_wrap;
+static uint     rx_consumer = 0;
+static uint     message_count = 0;
 
+static uint32_t address_input(void);
 /*
  * address_output
  * --------------
@@ -102,73 +125,72 @@ address_input(void)
 /*
  * ee_address_override
  * -------------------
- * Override the Flash A18 and A19 address
+ * Override the Flash A17, A18 and A19 address
  *
- * override = 0  Temporarily disable override
- * override = 1  Record new override
+ * override = 0  Record new override
+ * override = 1  Temporarily disable override
  * override = 2  Restore previous override
  *
  * bits
- *   0    1=Drive A18
- *   1    A18 driven value
+ *   0    1=Drive A17
+ *   1    1=Drive A18
  *   2    1=Drive A19
- *   3    A19 driven value
- *   4-7  Unused
+ *   3    Unused
+ *   4    A17 driven value
+ *   5    A18 driven value
+ *   6    A19 driven value
+ *   7    Unused
  */
 void
 ee_address_override(uint8_t bits, uint override)
 {
-    static uint8_t old  = 0;
+    uint           bit;
+    static uint8_t old  = 0xff;
     static uint8_t last = 0;
-    uint8_t        val;
+    static const uint32_t ports[] =
+                          { FLASH_A17_PORT, FLASH_A18_PORT, FLASH_A19_PORT };
+    static const uint32_t pins[]  =
+                          { FLASH_A17_PIN,  FLASH_A18_PIN,  FLASH_A19_PIN };
 
     switch (override) {
         default:
-        case 0:
-            val = 0;
+        case 0:  // Record new override
             break;
-        case 1:
-            val = old = bits;
+        case 1:  // Temporily disable override
+            if (old == 0xff)
+                old = last;
+            bits = 0;
             break;
-        case 2:
-            val = old;
+        case 2:  // Restore previous override
+            if (old == 0xff)
+                return;
+            bits = old;
+            old = 0xff;
             break;
     }
-    if (val == last)
+    if (bits == last)
         return;
-    last = val;
+    last = bits;
 
-    if (val & BIT(0)) {
-        /* Drive A18 */
-        uint shift = (val & BIT(1)) ? 0 : 16;
-        GPIO_BSRR(FLASH_A18_PORT) = FLASH_A18_PIN << shift;
-        gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN,
-                     GPIO_SETMODE_OUTPUT_PPULL_2);
-        if (override == 1)
-            printf(" A18=%d", !shift);
-    } else {
-        /* Disable: Weak pull down A18 */
-        GPIO_BSRR(FLASH_A18_PORT) = FLASH_A18_PIN << 16;
-        gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-        if (override == 1)
-            printf(" !A18");
+    for (bit = 0; bit < 3; bit++) {
+        uint32_t port  = ports[bit];
+        uint16_t pin   = pins[bit];
+        if (bits & BIT(bit)) {
+            /* Drive address pin */
+            uint     shift = (bits & BIT(bit + 4)) ? 0 : 16;
+            gpio_setmode(port, pin, GPIO_SETMODE_OUTPUT_PPULL_2);
+            GPIO_BSRR(port) = pin << shift;
+            if (override == 0)             // XXX: Remove output when debugged
+                printf(" A%u=%u", 17 + bit, !shift);
+        } else {
+            /* Disable drive: Weak pull down pin */
+            gpio_setmode(port, pin, GPIO_SETMODE_INPUT_PULLUPDOWN);
+            GPIO_BSRR(port) = pin << 16;
+            if (override == 0)             // XXX: Remove output when debugged
+                printf(" !A%u", 17 + bit);
+        }
     }
-    if (val & BIT(2)) {
-        /* Drive A19 */
-        uint shift = (val & BIT(3)) ? 0 : 16;
-        GPIO_BSRR(FLASH_A19_PORT) = FLASH_A19_PIN << shift;
-        gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN,
-                     GPIO_SETMODE_OUTPUT_PPULL_2);
-        if (override == 1)
-            printf(" A19=%d", !shift);
-    } else {
-        /* Disable: Weak pull down A19 */
-        GPIO_BSRR(FLASH_A19_PORT) = FLASH_A19_PIN << 16;
-        gpio_setmode(FLASH_A19_PORT, FLASH_A19_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-        if (override == 1)
-            printf(" !A19");
-    }
-    if (override == 1)
+    if (override == 0)  // XXX: Remove output when debugged
         printf("\n");
 }
 
@@ -180,11 +202,12 @@ ee_address_override(uint8_t bits, uint override)
 static void
 address_output_enable(void)
 {
+    ee_address_override(0, 1);  // Suspend A19-A18-A17 override
+
     /* A0-A12=PC0-PC12 A13-A19=PA1-PA7 */
     GPIO_CRL(SOCKET_A0_PORT)  = 0x11111111;  // Output Push-Pull
-    GPIO_CRH(SOCKET_A0_PORT)  = 0x00011111;
-    GPIO_CRL(SOCKET_A13_PORT) = 0x11111118;  // PA0=SOCKET_OE = Input
-    ee_address_override(0, 0);  // Suspend A19-A18 override
+    GPIO_CRH(SOCKET_A0_PORT)  = 0x00011111;  // Not PC13-PC15 (weak drive)
+    GPIO_CRL(SOCKET_A13_PORT) = 0x11111118;  // PA0=SOCKET_OE = Input PU
 }
 
 /*
@@ -196,10 +219,18 @@ static void
 address_output_disable(void)
 {
     /* A0-A12=PC0-PC12 A13-A19=PA1-PA7 */
-    GPIO_CRL(SOCKET_A0_PORT)   = 0x44444444;  // Input
-    GPIO_CRH(SOCKET_A0_PORT)   = 0x44444444;
-    GPIO_CRL(SOCKET_A13_PORT)  = 0x44444448;  // PA0=SOCKET_OE = Input PU
-    ee_address_override(0, 2);  // Restore previous A19-A18 override
+    if (board_is_standalone) {
+        GPIO_CRL(SOCKET_A0_PORT)   = 0x88888888;  // Input Pull-Up / Pull-Down
+        GPIO_CRH(SOCKET_A0_PORT)   = 0x44488888;  // Not PC13-PC15
+        GPIO_CRL(SOCKET_A13_PORT)  = 0x88888888;  // PA0=SOCKET_OE = Input PU
+        GPIO_ODR(SOCKET_A0_PORT)   = 0xffff;      // Pull up A0-A12
+        GPIO_BSRR(SOCKET_A13_PORT) = 0x0000003e;  // Pull up A13-A17
+    } else {
+        GPIO_CRL(SOCKET_A0_PORT)   = 0x44444444;  // Input
+        GPIO_CRH(SOCKET_A0_PORT)   = 0x44444444;
+        GPIO_CRL(SOCKET_A13_PORT)  = 0x44444448;  // PA0=SOCKET_OE = Input PU
+    }
+    ee_address_override(0, 2);  // Restore previous A19-A18-A17 override
 }
 
 /*
@@ -358,9 +389,10 @@ oe_output_disable(void)
 //  gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
 }
 
-static void
-update_ee_cmd_mask(void)
+void
+ee_set_mode(uint new_mode)
 {
+    ee_mode = new_mode;
     if (ee_mode == EE_MODE_32) {
         ee_cmd_mask = 0xffffffff;  // 32-bit
         ee_addr_shift = 2;
@@ -384,9 +416,6 @@ ee_enable(void)
 {
     if (ee_enabled)
         return;
-#ifdef DEBUG_SIGNALS
-    printf("ee_enable\n");
-#endif
     address_output(0);
     address_output_enable();
     we_output(1);  // WE# disabled
@@ -395,11 +424,8 @@ ee_enable(void)
     data_output_disable();
     ee_enabled = true;
     ee_read_mode();
-#ifdef DEBUG_SIGNALS
-    printf("GPIOA=%x GPIOB=%x GPIOC=%x GPIOD=%x GPIOE=%x\n",
-           GPIOA, GPIOB, GPIOC, GPIOD, GPIOE);
-#endif
-    update_ee_cmd_mask();
+    ee_last_access = timer_tick_get();
+    ee_set_mode(ee_mode);
 }
 
 /*
@@ -476,14 +502,14 @@ ee_read(uint32_t addr, void *datap, uint count)
     if (ee_mode == EE_MODE_32) {
         uint32_t *data = datap;
 
-        usb_mask_interrupts();
+        disable_irq();
         while (count-- > 0)
             ee_read_word(addr++, data++);
-        usb_unmask_interrupts();
+        enable_irq();
     } else {
         uint16_t *data = datap;
 
-        usb_mask_interrupts();
+        disable_irq();
         while (count-- > 0) {
             uint32_t value;
             ee_read_word(addr++, &value);
@@ -492,7 +518,7 @@ ee_read(uint32_t addr, void *datap, uint count)
             else
                 (*data++) = value >> 16;
         }
-        usb_unmask_interrupts();
+        enable_irq();
     }
 
     return (0);
@@ -566,6 +592,8 @@ ee_write_word(uint32_t addr, uint32_t data)
 void
 ee_cmd(uint32_t addr, uint32_t cmd)
 {
+    uint32_t ccmd = cmd;
+
     ee_last_access = timer_tick_get();
 
     switch (ee_mode) {
@@ -581,8 +609,11 @@ ee_cmd(uint32_t addr, uint32_t cmd)
             break;
     }
 
-    /* Check for a command which doens't require an unlock sequence */
-    switch (cmd & 0xffff) {
+    if ((ccmd & 0xffff) == 0)
+        ccmd >>= 16;
+
+    /* Check for a command which doesn't require an unlock sequence */
+    switch (ccmd & 0xffff) {
         case 0x98:  // Read CFI Query
         case 0xf0:  // Read/Reset
         case 0xb0:  // Erase Suspend
@@ -591,13 +622,12 @@ ee_cmd(uint32_t addr, uint32_t cmd)
             goto finish;
     }
 
-    usb_mask_interrupts();
-
+    disable_irq();
     ee_write_word(0x00555, 0x00aa00aa);
     ee_write_word(0x002aa, 0x00550055);
     ee_write_word(addr, cmd);
+    enable_irq();
 
-    usb_unmask_interrupts();
 finish:
     timer_delay_usec(2);   // Wait for command to complete
 }
@@ -719,12 +749,12 @@ ee_wait_for_done_status(uint32_t timeout_usec, int verbose, int mode)
 static int
 ee_program_word(uint32_t addr, uint32_t word)
 {
-    usb_mask_interrupts();
+    disable_irq();
     ee_write_word(0x00555, 0x00aa00aa);
     ee_write_word(0x002aa, 0x00550055);
     ee_write_word(0x00555, 0x00a000a0);
     ee_write_word(addr, word);
-    usb_unmask_interrupts();
+    enable_irq();
 
     return (ee_wait_for_done_status(360, 0, EE_MODE_PROGRAM));
 }
@@ -999,8 +1029,7 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
             break;
         }
 
-        usb_mask_interrupts();
-
+        disable_irq();
         ee_write_word(0x00555, 0x00aa00aa);
         ee_write_word(0x002aa, 0x00550055);
         ee_write_word(0x00555, 0x00800080);
@@ -1009,12 +1038,15 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
 
         if (mode == MX_ERASE_MODE_CHIP) {
             ee_write_word(0x00555, 0x00100010);
+            usb_mask_interrupts();
+            enable_irq();
             timeout = 32000000;  // 32 seconds
             len = 0;
         } else {
             /* Block erase (supports multiple blocks) */
 //          int bcount = 0;
             timeout = 1000000;  // 1 second
+            enable_irq();
             while (len > 0) {
                 uint32_t addr_mask;
                 uint32_t bsize = cb->cb_bsize << 10;
@@ -1069,6 +1101,7 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
 #endif
             }
         }
+        usb_unmask_interrupts();
 
         timer_delay_usec(100);  // tBAL (Word Access Load Time)
 
@@ -1172,6 +1205,7 @@ ee_poll(void)
             ee_last_access = 0;
         }
     }
+    timer_enable_irq(TIM5, TIM_DIER_CC1IE);
 }
 
 static void
@@ -1348,391 +1382,835 @@ fail:
     return (rc);
 }
 
+static void
+ee_set_bank(uint8_t bank)
+{
+    /*
+     * bi_merge tells what bits of A17, A18, and A19 to force.
+     * If the width of the bank is 8, then none are forced.
+     * If the width of the bank is 4, then A19 is forced.
+     * If the width of the bank is 2, then A19 and A18 are forced.
+     * If the width of the bank is 1, then A19, A18, and A17 are forced.
+     */
+    switch (config.bi.bi_merge[bank] >> 4) {
+        case 0:  // 512KB bank (width 1)
+            ee_address_override((bank << 4) | 0x7, 0);
+            break;
+        case 1:  // 1MB bank (width 2)
+            ee_address_override((bank << 4) | 0x6, 0);
+            break;
+        case 2:  // 2MB bank (width 4)
+            ee_address_override((bank << 4) | 0x8, 0);
+            break;
+        case 3:  // 4MB bank (width 8)
+            ee_address_override((bank << 4) | 0x0, 0);
+            break;
+    }
+
+    config.bi.bi_bank_current = bank;
+    config.bi.bi_bank_nextreset = 0xff;
+    printf("Bank select %u %s\n", bank, config.bi.bi_desc[bank]);
+}
+
+void
+ee_update_bank_at_reset(void)
+{
+    if ((config.bi.bi_bank_nextreset != 0xff) &&
+        (config.bi.bi_bank_nextreset != config.bi.bi_bank_current)) {
+printf("nextreset bank %u\n", config.bi.bi_bank_nextreset);
+        ee_set_bank(config.bi.bi_bank_nextreset);
+    }
+}
+
+void
+ee_update_bank_at_longreset(void)
+{
+    uint bank;
+    uint cur = config.bi.bi_bank_current;
+    for (bank = 0; bank < ROM_BANKS; bank++) {
+        if (cur == config.bi.bi_longreset_seq[bank]) {
+            /* Switch to the next bank in the sequence */
+            uint nextbank = bank + 1;
+            if (nextbank == ROM_BANKS)
+                nextbank = 0;
+printf("longreset bank %u\n", config.bi.bi_longreset_seq[nextbank]);
+            ee_set_bank(config.bi.bi_longreset_seq[nextbank]);
+            break;
+        }
+    }
+}
+
+
 /* Buffers for DMA from/to GPIOs and Timer event generation registers */
 #define ADDR_BUF_COUNT 512
 #define ALIGN  __attribute__((aligned(16)))
-ALIGN volatile uint16_t tim2_buffer[ADDR_BUF_COUNT];
-ALIGN volatile uint16_t addr_buffer_lo[ADDR_BUF_COUNT];
-ALIGN volatile uint8_t *addr_buffer_hi = (uint8_t *)tim2_buffer;
-uint addr_cons = 0;
-uint8_t reply_buffer[256];
-
-void
-ee_snoop(uint mode)
-{
-    uint     last_oe = 1;
-    uint     cons = 0;
-    uint     prod = 0;
-    uint     oprod = 0;
-    uint     no_data = 0;
-    uint32_t cap_addr[32];
-    uint32_t cap_data[32];
-
-    if (mode != CAPTURE_SW)
-        printf("Press any key to exit\n");
-
-    address_output_disable();
-    if ((mode == CAPTURE_ADDR) ||
-        (mode == CAPTURE_DATA_LO) ||
-        (mode == CAPTURE_DATA_HI)) {
-        uint dma_left;
-        config_tim2_ch1_dma(mode);
-        config_tim5_ch1_dma(false);
-        dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
-        prod = ARRAY_SIZE(addr_buffer_lo) - dma_left;
-        if (prod > ARRAY_SIZE(addr_buffer_lo))
-            prod = 0;
-        cons = prod;
-
-        while (1) {
-            if (getchar() > 0)
-                break;
-            dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
-            prod = ARRAY_SIZE(addr_buffer_lo) - dma_left;
-            if (prod > ARRAY_SIZE(addr_buffer_lo))
-                prod = 0;
-            if (cons != prod) {
-                while (cons != prod) {
-                    if (mode == CAPTURE_ADDR) {
-                        printf(" %x%04x",
-                               addr_buffer_hi[cons] >> 4, addr_buffer_lo[cons]);
-                    } else {
-                        printf(" %04x[%04x]",
-                               addr_buffer_lo[cons], tim2_buffer[cons]);
-                    }
-                    cons++;
-                    if (cons >= ARRAY_SIZE(addr_buffer_lo))
-                        cons = 0;
-                }
-                printf("\n");
-            }
-        }
-        return;
-    }
-
-    timer_disable_irq(TIM5, TIM_DIER_CC1IE);
-    while (1) {
-        if (oe_input() == 0) {
-            /* Capture address on falling edge of OE */
-            if (last_oe == 1) {
-                uint32_t addr = address_input();
-                uint nprod = prod + 1;
-                if (nprod >= ARRAY_SIZE(cap_addr))
-                    nprod = 0;
-                if (nprod != cons) {
-                    /* FIFO has space */
-                    cap_addr[prod] = addr;
-                    oprod = prod;
-                    prod = nprod;
-                    no_data = 0;
-                    continue;
-                }
-                last_oe = 0;
-            }
-        } else {
-            /* Capture data on rising edge of OE */
-            if (last_oe == 0) {
-                cap_data[oprod] = data_input();
-                last_oe = 1;
-            }
-        }
-        if (no_data++ < 400)
-            continue;
-        if (cons != prod) {
-            while (cons != prod) {
-                printf(" %lx[%08lx]", cap_addr[cons], cap_data[cons]);
-                if (++cons >= ARRAY_SIZE(cap_addr))
-                    cons = 0;
-            }
-            printf("\n");
-        }
-        if (no_data++ < 40000)
-            continue;
-        if (getchar() > 0)
-            break;
-        no_data = 0;
-    }
-    timer_enable_irq(TIM5, TIM_DIER_CC1IE);
-    printf("\n");
-}
-
-
-#define KS_CMD_ID       0x01    // Reply with software ID
-#define KS_CMD_TESTPATT 0x02    // Reply with bit test pattern
-#define KS_CMD_EEPROM   0x03    // Issue low level command to EEPROM
-#define KS_CMD_ROMSEL   0x04    // Force or release A18 and A19
-#define KS_CMD_LOOPBACK 0x05    // Reply with sent message
-#define KS_CMD_NOP      0x12     // Do nothing
-
-#define KS_STATUS_OK    0x0000  // Success
-#define KS_STATUS_FAIL  0x0001  // Failure
-#define KS_STATUS_CRC   0x0002  // CRC failure
-
-#define KS_EEPROM_WE    0x0100  // Drive WE# to EEPROM (given with CMD)
-
-#define KS_ROMSEL_SAVE  0x0100  // Save setting in NVRAM (given with CMD)
-#define KS_ROMSEL_SET   0x0f00  // ROM select bits to force
-#define KS_ROMSEL_BITS  0xf000  // ROM select bit values (A19 is high bit)
-
-static const uint16_t ks_magic[] = { 0x0119, 0x1970 };
-
-#if 0
-static uint8_t
-get_dma_interrupt_flags(uint32_t dma, uint channel)
-{
-    return ((DMA_ISR(dma) >> DMA_FLAG_OFFSET(channel)) & 0x1f);
-}
-
-// DMA_IFCR_CTCIF1
-void
-dma2_channel5_isr(void)
-{
-    uint32_t dma     = DMA2;
-    uint32_t channel = DMA_CHANNEL5;
-
-    uint flags = get_dma_interrupt_flags(dma, channel);
-    printf("[%x]", flags);
-    dma_clear_interrupt_flags(dma, channel, flags);
-}
-#endif
+ALIGN volatile uint16_t buffer_rxa_lo[ADDR_BUF_COUNT];
+ALIGN volatile uint16_t buffer_rxd[ADDR_BUF_COUNT];
+ALIGN volatile uint16_t buffer_txd_lo[ADDR_BUF_COUNT * 2];
+ALIGN volatile uint16_t buffer_txd_hi[ADDR_BUF_COUNT];
 
 static void
-oe_reply(uint hold_we, uint len, const void *reply_buf)
+configure_oe_capture_rx(bool verbose)
 {
-    uint count = 0;
-    uint tlen = (ee_mode == EE_MODE_32) ? 4 : 2;
-    uint8_t *dptr;
-#undef MEASURE_OE_W
-#ifdef MEASURE_OE_W
-    uint64_t start;
-#endif
+    consumer_wrap = 0;
+    rx_consumer = 0;
+    config_tim2_ch1_dma(verbose);
+    config_tim5_ch1_dma(verbose);
 
-    /* Wait for OE to go high */
-    for (count = 0; oe_input() == 0; count++) {
-        if (count > 100000) {
-            printf("OE timeout 01\n");
-            return;
+    disable_irq();
+    TIM_CCER(TIM2) |= TIM_CCER_CC1E;  // timer_enable_oc_output()
+    TIM_CCER(TIM5) |= TIM_CCER_CC1E;
+    enable_irq();
+}
+
+#ifdef CAPTURE_GPIOS
+ALIGN uint16_t buffer_a[ADDR_BUF_COUNT];
+ALIGN uint16_t buffer_b[ADDR_BUF_COUNT];
+ALIGN uint16_t buffer_c[ADDR_BUF_COUNT];
+ALIGN uint16_t buffer_d[ADDR_BUF_COUNT];
+
+static uint
+gpio_watch(void)
+{
+    uint pos = 0;
+    uint16_t gpioa;
+    uint16_t gpiob;
+    uint16_t gpioc;
+    uint16_t gpiod;
+    uint16_t l_gpioa = 0;
+    uint16_t l_gpiob = 0;
+    uint16_t l_gpioc = 0;
+    uint16_t l_gpiod = 0;
+
+    while (1) {
+        gpioa = GPIO_IDR(GPIOA);  // PA0 + A13-A19
+        gpiob = GPIO_IDR(GPIOB);  // WE=PB14 OEWE=PB9
+        gpioc = GPIO_IDR(GPIOC);  // A0-A15
+        gpiod = GPIO_IDR(GPIOD);  // D0-D15
+        if ((gpioa != l_gpioa) ||
+            (gpiob != l_gpiob) ||
+            (gpioc != l_gpioc) ||
+            (gpiod != l_gpiod)) {
+            buffer_a[pos] = gpioa;
+            buffer_b[pos] = gpiob;
+            buffer_c[pos] = gpioc;
+            buffer_d[pos] = gpiod;
+            if (pos++ > 400)
+                break;
+            l_gpioa = gpioa;
+            l_gpiob = gpiob;
+            l_gpioc = gpioc;
+            l_gpiod = gpiod;
         }
     }
-    if (count > 0)
-        printf("<%u>", count);
+    return (pos);
+}
 
+static void
+gpio_showbuf(uint count)
+{
+    uint     pos;
+    uint16_t last_a = 0;
+    uint16_t last_b = 0;
+    uint16_t last_c = 0;
+    uint16_t last_d = 0;
+    uint16_t diff;
+
+    last_a = ~buffer_a[0];
+    last_b = ~buffer_b[0];
+    last_c = ~buffer_c[0];
+    last_d = ~buffer_d[0];
+    for (pos = 0; pos < count; pos++) {
+        uint printed_a = 0;
+        uint16_t a = buffer_a[pos];
+        uint16_t b = buffer_b[pos];
+        uint16_t c = buffer_c[pos];
+        uint16_t d = buffer_d[pos];
+        printf(" %04x %04x %04x %04x", a, b, c, d);
+        if (a != last_a) {
+            diff = a ^ last_a;
+            if (diff & SOCKET_OE_PIN)
+                printf(" S_OE=%u", !!(a & SOCKET_OE_PIN));
+            if (diff & 0x00f0) {
+                /* A16-A19 */
+                printf(" A=%05x", c | ((a & 0xf0) << (16 - 4)));
+                printed_a++;
+            }
+        }
+        if (b != last_b) {
+            diff = b ^ last_b;
+            if (diff & FLASH_OE_PIN)
+                printf(" F_OE=%u", !!(b & FLASH_OE_PIN));
+            if (diff & FLASH_WE_PIN)
+                printf(" WE=%u", !!(b & FLASH_WE_PIN));
+            if (diff & FLASH_OEWE_PIN)
+                printf(" OEWE=%u", !!(b & FLASH_OEWE_PIN));
+        }
+        if (c != last_c) {
+            if (!printed_a)
+                printf(" A=%05x", c | ((a & 0xf0) << (16 - 4)));
+        }
+        if (d != last_d) {
+            diff = d ^ last_d;
+            printf(" D=%x", d);
+        }
+        printf("\n");
+        last_a = buffer_a[pos];
+        last_b = buffer_b[pos];
+        last_c = buffer_c[pos];
+        last_d = buffer_d[pos];
+    }
+}
+#endif
+
+/*
+ * ks_reply
+ * --------
+ * This function sends a reply message to the host operating system.
+ * It will disable flash output and drive data lines directly from the STM32.
+ * This routine is called from interrupt context.
+ */
+static void
+ks_reply(uint hold_we, uint len, const void *reply_buf, uint status)
+{
+    uint      count = 0;
+    uint      tlen = (ee_mode == EE_MODE_32) ? 4 : 2;
+    uint      dma_left;
+    uint      dma_last;
+
+    /* FLASH_OE=1 disables flash from driving data pins */
+    oe_output(1);
     oe_output_enable();
-    dptr = (void *) reply_buf;
-    if (ee_mode == EE_MODE_16_HIGH)
-        dptr -= 2;  /* Change position so data is in upper 16 bits */
 
-    /* Board rev 3 and higher have external bus tranceiver, so STM32 can always drive */
+    /*
+     * Board rev 3 and higher have external bus tranceiver, so STM32 can
+     * always drive data bus so long as FLASH_OE is disabled.
+     */
     data_output_enable();  // Drive data pins
     if (hold_we) {
+        we_output(1);
+// XXX: remove once stronger pull-up resistor (1K?) is in place
+#define STM32_HARD_DRIVE_WE_ON_SHARED_WRITE
+#ifdef STM32_HARD_DRIVE_WE_ON_SHARED_WRITE
+        we_enable(1);      // Drive high
+#else
         we_enable(0);      // Pull up
+#endif
         oewe_output(1);
     }
 
-    while ((int)len > 0) {
-        uint32_t dval = *(uint32_t *) dptr;
-#if 0
-        if (ee_mode == EE_MODE_16_HIGH)
-            dval <<= 16;
-#endif
-        data_output(dval);
-        dptr += tlen;
-        len  -= tlen;
+    /*
+     * Configure DMA hardware to drive data pins from RAM when OE goes high
+     *
+     * In 32-bit mode, we need to copy the 16-bit high word of each 32-bit
+     * long to a buffer and then DMA that to the D16-D31 output data register.
+     * The D0-D15 values can be DMA as 32-bit values from the source buffer,
+     * as the output data register does nothing with writes to the upper
+     * 16 bits.
+     *
+     * In 16-bit low mode, we just need to do 16-bit DMA from the source
+     * data to the D0-D15 data register.
+     *
+     * In 16-bit high mode, we need to do 16-bit DMA from the source data
+     * to the D16-D31 data register.
+     */
 
-        /* Wait for OE to go low (start of this data cycle) */
-        for (count = 0; oe_input() != 0; count++) {
-            if (count > 100000) {
-                printf("OE timeout 0\n");
-                goto oe_reply_end;
-            }
-        }
-#ifdef MEASURE_OE_W
-        start = timer_tick_get();
+    /* Stop timer DMA triggers */
+    TIM_CCER(TIM2) = 0;  // Disable everything
+    TIM_CCER(TIM5) = 0;
+    timer_disable_irq(TIM5, TIM_DIER_CC1IE);
+
+#if 0
+    /* Stop DMA engines */
+    timer_disable_oc_output(TIM2, TIM_OC1);
+    timer_disable_oc_output(TIM5, TIM_OC1);
 #endif
+
+    if (ee_mode == EE_MODE_32) {
         /*
-         * Not enough time! By the point that this loop is entered, OE has already
-         * gone high, so the address lines have already been released before we
-         * can drive WE high.
-         * The only option I can see is if DMA hardware can be set up to:
-         * 1) On OE=0, drive data output, then drive WE=0
-         * 1) On OE=1, drive WE=1, load next data, maybe load next data
-         *
-         * If WE from STM32 instead drives a FET gate which connects the external
-         * OE to WE, then we could have a k
+         * For 32-bit mode, we need to separate low and high 16 bits as
+         * they are driven out by separate DMA engines (TIM5 and TIM2).
          */
-        /* Wait for OE to go high */
-        for (count = 0; oe_input() == 0; count++) {
-            if (count > 100000) {
-                printf("OE timeout 1\n");
-                goto oe_reply_end;
+        uint pos;
+        if (hold_we) {
+            for (pos = 0; pos < len / 4; pos++) {
+                uint32_t val = ((uint32_t *)reply_buf)[pos];
+                buffer_txd_hi[pos] = val >> 16;
+                buffer_txd_lo[pos] = (uint16_t) val;
+            }
+        } else {
+            uint32_t crc;
+            for (pos = 0, count = 0; count < ARRAY_SIZE(sm_magic); pos++) {
+                buffer_txd_hi[pos] = sm_magic[count++];
+                buffer_txd_lo[pos] = sm_magic[count++];
+            }
+            buffer_txd_hi[pos] = len;
+            buffer_txd_lo[pos] = status;
+            pos++;
+            crc = crc32r(0, &len, 2);
+            crc = crc32r(crc, &status, 2);
+            crc = crc32(crc, reply_buf, len);
+            len /= tlen;
+            for (count = 0; count < len; count++, pos++) {
+                uint32_t val = ((uint32_t *)reply_buf)[count];
+                buffer_txd_hi[pos] = (val << 8)  | ((val >> 8) & 0x00ff);
+                buffer_txd_lo[pos] = (val >> 24) | ((val >> 8) & 0xff00);
+            }
+            buffer_txd_hi[pos] = crc >> 16;
+            buffer_txd_lo[pos] = (uint16_t) crc;
+            pos++;  // Include CRC
+        }
+
+        TIM5_SMCR = TIM_SMCR_ETP      | // falling edge detection
+                    TIM_SMCR_ECE;       // external clock mode 2 (ETR input)
+
+        /* TIM5 DMA drives low 16 bits */
+        dma_disable_channel(DMA2, DMA_CHANNEL5);  // TIM5
+        dma_set_peripheral_address(DMA2, DMA_CHANNEL5,
+                                   (uintptr_t) &GPIO_ODR(FLASH_D0_PORT));
+        dma_set_memory_address(DMA2, DMA_CHANNEL5, (uintptr_t)buffer_txd_lo);
+        dma_set_read_from_memory(DMA2, DMA_CHANNEL5);
+        dma_set_number_of_data(DMA2, DMA_CHANNEL5, pos + 1);
+        dma_set_peripheral_size(DMA2, DMA_CHANNEL5, DMA_CCR_PSIZE_16BIT);
+        dma_set_memory_size(DMA2, DMA_CHANNEL5, DMA_CCR_MSIZE_16BIT);
+        DMA_CCR(DMA2, DMA_CHANNEL5) &= ~DMA_CCR_CIRC;
+        dma_enable_channel(DMA2, DMA_CHANNEL5);
+
+        /* TIM2 DMA drives high 16 bits */
+        dma_disable_channel(DMA1, DMA_CHANNEL5);  // TIM2
+        dma_set_peripheral_address(DMA1, DMA_CHANNEL5,
+                                   (uintptr_t) &GPIO_ODR(FLASH_D16_PORT));
+        dma_set_memory_address(DMA1, DMA_CHANNEL5, (uintptr_t)buffer_txd_hi);
+        dma_set_read_from_memory(DMA1, DMA_CHANNEL5);
+        dma_set_number_of_data(DMA1, DMA_CHANNEL5, pos + 1);
+        dma_set_peripheral_size(DMA1, DMA_CHANNEL5, DMA_CCR_PSIZE_16BIT);
+        dma_set_memory_size(DMA1, DMA_CHANNEL5, DMA_CCR_MSIZE_16BIT);
+        DMA_CCR(DMA1, DMA_CHANNEL5) &= ~DMA_CCR_CIRC;
+        dma_enable_channel(DMA1, DMA_CHANNEL5);
+
+        /* Send out first data and enable capture */
+        disable_irq();
+        TIM2_EGR = TIM_EGR_CC1G;
+        TIM5_EGR = TIM_EGR_CC1G;
+        TIM_CCER(TIM2) = TIM_CCER_CC1E;  // Enable, rising edge
+        TIM_CCER(TIM5) = TIM_CCER_CC1E;  // Enable, rising edge
+        enable_irq();
+    } else {
+        /* For 16-bit mode, a single DMA engine can be used */
+        uint pos;
+        if (hold_we) {
+            memcpy((void *)buffer_txd_lo, reply_buf, len);
+            pos = len / 2;
+        } else {
+            uint32_t crc;
+            memcpy((void *)buffer_txd_lo, sm_magic, sizeof (sm_magic));
+            pos = sizeof (sm_magic);
+            buffer_txd_lo[pos++] = len;
+            buffer_txd_lo[pos++] = status;
+            crc = crc32r(0, &len, 2);
+            crc = crc32r(crc, &status, 2);
+            crc = crc32(crc, reply_buf, len);
+            if (len > 0) {
+                memcpy((void *)&buffer_txd_lo[pos], reply_buf, len);
+                pos += len / 2;
+            }
+            buffer_txd_lo[pos++] = crc >> 16;
+            buffer_txd_lo[pos++] = (uint16_t) crc;
+        }
+
+        TIM5_SMCR = TIM_SMCR_ETP      | // falling edge detection
+                    TIM_SMCR_ECE;       // external clock mode 2 (ETR input)
+
+        /* TIM5 DMA drives low 16 bits */
+        dma_disable_channel(DMA2, DMA_CHANNEL5);  // TIM5
+        dma_set_peripheral_address(DMA2, DMA_CHANNEL5,
+                                   (uintptr_t) &GPIO_ODR(FLASH_D0_PORT));
+        dma_set_memory_address(DMA2, DMA_CHANNEL5, (uintptr_t)buffer_txd_lo);
+        dma_set_read_from_memory(DMA2, DMA_CHANNEL5);
+        dma_set_number_of_data(DMA2, DMA_CHANNEL5, pos + 1);
+        dma_set_peripheral_size(DMA2, DMA_CHANNEL5, DMA_CCR_PSIZE_16BIT);
+        dma_set_memory_size(DMA2, DMA_CHANNEL5, DMA_CCR_MSIZE_16BIT);
+        DMA_CCR(DMA2, DMA_CHANNEL5) &= ~DMA_CCR_CIRC;
+        dma_enable_channel(DMA2, DMA_CHANNEL5);
+
+        dma_disable_channel(DMA1, DMA_CHANNEL5);  // TIM2
+
+        /* Send out first data and enable capture */
+        disable_irq();
+        TIM5_EGR = TIM_EGR_CC1G;
+        TIM_CCER(TIM5) = TIM_CCER_CC1E;  // Enable, rising edge
+        enable_irq();
+    }
+
+//  enable_oe_capture_tx();
+
+#ifdef CAPTURE_GPIOS
+    if (hold_we) {
+        count = gpio_watch();
+    } else {
+#endif
+    dma_last = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
+
+    while (dma_last != 0) {
+        dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
+        while (dma_last == dma_left) {
+            for (count = 0; dma_last == dma_left; count++) {
+                if (count > 100000) {
+                    printf(" KS timeout 0: %u reads left\n", dma_left);
+                    goto oe_reply_end;
+                }
+                __asm__ volatile("dmb");
+                dma_left = dma_get_number_of_data(DMA1, DMA_CHANNEL5);
             }
         }
-#ifdef MEASURE_OE_W
-        printf("%u,%u ", (unsigned int) (timer_tick_get() - start), count);
-#endif
+        dma_last = dma_left;
     }
+    timer_delay_ticks(ticks_per_200_nsec);
+    timer_delay_usec(1);  // probably not necessary
+#ifdef CAPTURE_GPIOS
+}
+#endif
+
 oe_reply_end:
-    oe_output_disable();
-    data_output_disable();
     if (hold_we) {
         oewe_output(0);
-        we_enable(1);      // Drive high
+#ifndef STM32_HARD_DRIVE_WE_ON_SHARED_WRITE
+        we_output(1);      // Pull up
+#endif
     }
+
+    data_output_disable();
+    oe_output_disable();
+
+    configure_oe_capture_rx(false);
+    timer_enable_irq(TIM5, TIM_DIER_CC1IE);
+    data_output(0xffffffff);    // Return to pull-up of data pins
+
+#ifdef CAPTURE_GPIOS
+    if (hold_we) {
+        gpio_showbuf(count);
+    }
+#endif
 }
 
 static void
-process_addresses(uint prod)
+execute_cmd(uint16_t cmd, uint16_t cmd_len)
 {
-    static uint cons = 0;
-    static uint magic_pos = 0;
+    uint cons_s;
+
+    switch ((uint8_t) cmd) {
+        case KS_CMD_NULL:
+            /* Do absolutely nothing (dscard command) */
+            break;
+        case KS_CMD_NOP:
+            /* Do nothing but reply */
+            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            break;
+        case KS_CMD_ID: {
+            /* Send Kickflash identification and configuration */
+            static const uint32_t reply[] = {
+                0x12091610,  // Matches USB ID
+                0x00000001,  // Protocol version 0.1
+                0x00000001,  // Features
+                0x00000000,  // Unused
+                0x00000000,  // Unused
+            };
+            ks_reply(0, sizeof (reply), &reply, KS_STATUS_OK);
+            break;  // End processing
+        }
+        case KS_CMD_TESTPATT: {
+            /* Send special data pattern (for test / diagnostic) */
+            static const uint32_t reply[] = {
+                0x54534554, 0x54544150, 0x53202d20, 0x54524154,
+                0xaaaa5555, 0xcccc3333, 0xeeee1111, 0x66669999,
+                0x00020001, 0x00080004, 0x00200010, 0x00800040,
+                0x02000100, 0x08000400, 0x20001000, 0x80004000,
+                0xfffdfffe, 0xfff7fffb, 0xffdfffef, 0xff7fffbf,
+                0xfdfffeff, 0xf7fffbff, 0xdfffefff, 0x7fffbfff,
+                0x54534554, 0x54544150, 0x444e4520, 0x68646320,
+            };
+            ks_reply(0, sizeof (reply), &reply, KS_STATUS_OK);
+            break;  // End processing
+        }
+        case KS_CMD_LOOPBACK: {
+            /* Send loopback data (for test / diagnostic) */
+            const uint we = cmd & KS_EEPROM_WE;
+            uint8_t *buf1;
+            uint8_t *buf2;
+            uint len1;
+            uint len2;
+            cons_s = rx_consumer;
+            if ((int) cons_s <= 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            if (cons_s * 2 >= cmd_len) {
+                /* Send data doesn't wrap */
+                len1 = cmd_len;
+                buf1 = ((uint8_t *) &buffer_rxa_lo[cons_s]) - len1;
+                ks_reply(we, len1, buf1, KS_STATUS_OK);
+                if (we) {
+                    uint pos;
+                    printf("we l=%x b=", len1);
+                    for (pos = 0; pos < len1 && pos < 10; pos++) {
+                        printf("%02x ", buf1[pos]);
+                    }
+                    printf("\n");
+                }
+            } else {
+                /* Send data from end and beginning of buffer */
+                len1 = cons_s * 2;
+                buf1 = (void *) buffer_rxa_lo;
+                len2 = cmd_len - len1;
+                buf2 = ((uint8_t *) buffer_rxa_lo) +
+                       sizeof (buffer_rxa_lo) - len2;
+                if (len2 != 0)
+                    ks_reply(we, len2, buf2, KS_STATUS_OK);
+                ks_reply(we, len1, buf1, KS_STATUS_OK);
+// XXX: This won't work. Maybe need to modify ks_reply() to handle
+//      two buffer pointers and lengths. A better option may be
+//      to give a flag to ks_reply() which says whether to not
+//      send header/do CRC. Then that can be used for the flash
+//      write.
+            }
+            break;  // End processing
+        }
+        case KS_CMD_ROMSEL: {
+            uint16_t bank;
+            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            bank = buffer_rxa_lo[cons_s];
+
+            if (cmd_len != 2) {
+                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                break;
+            }
+            ks_reply(0, 0, NULL, KS_STATUS_OK);
+printf("RS l=%u b=%04x\n", cmd_len, bank);
+//          ee_address_override(buffer_rxa_lo[cons_s] >> 8, 0);
+            break;
+        }
+        case KS_CMD_FLASH_READ: {
+            /* Send flash read array command */
+            uint32_t addr = SWAP32(0x00555);
+            ks_reply(0, sizeof (addr), &addr, KS_STATUS_OK);
+            if (ee_mode == EE_MODE_32) {
+                uint32_t data = 0x00f000f0;
+                ks_reply(1, sizeof (data), &data, 0);  // WE will be set
+            } else {
+                uint16_t data = 0x00f0;
+                ks_reply(1, sizeof (data), &data, 0);  // WE will be set
+            }
+            break;
+        }
+        case KS_CMD_FLASH_ID: {
+            /* Send flash sequence to put it in identify mode */
+            static const uint32_t addr[] = {
+                SWAP32(0x00555), SWAP32(0x002aa), SWAP32(0x00555)
+            };
+            ks_reply(0, sizeof (addr), &addr, KS_STATUS_OK);
+            if (ee_mode == EE_MODE_32) {
+                static const uint32_t data32[] = {
+                    0x00aa00aa, 0x00550055, 0x00900090
+                };
+                ks_reply(1, sizeof (data32), &data32, 0);  // WE will be set
+            } else {
+                static const uint16_t data16[] = {
+                    0x00aa, 0x0055, 0x0090
+                };
+                ks_reply(1, sizeof (data16), &data16, 0);  // WE will be set
+            }
+            break;
+        }
+        case KS_CMD_BANK_INFO:
+            /* Get bank info */
+            ks_reply(0, sizeof (config.bi), &config.bi, KS_STATUS_OK);
+            break;
+        case KS_CMD_BANK_SET: {
+            /* Set ROM bank (options in high bits of command) */
+            uint16_t bank;
+            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            bank = buffer_rxa_lo[cons_s];
+
+            if (cmd_len != 2) {
+                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                break;
+            }
+            if (bank >= ROM_BANKS) {
+                ks_reply(0, 0, NULL, KS_STATUS_BADARG);
+                break;
+            }
+            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            if (cmd & KS_BANK_SETCURRENT) {
+                ee_set_bank(bank);
+            }
+            if (cmd & KS_BANK_SETRESET) {
+                config.bi.bi_bank_nextreset = bank;
+            }
+            if (cmd & KS_BANK_SETPOWERON) {
+                config.bi.bi_bank_poweron = bank;
+                config_updated();
+            }
+            if (cmd & KS_BANK_REBOOT) {
+                kbrst_amiga(0, 0);
+            }
+            break;
+        }
+        case KS_CMD_BANK_MERGE: {
+            /* Merge or unmerge multiple ROM banks */
+            uint     bank;
+            uint8_t  bank_start;  // first bank number
+            uint8_t  bank_end;    // last bank number
+            uint     banks_add;   // additional banks past first
+            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            bank = buffer_rxa_lo[cons_s];
+
+            if (cmd_len != 2) {
+                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                break;
+            }
+            bank_start = (uint8_t) bank;
+            bank_end   = bank >> 8;
+            banks_add  = bank_end - bank_start;
+
+            /*
+             * Bank range must be within 0 to max bank.
+             * Bank sizes must be a power of 2 (1, 2, 4, 8).
+             * Two-bank ranges must start with an even bank number.
+             * Four-bank ranges must start with either bank 0 or 4.
+             * Eight-bank ranges must start with bank 0.
+             */
+            if ((bank_start > bank_end) || (bank_end >= ROM_BANKS) ||
+                ((banks_add != 0) && (banks_add != 1) &&
+                 (banks_add != 3) && (banks_add != 7)) ||
+                ((banks_add == 1) && (bank_start & 1)) ||
+                ((banks_add == 3) && (bank_start != 0) && (bank_start != 4)) ||
+                ((banks_add == 7) && (bank_start != 0))) {
+                ks_reply(0, 0, NULL, KS_STATUS_BADARG);
+                break;
+            }
+            for (bank = bank_start; bank <= bank_end; bank++) {
+                if ((((cmd & KS_BANK_UNMERGE) == 0) &&
+                     (config.bi.bi_merge[bank] != 0)) ||
+                    (((cmd & KS_BANK_UNMERGE) != 0) &&
+                     (config.bi.bi_merge[bank] == 0))) {
+                    break;  // Stop early -- invalid bank choice
+                }
+            }
+            if (bank < bank_end) {
+                ks_reply(0, 0, NULL, KS_STATUS_FAIL);
+                break;
+            }
+            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            for (bank = bank_start; bank <= bank_end; bank++) {
+                if (cmd & KS_BANK_UNMERGE) {
+                    config.bi.bi_merge[bank] = 0;
+                } else {
+                    config.bi.bi_merge[bank] = (banks_add << 4) |
+                                               (bank - bank_start);
+                }
+            }
+            config_updated();
+            break;
+        }
+        case KS_CMD_BANK_COMMENT: {
+            /* Add comment (description) to the specified bank */
+            uint16_t bank;
+            uint     slen;
+            uint     pos = 0;
+            uint8_t *ptr;
+            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            bank = buffer_rxa_lo[cons_s];
+            slen = cmd_len - 2;
+            if (bank >= ROM_BANKS) {
+                ks_reply(0, 0, NULL, KS_STATUS_BADARG);
+                break;
+            }
+            if (slen > sizeof (config.bi.bi_desc[0])) {
+                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                break;
+            }
+            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            while (slen > 0) {
+                if (++cons_s >= ARRAY_SIZE(buffer_rxa_lo))
+                    cons_s = 0;
+                ptr = (uint8_t *) &buffer_rxa_lo[cons_s];
+                config.bi.bi_desc[bank][pos++] = ptr[1];
+                config.bi.bi_desc[bank][pos++] = ptr[0];
+
+                if (slen == 1)
+                    slen = 0;
+                else
+                    slen -= 2;
+            }
+            config_updated();
+            break;
+        }
+        case KS_CMD_BANK_LRESET: {
+            /* Update long reset sequence of banks */
+            uint    bank;
+            uint8_t banks[ROM_BANKS];
+
+            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            if (cmd_len != sizeof (config.bi.bi_longreset_seq)) {
+                /*
+                 * All bytes of sequence must be specified.
+                 * Unused sequence bytes at the end are 0xff.
+                 */
+                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                break;
+            }
+            for (bank = 0; bank < ROM_BANKS; bank += 2) {
+                banks[bank + 0] = buffer_rxa_lo[cons_s] >> 8;
+                banks[bank + 1] = (uint8_t) buffer_rxa_lo[cons_s];
+                if (++cons_s >= ARRAY_SIZE(buffer_rxa_lo))
+                    cons_s = 0;
+            }
+            for (bank = 0; bank < ROM_BANKS; bank++) {
+                if ((banks[bank] >= ROM_BANKS) && (banks[bank] != 0xff))
+                    break;  // Invalid position
+                if ((config.bi.bi_merge[banks[bank]] & 0x0f) != 0)
+                    break;  // Not start of bank
+            }
+            if (bank < ROM_BANKS) {
+                ks_reply(0, 0, NULL, KS_STATUS_BADARG);
+                break;
+            }
+            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            memcpy(config.bi.bi_longreset_seq, banks, ROM_BANKS);
+            config_updated();
+            break;
+        }
+        default:
+            /* Unknown command */
+            ks_reply(0, 0, NULL, KS_STATUS_UNKCMD);
+            printf("KS cmd %x?\n", cmd);
+            break;
+    }
+}
+
+/*
+ * process_addresses
+ * -----------------
+ * Walk the ring of captured ROM addresses to detect and act upon commands
+ * from the running operating system. This routine is called from interrupt
+ * context.
+ */
+static inline void
+process_addresses(void)
+{
+    static uint     magic_pos = 0;
+    static uint     crc_pos = 0;
     static uint16_t len = 0;
     static uint16_t cmd = 0;
     static uint16_t cmd_len = 0;
     static uint32_t crc;
-    if (prod >= ARRAY_SIZE(addr_buffer_lo))
-        return;
-    while (cons != prod) {
-//      printf(" %x:%04x", cons, addr_buffer_lo[cons]);
-        if (magic_pos++ < ARRAY_SIZE(ks_magic)) {
+    static uint32_t crc_rx;
+    uint            start_wrap = consumer_wrap;
+    uint            dma_left;
+    uint            prod;
+
+new_cmd:
+    dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER, LOG_DMA_CHANNEL);
+    prod     = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
+
+    while (rx_consumer != prod) {
+        if (magic_pos == 0) {
+            /* Special case to speed up skip of non-matches */
+            if (buffer_rxa_lo[rx_consumer] != sm_magic[0])
+                goto no_match;
+            magic_pos++;
+        } else if (magic_pos++ < ARRAY_SIZE(sm_magic)) {
             /* Magic phase */
-            if (addr_buffer_lo[cons] != ks_magic[magic_pos - 1])
+            if (buffer_rxa_lo[rx_consumer] != sm_magic[magic_pos - 1])
                 magic_pos = 0;  // No match
-        } else if (magic_pos == ARRAY_SIZE(ks_magic) + 1) {
-            /* Command phase */
-            cmd = addr_buffer_lo[cons];
-//          printf("cmd=%x\n", cmd);
-            switch ((uint8_t) cmd) {
-                case KS_CMD_ID: {
-                    static const uint32_t reply[] = {
-                        0x12091610,  // Matches USB ID
-                        0x00000001,  // Protocol version 0.1
-                        0x00000001,  // Features
-                        0x00000000,  // Unused
-                        0x00000000,  // Unused
-                    };
-                    oe_reply(0, sizeof (reply), &reply);
-                    magic_pos = 0;
-                    break;
-                }
-                case KS_CMD_TESTPATT: {  // Test pattern used to verify link
-                    static const uint32_t reply[] = {
-                        0x54534554, 0x54544150, 0x53202d20, 0x54524154,
-                        0xaaaa5555, 0xcccc3333, 0xeeee1111, 0x66669999,
-                        0x00020001, 0x00080004, 0x00200010, 0x00800040,
-                        0x02000100, 0x08000400, 0x20001000, 0x80004000,
-                        0xfffdfffe, 0xfff7fffb, 0xffdfffef, 0xff7fffbf,
-                        0xfdfffeff, 0xf7fffbff, 0xdfffefff, 0x7fffbfff,
-                        0x54534554, 0x54544150, 0x444e4520, 0x68646320,
-                    };
-                    oe_reply(0, sizeof (reply), &reply);
-                    magic_pos = 0;
-                    printf("TP\n");
-                    break;
-                }
-                case KS_CMD_LOOPBACK:
-                case KS_CMD_EEPROM:
-                case KS_CMD_ROMSEL:
-                    break;
-                case KS_CMD_NOP:
-                    magic_pos = 0;  // Do nothing
-                    break;
-                default:
-                    printf("Unknown cmd %x\n", cmd);
-                    magic_pos = 0;  // Unknown command
-                    break;
-            }
-            crc = crc32(0, (void *) &addr_buffer_lo[cons], sizeof (uint16_t));
-        } else if (magic_pos == ARRAY_SIZE(ks_magic) + 2) {
+        } else if (magic_pos == ARRAY_SIZE(sm_magic) + 1) {
             /* Length phase */
-            len = cmd_len = addr_buffer_lo[cons];
-            crc = crc32(crc, (void *) &addr_buffer_lo[cons], sizeof (uint16_t));
-        } else if (len-- > 0) {
-            /* Data in phase */
-            if (len == 0) {
-                crc = crc32(crc, (void *) &addr_buffer_lo[cons], 1);
-            } else {
+            message_count++;
+            len = cmd_len = buffer_rxa_lo[rx_consumer];
+            crc = crc32r(0, &len, sizeof (uint16_t));
+            crc_pos = 0;
+        } else if (magic_pos == ARRAY_SIZE(sm_magic) + 2) {
+            /* Command phase */
+            cmd = buffer_rxa_lo[rx_consumer];
+            crc = crc32r(crc, &cmd, sizeof (uint16_t));
+        } else if (len != 0) {
+            /* Data phase */
+            len--;
+            if (len != 0) {
+                crc = crc32r(crc, (void *) &buffer_rxa_lo[rx_consumer], 2);
                 len--;
-                crc = crc32(crc, (void *) &addr_buffer_lo[cons], 2);
+            } else {
+                /* Special case -- odd byte at end */
+                crc = crc32(crc, (void *) &buffer_rxa_lo[rx_consumer], 1);
             }
-        } else if ((uint16_t) crc != addr_buffer_lo[cons]) {
-            /* CRC failed */
-            uint16_t error[2];
-            error[0] = KS_STATUS_CRC;
-            error[1] = crc;
-            oe_reply(0, sizeof (error), &error);
-printf("c=%04x l=%02x CRC %04x != exp %04x %x %x\n", cmd, cmd_len, addr_buffer_lo[cons], (uint16_t)crc, (uint16_t)crc << 1, (uint16_t)crc << 2);
-            magic_pos = 0;  // Unknown command
+        } else if (crc_pos < 2) {
+            if (crc_pos == 0) {
+                crc_rx = buffer_rxa_lo[rx_consumer] << 16;
+            } else {
+                crc_rx |= buffer_rxa_lo[rx_consumer];
+                if (crc_rx != crc) {
+                    uint16_t error[2];
+                    error[0] = KS_STATUS_CRC;
+                    error[1] = crc;
+                    ks_reply(0, sizeof (error), &error, KS_STATUS_CRC);
+                    magic_pos = 0;  // Reset magic sequencer
+                    printf("cmd=%x l=%04x CRC %08lx != calc %08lx\n",
+                           cmd, cmd_len, crc_rx, crc);
+                    return;
+                }
+
+                /* Execution phase */
+                execute_cmd(cmd, cmd_len);
+                magic_pos = 0;  // Restart magic detection
+                goto new_cmd;
+            }
+            crc_pos++;
         } else {
-            /* Execution phase */
-            switch ((uint8_t) cmd) {
-                case KS_CMD_LOOPBACK:
-                case KS_CMD_EEPROM: {
-                    const uint we = cmd & KS_EEPROM_WE;
-                    uint8_t *buf1;
-                    uint8_t *buf2;
-                    uint len1;
-                    uint len2;
-                    uint cons_s = cons;
-                    if ((int) cons_s <= 0)
-                        cons_s += ARRAY_SIZE(addr_buffer_lo);
-                    if (cons_s * 2 >= cmd_len) {
-                        /* Send data doesn't wrap */
-                        len1 = cmd_len;
-                        buf1 = ((uint8_t *) &addr_buffer_lo[cons_s]) - len1;
-                        oe_reply(we, len1, buf1);
-                        if (we) {
-                            uint pos;
-                            printf("we l=%x b=", len1);
-                            for (pos = 0; pos < len1 && pos < 10; pos++) {
-                                printf("%02x ", buf1[pos]);
-                            }
-                            printf("\n");
-                        }
-                    } else {
-                        /* Send data from end and beginning of buffer */
-                        len1 = cons_s * 2;
-                        buf1 = (void *) addr_buffer_lo;
-                        len2 = cmd_len - len1;
-                        buf2 = ((uint8_t *) addr_buffer_lo) +
-                               sizeof (addr_buffer_lo) - len2;
-                        if (len2 != 0)
-                            oe_reply(we, len2, buf2);
-                        oe_reply(we, len1, buf1);
-                    }
-                    break;
-                }
-                case KS_CMD_ROMSEL: {
-                    uint16_t status = KS_STATUS_OK;
-                    uint cons_s = cons - 1;
-                    if ((int) cons_s <= 0)
-                        cons_s += ARRAY_SIZE(addr_buffer_lo);
-printf("RS %04x %04x ", addr_buffer_lo[cons_s], addr_buffer_lo[cons_s + 1]);
-                    oe_reply(0, sizeof (status), &status);
-                    ee_address_override(addr_buffer_lo[cons_s] >> 8, 1);
-                    break;
-                }
-                default:
-                    magic_pos = 0;  // Unknown command
-                    break;
-            }
-            magic_pos = 0;  // Unknown command
+            /* Should not get here */
+            printf("?");
+            magic_pos = 0;  // Restart magic detection
+            goto new_cmd;
         }
-        if (++cons >= ARRAY_SIZE(addr_buffer_lo))
-            cons = 0;
+no_match:
+        if (++rx_consumer == ARRAY_SIZE(buffer_rxa_lo)) {
+            rx_consumer = 0;
+            consumer_wrap++;
+
+            if (consumer_wrap - start_wrap > 10) {
+                /*
+                 * Spinning too much in interrupt context.
+                 * Disable interrupt -- it will get re-enabled in ee_poll().
+                 */
+                timer_disable_irq(TIM5, TIM_DIER_CC1IE);
+                return;
+            }
+        }
     }
+    dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER, LOG_DMA_CHANNEL);
+    prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
+    if (rx_consumer != prod)
+        goto new_cmd;
 }
 
 void
 tim5_isr(void)
 {
-    uint dma_left;
-    uint producer;
+#if 0
     uint flags = TIM_SR(TIM5) & TIM_DIER(TIM5);
     TIM_SR(TIM5) = ~flags;  /* Clear interrupt */
+#else
+    TIM_SR(TIM5) = 0;  /* Clear all TIM5 interrupt status */
+#endif
 
-    dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
-    producer = ARRAY_SIZE(addr_buffer_lo) - dma_left;
-    process_addresses(producer);
+    process_addresses();
 }
 
 static void
@@ -1765,11 +2243,7 @@ config_dma(uint32_t dma, uint32_t channel, uint to_periph, uint mode,
             break;
     }
     dma_enable_circular_mode(dma, channel);
-    dma_set_priority(dma, channel, DMA_CCR_PL_MEDIUM);
-
-    dma_disable_transfer_error_interrupt(dma, channel);
-    dma_disable_half_transfer_interrupt(dma, channel);
-    dma_disable_transfer_complete_interrupt(dma, channel);
+    dma_set_priority(dma, channel, DMA_CCR_PL_VERY_HIGH);
 
     dma_enable_channel(dma, channel);
 }
@@ -1777,31 +2251,16 @@ config_dma(uint32_t dma, uint32_t channel, uint to_periph, uint mode,
 static void
 config_tim5_ch1_dma(bool verbose)
 {
-    /* Capture address when OE goes low */
-    memset((void *) addr_buffer_lo, 0, sizeof (addr_buffer_lo));
     if (verbose) {
-        printf("Addr lo capture %08x (t5c1) 16-bit\n",
-               (uintptr_t) addr_buffer_lo);
+        memset((void *) buffer_rxa_lo, 0, sizeof (buffer_rxa_lo));
+//      printf("Addr lo capture %08x (t5c1) 16-bit\n",
+//             (uintptr_t) buffer_rxa_lo);
     }
 
     /* DMA from address GPIOs A0-A15 to memory */
     config_dma(DMA2, DMA_CHANNEL5, 0, 16,
                &GPIO_IDR(SOCKET_A0_PORT),
-               addr_buffer_lo, ADDR_BUF_COUNT);
-
-#if 0
-    /*
-     * Can't use DMA interrupt because that only occurs when the
-     * DMA buffer has wrapped.
-     */
-    dma_clear_interrupt_flags(dma, channel,
-                              get_dma_interrupt_flags(dma, channel));
-    dma_disable_transfer_error_interrupt(dma, channel);
-    dma_disable_half_transfer_interrupt(dma, channel);
-    dma_enable_transfer_complete_interrupt(dma, channel);
-    printf("DMA2_ISR = %p\n", &DMA2_ISR);
-    printf("DMA2_CCR(5) = %p\n", &DMA2_CCR(channel));
-#endif
+               buffer_rxa_lo, ADDR_BUF_COUNT);
 
     /* Set up TIM5 CH1 to trigger DMA based on external PA0 pin */
     timer_disable_oc_output(TIM5, TIM_OC1);
@@ -1811,76 +2270,186 @@ config_tim5_ch1_dma(bool verbose)
 
     timer_set_ti1_ch1(TIM5);               // Capture input from channel 1 only
 
-//  timer_continuous_mode(TIM5);
     timer_set_oc_polarity_low(TIM5, TIM_OC1);
     timer_set_oc_value(TIM5, TIM_OC1, 0);
 
-    /* Select the Input and set the filter */
+    /* Select the Input and set the filter off */
     TIM5_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
     TIM5_CCMR1 |= TIM_CCMR1_CC1S_IN_TI1 | TIM_CCMR1_IC1F_OFF;
-    TIM5_SMCR = TIM_SMCR_ETP      | // falling edge detection
-                TIM_SMCR_ECE;       // external clock mode 2 (ETR input)
 
-    timer_enable_oc_output(TIM5, TIM_OC1);
+    TIM5_SMCR = TIM_SMCR_ECE;       // external clock mode 2 (ETR input)
+
+    /*
+     * TIM5
+     * PA0  TIM5_CH1      Filter    Polarity   Trigger  Clock
+     *      CC1S_IN_TI1   IC1F_OFF  CCER_CC1P  TI1FP1   ECE
+     *                    None      High       TI1      ETR(2)
+     *
+     * TIM2
+     * PA0  TIM2_CH1_ETR  Filter    Polarity   Trigger  Clock
+     *      CC1S_IN_TI1   IC1F_OFF  !CCER_CC1P          ECE
+     *                    None      Low                 ETR(2)
+     *
+     * TIM3
+     *                            ITR1|ITR2    ECM1
+     *
+     * Ext clock mode 1 = external input pin (TIx)
+     * Ext clock mode 2 = external trigger input (ETR)
+     */
+
+//  timer_enable_oc_output(TIM5, TIM_OC1);
 }
 
 static void
-config_tim2_ch1_dma(uint mode)
+config_tim2_ch1_dma(bool verbose)
 {
-    capture_mode = mode;
+    volatile void *src;
 
-    /* Set up DMA Write to TIM5 Event Generation register */
-    memset((void *) tim2_buffer, 0, sizeof (tim2_buffer));
-    if (mode == CAPTURE_ADDR) {
-        printf("Addr hi capture %08x (t2c1) 8-bit\n",
-               (uintptr_t) addr_buffer_hi);
-        /* Byte-wide DMA from address GPIOs A16-A19 to memory */
-        config_dma(DMA1, DMA_CHANNEL5, 0, 8,
-                   &GPIO_IDR(SOCKET_A16_PORT),
-                   addr_buffer_hi, ADDR_BUF_COUNT);
-    } else if (mode == CAPTURE_DATA_LO) {
-        /* Word-wide DMA from data GPIOs D0-D15 to memory */
-        config_dma(DMA1, DMA_CHANNEL5, 0, 16,
-                   &GPIO_IDR(FLASH_D0_PORT), tim2_buffer, ADDR_BUF_COUNT);
-    } else if (mode == CAPTURE_DATA_HI) {
-        /* Word-wide DMA from data GPIOs D16-D31 to memory */
-        config_dma(DMA1, DMA_CHANNEL5, 0, 16,
-                   &GPIO_IDR(FLASH_D16_PORT), tim2_buffer, ADDR_BUF_COUNT);
+    if (verbose) {
+        memset((void *) buffer_rxd, 0, sizeof (buffer_rxd));
+//      printf("Addr hi capture %08x (t2c1) 16-bit\n",
+//             (uintptr_t) buffer_rxd);
     }
 
     timer_disable_oc_output(TIM2, TIM_OC1);
+
+    /* Word-wide DMA from data GPIOs D0-D15 to memory */
+    switch (capture_mode) {
+        default:
+        case CAPTURE_ADDR:
+            src = &GPIO_IDR(SOCKET_A16_PORT);
+            break;
+        case CAPTURE_DATA_LO:
+            src = &GPIO_IDR(FLASH_D0_PORT);
+            break;
+        case CAPTURE_DATA_HI:
+            src = &GPIO_IDR(FLASH_D16_PORT);
+            break;
+    }
+    config_dma(DMA1, DMA_CHANNEL5, 0, 16, src, buffer_rxd, ADDR_BUF_COUNT);
+
     timer_set_ti1_ch1(TIM2);        // Capture input from channel 1 only
 
-    if (mode == CAPTURE_ADDR) {
+    if (capture_mode == CAPTURE_ADDR)
         timer_set_oc_polarity_low(TIM2, TIM_OC1);
-    } else {
+    else
         timer_set_oc_polarity_high(TIM2, TIM_OC1);
-    }
 
-    /* Select the Input and set the filter */
+    /* Select the Input and set the filter off */
     TIM2_CCMR1 &= ~(TIM_CCMR1_CC1S_MASK | TIM_CCMR1_IC1F_MASK);
     TIM2_CCMR1 |= TIM_CCMR1_CC1S_IN_TI1 | TIM_CCMR1_IC1F_OFF;
 
-    timer_enable_oc_output(TIM2, TIM_OC1);
-
-    TIM2_SMCR = TIM_SMCR_ETP      | // falling edge detection
+    TIM2_SMCR = // TIM_SMCR_ETP      | // falling edge detection
                 TIM_SMCR_ECE      | // external clock mode 2 (ETR input)
                 TIM_SMCR_ETPS_OFF | // no prescaler
                 TIM_SMCR_ETF_OFF;   // no filter
     TIM2_DIER = 0;
     timer_enable_irq(TIM2, TIM_DIER_CC1DE); // DMA on capture/compare event
 
-/*
- * Enable the following only if I want updates at every wrap of the counter,
- * and that only works if the max value is at least 1.
- *      timer_set_dma_on_update_event(TIM2);   // DMA on update event occurs
- *      TIM2_DIER |= TIM_DIER_UDE;             // DMA on update event
- * This seems to limit DMA on all channels except the trigger channel
- */
     timer_set_dma_on_compare_event(TIM2);  // DMA on CCx event occurs
+}
 
-//  timer_generate_event(TIM2, TIM_EGR_TG); // Generate fake Trigger event
-//  timer_generate_event(TIM2, TIM_EGR_UG); // Generate fake Update event
+void
+ee_snoop(uint mode)
+{
+    uint     last_oe = 1;
+    uint     count = 0;
+    uint     cons = 0;
+    uint     prod = 0;
+    uint     oprod = 0;
+    uint     no_data = 0;
+    uint32_t cap_addr[32];
+    uint32_t cap_data[32];
+
+    if (mode != CAPTURE_SW)
+        printf("Press any key to exit\n");
+
+    address_output_disable();
+    if (mode != CAPTURE_SW) {
+        /* Use hardware DMA for capture */
+        uint dma_left;
+        capture_mode = mode;
+        configure_oe_capture_rx(false);
+        dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER, LOG_DMA_CHANNEL);
+        prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
+        if (prod > ARRAY_SIZE(buffer_rxa_lo))
+            prod = 0;
+        cons = prod;
+
+        while (1) {
+            if (((count++ & 0xff) == 0) && getchar() > 0)
+                break;
+            dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER,
+                                              LOG_DMA_CHANNEL);
+            prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
+            if (prod > ARRAY_SIZE(buffer_rxa_lo))
+                prod = 0;
+            if (cons != prod) {
+                while (cons != prod) {
+                    uint addr = buffer_rxa_lo[cons];
+                    uint data = buffer_rxd[cons];
+                    if (mode == CAPTURE_ADDR) {
+                        addr |= ((data & 0xf0) << (16 - 4));
+                        printf(" %05x", addr);
+                    } else {
+                        printf(" %04x[%04x]", addr, data);
+                    }
+                    cons++;
+                    if (cons >= ARRAY_SIZE(buffer_rxa_lo))
+                        cons = 0;
+                }
+                printf("\n");
+            }
+        }
+        return;
+    }
+
+    timer_disable_irq(TIM5, TIM_DIER_CC1IE);
+    while (1) {
+        if (oe_input() == 0) {
+            /* Capture address on falling edge of OE */
+            if (last_oe == 1) {
+                uint32_t addr = address_input();
+                uint nprod = prod + 1;
+                if (nprod >= ARRAY_SIZE(cap_addr))
+                    nprod = 0;
+                if (nprod != cons) {
+                    /* FIFO has space, capture address */
+                    cap_addr[prod] = addr;
+                    oprod = prod;
+                    prod = nprod;
+                    no_data = 0;
+                    continue;
+                }
+                last_oe = 0;
+            }
+            continue;
+        } else {
+            /* Capture data on rising edge of OE */
+            if (last_oe == 0) {
+                cap_data[oprod] = data_input();
+                last_oe = 1;
+                continue;
+            }
+        }
+        if ((no_data++ & 0x1ff) != 0)
+            continue;
+        if (cons != prod) {
+            while (cons != prod) {
+                printf(" %lx[%08lx]", cap_addr[cons], cap_data[cons]);
+                if (++cons >= ARRAY_SIZE(cap_addr))
+                    cons = 0;
+            }
+            printf("\n");
+        }
+        if ((no_data & 0xffff) != 1)
+            continue;
+        if (getchar() > 0)
+            break;
+        no_data = 0;
+    }
+    timer_enable_irq(TIM5, TIM_DIER_CC1IE);
+    printf("\n");
 }
 
 int
@@ -1890,24 +2459,46 @@ address_log_replay(uint max)
     uint prod;
     uint cons;
     uint addr;
+    uint data;
     uint count = 0;
+#if 0
     uint flags = TIM_SR(TIM5) & TIM_DIER(TIM5);
     TIM_SR(TIM5) = ~flags;  /* Clear interrupt */
+#endif
 
-    dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
-    prod = ARRAY_SIZE(addr_buffer_lo) - dma_left;
-    process_addresses(prod);
+    dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER, LOG_DMA_CHANNEL);
+    prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
 
-    if (prod >= ARRAY_SIZE(addr_buffer_lo)) {
-        printf("Invalid producer\n");
+    if (prod >= ARRAY_SIZE(buffer_rxa_lo)) {
+        printf("Invalid producer=%x left=%x\n", prod, dma_left);
         return (1);
     }
-    if (max > ARRAY_SIZE(addr_buffer_lo) - 1)
-        max = ARRAY_SIZE(addr_buffer_lo) - 1;
+    if (max >= 999) {
+        printf("T2C1=%04x %08x\n"
+               "T5C1=%04x %08x\n"
+               "Wrap=%u\n"
+               "Msgs=%u\n",
+               (uint) DMA_CNDTR(DMA1, DMA_CHANNEL5), (uintptr_t)buffer_rxd,
+               (uint) DMA_CNDTR(DMA2, DMA_CHANNEL5), (uintptr_t)buffer_rxa_lo,
+               consumer_wrap, message_count);
+        message_count = 0;
+        return (0);
+    }
+    if (max > ARRAY_SIZE(buffer_rxa_lo) - 1)
+        max = ARRAY_SIZE(buffer_rxa_lo) - 1;
 
     cons = prod - max;
-    if (cons >= ARRAY_SIZE(addr_buffer_lo))
-        cons += ARRAY_SIZE(addr_buffer_lo);  // Unsigned negative wrap
+    if (cons >= ARRAY_SIZE(buffer_rxa_lo)) {
+        if (consumer_wrap == 0) {
+            cons = 0;
+            if (prod == 0) {
+                printf("No log entries\n");
+                return (1);
+            }
+        } else {
+            cons += ARRAY_SIZE(buffer_rxa_lo);  // Fix negative wrap
+        }
+    }
 
     printf("Ent ROMAddr AmigaAddr");
     if (capture_mode == CAPTURE_DATA_LO)
@@ -1917,17 +2508,18 @@ address_log_replay(uint max)
     printf("\n");
 
     while (cons != prod) {
-        addr = addr_buffer_lo[cons];
-        if (capture_mode == CAPTURE_ADDR)
-            addr |= ((addr_buffer_hi[cons] & 0xf0) << 16);
-        printf("%3u %05x   %06x", cons,
-               addr, (ee_mode == EE_MODE_32) ? (addr << 2) : (addr << 1));
-        if ((capture_mode == CAPTURE_DATA_LO) ||
-            (capture_mode == CAPTURE_DATA_HI))
-            printf("    %04x", tim2_buffer[cons]);
-        printf("\n");
+        addr = buffer_rxa_lo[cons];
+        data = buffer_rxd[cons];
+        if (capture_mode == CAPTURE_ADDR) {
+            addr |= ((data & 0xf0) << (16 - 4));
+            printf("%3u %05x   %05x\n", cons, addr,
+                   (ee_mode == EE_MODE_32) ? (addr << 2) : (addr << 1));
+        } else {
+            printf("%3u _%04x   %05x     %04x\n", cons, addr,
+                   (ee_mode == EE_MODE_32) ? (addr << 2) : (addr << 1), data);
+        }
         cons++;
-        if (cons >= ARRAY_SIZE(addr_buffer_lo))
+        if (cons >= ARRAY_SIZE(buffer_rxa_lo))
             cons = 0;
         if (count++ > max) {
             printf("bug: count=%u cons=%x prod=%x\n", count, cons, prod);
@@ -1982,10 +2574,9 @@ ee_init(void)
      * DMA1 Channel 1 used by ADC1
      * DMA1 Channel 5 used by TIM2_TRG (ROM OE DMA from ext pin)
      * DMA2 Channel 5 used by TIM5_CH1 (ROM OE DMA from ext pin)
+     * DMA2 Channel 6 used by TIM3     (slave of TIM2 or TIM5)
      *
      * Only one channel may be active per stream.
-     *
-     * TIM5 CH1 is input trigger for OE
      */
 
     /*
@@ -2024,33 +2615,26 @@ ee_init(void)
     rcc_periph_clock_enable(RCC_DMA1);
     rcc_periph_clock_enable(RCC_DMA2);
 
+    rcc_periph_clock_enable(RCC_TIM2);
     rcc_periph_clock_enable(RCC_TIM5);
-    rcc_periph_reset_pulse(RST_TIM5);
-//  timer_set_period(TIM5, 0xffff);
 
-    timer_clear_flag(TIM5, TIM_SR(TIM5) & TIM_DIER(TIM5));
+    rcc_periph_reset_pulse(RST_TIM2);
+    rcc_periph_reset_pulse(RST_TIM5);
+
+//  timer_clear_flag(TIM5, TIM_SR(TIM5) & TIM_DIER(TIM5));
     nvic_set_priority(NVIC_TIM5_IRQ, 0x20);
     nvic_enable_irq(NVIC_TIM5_IRQ);
 
-    rcc_periph_clock_enable(RCC_TIM2);
-    rcc_periph_reset_pulse(RST_TIM2);
-//  timer_set_period(TIM2, 0x0001);
-
-    config_tim2_ch1_dma(CAPTURE_ADDR);  // PA0 to TIM2_TRIG (CH1)
-    config_tim5_ch1_dma(true);          // PA0 to TIM5 CC1
-
-    timer_enable_irq(TIM2, TIM_DIER_TDE);
-    timer_enable_irq(TIM5, TIM_DIER_TDE);
-
-//  timer_enable_counter(TIM5);
-//  timer_enable_counter(TIM2);
+    capture_mode = CAPTURE_ADDR;
+    configure_oe_capture_rx(true);
 
     ticks_per_15_nsec  = timer_nsec_to_tick(15);
     ticks_per_20_nsec  = timer_nsec_to_tick(20);
     ticks_per_30_nsec  = timer_nsec_to_tick(30);
+    ticks_per_200_nsec = timer_nsec_to_tick(200);
 
-    /* These values for bank override should come from NVRAM */
-    ee_address_override(0x5, 0x1);
+    /* XXX: These values for bank override should come from NVRAM */
+    ee_address_override(0x7, 0);
 
-    update_ee_cmd_mask();
+    ee_set_mode(ee_mode);
 }

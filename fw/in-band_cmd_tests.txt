@@ -1,5 +1,16 @@
+Magic pattern test (vid MXPROG)
+    dwn prom 22e 1;dwn prom 232 1;dwn prom 202e 1;dwn prom 408 1; dwn prom 0 1;dwn prom 6 1;dwn prom 1a86 1;dwn prom 4db2 1;dw prom 0 10
+
+
+Put flash in ID mode (not currently working)
+    dwn prom 22e 1;dwn prom 232 1;dwn prom 202e 1;dwn prom 408 1; dwn prom 0 1;dwn prom e 1;dwn prom 3c8e 1;dwn prom a00a 1
+    dwn prom 0 24;dwn prom aaa 1;dwn prom 554 1;dwn prom aaa 1;dw prom 0 30
+
+
+Older tests below are no longer valid
+--------------------------------------------------------------------------
 Magic pattern test
-    dnw prom 22 1;dwn prom 4 1;dw prom 1234 80
+    dwn prom 464 1;dwn prom 65c0 1;dwn prom 4 1;dw prom 1234 80
     // 0x0022 First access is magic pattern (just a single address for now)
     // 0x0004 Second access is command << 1
     // 0x1234 is any address -- reply message is sent in order

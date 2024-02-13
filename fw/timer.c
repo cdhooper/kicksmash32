@@ -24,8 +24,9 @@
  * STM32F1 timer usage
  *   TIM4 - bits 16-31 of tick timer (bits 32-63 are in global timer_high)
  *   TIM1 - bits 0-15 of tick timer, OVF trigger to TIM4
- *   TIM5 CH1 - ROM OE (PA0) trigger to DMA2 CH5 capture of address
- *   TIM2 CH1 - ROM OE (PA0) trigger to DMA1 CH5 capture of address
+ *   TIM5 CH1 - ROM OE (PA0) trigger to DMA2 CH5 capture of address lo
+ *   TIM2 CH1 - ROM OE (PA0) trigger to DMA1 CH5 capture of address hi
+ *   TIM3 triggered slave of TIM2
  *
  *   TIM5 OVF? trigger to TIM7
  *      TIM7 trigger to DMA2 CH4
@@ -52,14 +53,18 @@
  *       TS 000   001    010    011
  * Slave   ITR0   ITR1   ITR2   ITR3
  * ---------------------------------
+ *  TIM1 | TIM5 | TIM2 | TIM3 | TIM4
  *  TIM2 | TIM1 | TIM8 | TIM3 | TIM4
  *  TIM3 | TIM1 | TIM2 | TIM5 | TIM4
  *  TIM4 | TIM1 | TIM2 | TIM3 | TIM8
  *  TIM5 | TIM2 | TIM3 | TIM4 | TIM8
+ *  TIM6                              (no ITR)
+ *  TIM7                              (no ITR)
+ *  TIM8 | TIM1 | TIM2 | TIM4 | TIM5  (not present in F105 and F107)
  *
  *  Timer Triggers in use:
- *      ITR3 (TIM1 -> TIM4)
- *      ITR2 (TIM5 -> TIM3)
+ *      TIM1 -> TIM4 ITR0
+ *      TIM2 -> TIM3 ITR1
  */
 
 /*

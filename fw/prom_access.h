@@ -17,7 +17,7 @@ rc_t prom_write(uint32_t addr, uint width, void *bufp);
 rc_t prom_erase(uint mode, uint32_t addr, uint32_t len);
 rc_t prom_read_binary(uint32_t addr, uint32_t len);
 rc_t prom_write_binary(uint32_t addr, uint32_t len);
-void prom_cmd(uint32_t addr, uint16_t cmd);
+void prom_cmd(uint32_t addr, uint32_t cmd);
 rc_t prom_id(void);
 void prom_disable(void);
 rc_t prom_status(void);

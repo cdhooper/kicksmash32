@@ -13,6 +13,5 @@
 #define _CRC32_H
 
 uint32_t crc32(uint32_t oldcrc, const void *data, size_t len);
-uint32_t crc32r(uint32_t oldcrc, const void *data, size_t len);
 
 #endif /* _CRC32_H */

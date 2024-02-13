@@ -115,21 +115,3 @@ crc32(uint32_t crc, const void *buf, size_t len)
 
     return (crc);
 }
-
-/*
- * crc32r() calculates a reverse-order version of the STM32 32-bit CRC which
- *          is calculated by crc32(). This function is useful for incremental
- *          CRC on parts which are in a different endian.
- */
-uint32_t
-crc32r(uint32_t crc, const void *buf, size_t len)
-{
-    uint8_t *ptr = (uint8_t *) buf + len;
-
-    while (len--) {
-        /* Normal form calculation */
-        crc = (crc << 8) ^ crc32_table[(crc >> 24) ^ *(--ptr)];
-    }
-
-    return (crc);
-}

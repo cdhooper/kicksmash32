@@ -54,7 +54,7 @@ const char cmd_gpio_help[] =
 "gpio [name=value/mode/?] - display or set GPIOs";
 
 const char cmd_prom_help[] =
-"prom bank <bits> <mode> - override A18 & A19 (\"5 1\" = bank 0)\n"
+"prom bank <bits> <mode> - override A18 & A19 (\"7 0\" = force bank 0)\n"
 "prom cmd <cmd> [<addr>] - send a 16-bit command to the EEPROM chip\n"
 "prom id                 - report EEPROM chip vendor and id\n"
 "prom disable            - disable and power off EEPROM\n"
@@ -76,8 +76,8 @@ const char cmd_reset_help[] =
 const char cmd_snoop_help[] =
 "snoop        - capture and report ROM transactions\n"
 "snoop addr   - hardware capture A0-A19\n"
-"snoop datalo - hardware capture A0-A15 D0-D15\n"
-"snoop datahi - hardware capture A0-A15 D16-D31";
+"snoop lo     - hardware capture A0-A15 D0-D15\n"
+"snoop hi     - hardware capture A0-A15 D16-D31";
 
 const char cmd_usb_help[] =
 "usb disable - reset and disable USB\n"
@@ -105,6 +105,7 @@ static const memmap_t memmap[] = {
     { "DMA2",   DMA2_BASE },
     { "EXTI",   EXTI_BASE },
     { "FLASH",  FLASH_BASE },
+    { "FPEC",   FLASH_MEM_INTERFACE_BASE },
     { "GPIOA",  GPIOA_BASE },
     { "GPIOB",  GPIOB_BASE },
     { "GPIOC",  GPIOC_BASE },
@@ -299,13 +300,16 @@ cmd_prom(int argc, char * const *argv)
     if (strcmp("bank", arg) == 0) {
         uint bits;
         uint mode;
+        // XXX: The "prom bank" command will be changed significantly
+        //      in the near future.
         if ((argc < 2) || (argc > 3)) {
             printf("prom bank <bits> <mode>\n"
-                   "   bit 0   1=Drive A18        mode 0 = Temp disable override\n"
-                   "   bit 1   A18 driven value   mode 1 = Assign new override\n"
-                   "   bit 2   1=Drive A19        mode 2 = Restore override\n"
-                   "   bit 3   A19 driven value\n"
-                   "   bit 4-7 Unused\n");
+                   "   bit 0   1=Drive A17     mode 0 = Assign new override\n"
+                   "   bit 1   1=Drive A18     mode 1 = Temp disable override\n"
+                   "   bit 2   1=Drive A19     mode 2 = Restore override\n"
+                   "   bit 4   A17\n"
+                   "   bit 5   A18\n"
+                   "   bit 6   A19\n");
             return (RC_FAILURE);
         }
         rc = parse_value(argv[1], (uint8_t *) &bits, 2);
@@ -317,12 +321,12 @@ cmd_prom(int argc, char * const *argv)
         ee_address_override(bits, mode);
         return (RC_SUCCESS);
     } else if (strcmp("cmd", arg) == 0) {
-        uint16_t cmd;
+        uint32_t cmd;
         if ((argc < 2) || (argc > 3)) {
             printf("error: prom cmd <cmd> [<addr>]\n");
             return (RC_USER_HELP);
         }
-        rc = parse_value(argv[1], (uint8_t *) &cmd, 2);
+        rc = parse_value(argv[1], (uint8_t *) &cmd, 4);
         if (rc != RC_SUCCESS)
             return (rc);
 
@@ -331,7 +335,7 @@ cmd_prom(int argc, char * const *argv)
             if (rc != RC_SUCCESS)
                 return (rc);
         } else {
-            addr = 0x05555;  // Default address for commands
+            addr = 0x00555;  // Default address for commands
         }
 
         prom_cmd(addr, cmd);
@@ -363,7 +367,7 @@ cmd_prom(int argc, char * const *argv)
             max = 10;
         return (address_log_replay(max));
     } else if (strcmp("mode", arg) == 0) {
-        if ((argc > 1) && (argv[1][0] >= '0') && (argv[1][0] <= '2')) {
+        if ((argc > 1) && (argv[1][0] >= '0') && (argv[1][0] <= '3')) {
             uint mode = argv[1][0] - '0';
             prom_mode(mode);
         } else {
@@ -492,17 +496,22 @@ cmd_reset(int argc, char * const *argv)
         return (RC_SUCCESS);
     } else if (strcmp(argv[1], "amiga") == 0) {
         uint hold = 0;
-        if (argc > 2) {
+        uint longreset = 0;
+        while (argc > 2) {
             if (strcmp(argv[2], "hold") == 0)
                 hold = 1;
+            else if (strcmp(argv[2], "long") == 0)
+                longreset = 1;
             else
                 printf("Invalid reset amiga \"%s\"\n", argv[2]);
+            argc--;
+            argv++;
         }
-        kbrst_amiga(hold);
+        kbrst_amiga(hold, longreset);
         if (hold)
-            printf("Putting Amiga in reset\n");
+            printf("Holding Amiga in reset\n");
         else
-            printf("Amiga was reset\n");
+            printf("Resetting Amiga\n");
         return (RC_SUCCESS);
     } else {
         printf("Unknown argument %s\n", argv[1]);
@@ -608,9 +617,9 @@ cmd_snoop(int argc, char * const *argv)
     if (argc > 1) {
         if (strcmp(argv[1], "addr") == 0) {
             mode = CAPTURE_ADDR;
-        } else if (strcmp(argv[1], "datalo") == 0) {
+        } else if (strncmp(argv[1], "low", 2) == 0) {
             mode = CAPTURE_DATA_LO;
-        } else if (strcmp(argv[1], "datahi") == 0) {
+        } else if (strncmp(argv[1], "high", 2) == 0) {
             mode = CAPTURE_DATA_HI;
         } else {
             printf("snoop \"%s\" unknown argument\n", argv[1]);

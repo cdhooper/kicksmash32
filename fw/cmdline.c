@@ -84,7 +84,7 @@ static const cmd_t cmd_list[] = {
 #ifdef EMBEDDED_CMD
     { cmd_prom,    "prom",    1, cmd_prom_help, " [erase|id|read|write|...]",
                         "perform EEPROM operation" },
-    { cmd_reset,   "reset",   0, cmd_reset_help, " [dfu]", "reset CPU" },
+    { cmd_reset,   "reset",   0, cmd_reset_help, " [dfu|amiga]", "reset CPU" },
     { cmd_snoop,   "snoop",   0, cmd_snoop_help, "", "snoop ROM" },
     { cmd_time,    "time",    0, cmd_time_help, " cmd|now|watch>",
                         "measure or show time" },

@@ -14,6 +14,7 @@
 #include "main.h"
 #include "pcmds.h"
 #include "prom_access.h"
+#include "stm32flash.h"
 #include <stdbool.h>
 #include "timer.h"
 #include "uart.h"
@@ -175,6 +176,7 @@ usleep(useconds_t us)
 #define SPACE_MEMORY 1
 #define SPACE_FILE   2
 #define SPACE_PROM   3
+#define SPACE_FLASH  4
 
 static rc_t
 data_read(uint64_t space, uint64_t addr, uint width, void *buf)
@@ -185,6 +187,10 @@ data_read(uint64_t space, uint64_t addr, uint width, void *buf)
 #ifdef HAVE_SPACE_PROM
         case SPACE_PROM:
             return (prom_read((uint32_t)addr, width, buf));
+#endif
+#ifdef HAVE_SPACE_FLASH
+        case SPACE_FLASH:
+            return (stm32flash_read((uintptr_t)addr, width, buf));
 #endif
 #ifdef HAVE_SPACE_FILE
         case SPACE_FILE:
@@ -205,6 +211,11 @@ data_write(uint64_t space, uint64_t addr, uint width, void *buf)
 #ifdef HAVE_SPACE_PROM
         case SPACE_PROM:
             return (prom_write((uint32_t)addr, width, buf));
+#endif
+#ifdef HAVE_SPACE_FLASH
+        case SPACE_FLASH:
+            return (stm32flash_write((uintptr_t)addr, width, buf,
+                                     STM32FLASH_FLAG_AUTOERASE));
 #endif
 #ifdef HAVE_SPACE_FILE
         case SPACE_FILE:
@@ -234,6 +245,11 @@ print_addr(uint64_t space, uint64_t addr)
 #ifdef HAVE_SPACE_PROM
         case SPACE_PROM:
             printf("%06x", (int)addr);
+            break;
+#endif
+#ifdef HAVE_SPACE_FLASH
+        case SPACE_FLASH:
+            printf("%05x", (int)addr);
             break;
 #endif
 #ifdef HAVE_SPACE_FILE
@@ -289,8 +305,24 @@ parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr)
     *space = SPACE_MEMORY;  /* Default */
 
 #ifdef HAVE_SPACE_PROM
-    if (strncmp(argp, "prom", 5) == 0) {
+    if (strncmp(argp, "prom", 4) == 0) {
         *space = SPACE_PROM;
+        if (strchr(argp, ':') != NULL) {
+            argp += 6;
+        } else {
+            (*arg)++;
+            (*argc)--;
+            if (*argc < 1) {
+                printf("<addr> argument required\n");
+                return (RC_USER_HELP);
+            }
+            argp = **arg;
+        }
+    }
+#endif
+#ifdef HAVE_SPACE_FLASH
+    if (strncmp(argp, "flash", 5) == 0) {
+        *space = SPACE_FLASH;
         if (strchr(argp, ':') != NULL) {
             argp += 6;
         } else {

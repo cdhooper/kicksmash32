@@ -137,8 +137,8 @@ adc_init(void)
     adc_enable_vbat_sensor();
 #else
     /* STM32F1... */
-    uint32_t dma = DMA1;
-    uint32_t channel = 1;  // STM32F1xx RM Table 78 Summary of DMA1 requests...
+    uint32_t dma = DMA1;  // STM32F1xx RM Table 78 Summary of DMA1 requests...
+    uint32_t channel = DMA_CHANNEL1;
 
 #if 0
     for (p = 0; p < ARRAY_SIZE(channel_gpios); p++) {

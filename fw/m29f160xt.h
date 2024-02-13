@@ -27,9 +27,13 @@ void     ee_poll(void);
 void     ee_snoop(uint mode);
 int      ee_verify(int verbose);
 void     ee_address_override(uint8_t bits, uint override);
+void     ee_set_mode(uint new_mode);
 const char *ee_id_string(uint32_t id);
 const char *ee_vendor_string(uint32_t id);
 int      address_log_replay(uint max);
+void     ee_update_bank_at_reset(void);
+void     ee_update_bank_at_longreset(void);
+
 
 /* Internal functions for manipulating GPIOs */
 void     oe_output(uint value);
@@ -39,12 +43,14 @@ void     data_output_disable(void);
 void     data_output(uint32_t data);
 uint32_t data_input(void);
 
+
 #define MX_ERASE_MODE_CHIP   0
 #define MX_ERASE_MODE_SECTOR 1
 
 #define EE_MODE_32      0  // 32-bit flash
 #define EE_MODE_16_LOW  1  // 16-bit flash low device (bits 0-15)
 #define EE_MODE_16_HIGH 2  // 16-bit flash high device (bits 16-31)
+#define EE_MODE_AUTO    3  // Automatically select mode at boot
 
 extern uint ee_mode;
 extern uint ee_default_mode;

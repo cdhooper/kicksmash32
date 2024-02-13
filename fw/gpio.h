@@ -45,8 +45,6 @@
 #define FLASH_A18_PIN           GPIO10
 #define FLASH_A19_PORT      GPIOB
 #define FLASH_A19_PIN           GPIO11
-#define FLASH_CE_PORT       GPIOB
-#define FLASH_CE_PIN            GPIO12      // CE# Chip Enable
 #define FLASH_OE_PORT       GPIOB
 #define FLASH_OE_PIN            GPIO13      // OE# Output Enable (Flash)
 #define FLASH_WE_PORT       GPIOB
@@ -56,13 +54,20 @@
 
 #define FLASH_D0_PORT       GPIOD   // PD0-PD15
 #define FLASH_D16_PORT      GPIOE   // PE0-PE15
+#define FLASH_D31_PORT      GPIOE   // PE0-PE15
+#define FLASH_D31_PIN       GPIO15  // PE15
+#define FLASH_A17_PORT      GPIOA   // PA5
+#define FLASH_A17_PIN       GPIO5   // PA5
 #define SOCKET_A0_PORT      GPIOC   // PC0-PC15
 #define SOCKET_A13_PORT     GPIOA   // PA1-PA3
 #define SOCKET_A16_PORT     GPIOA   // PA4-PA7
 #define SOCKET_A16_PIN      GPIO4   // PA4
-#define SOCKET_A17_PIN      GPIO5   // PA5
 #define SOCKET_A18_PIN      GPIO6   // PA6
 #define SOCKET_A19_PIN      GPIO7   // PA7
+
+/* Caution: SOCKET_D31 was FLASH_CE */
+#define SOCKET_D31_PORT     GPIOB
+#define SOCKET_D31_PIN      GPIO12  // PB12
 
 /* Values for gpio_setmode() */
 #ifdef STM32F1

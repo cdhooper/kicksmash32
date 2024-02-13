@@ -6,7 +6,7 @@ BOARD_REV ?= 3
 SRCS   := main.c clock.c gpio.c printf.c timer.c uart.c usb.c version.c \
 	  led.c irq.c mem_access.c readline.c cmdline.c cmds.c pcmds.c \
 	  prom_access.c m29f160xt.c utils.c crc32.c adc.c kbrst.c scanf.c \
-	  pin_tests.c
+	  pin_tests.c stm32flash.c config.c
 
 OBJDIR := objs
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
@@ -105,6 +105,9 @@ TGT_LDFLAGS		+= -Wl,--gc-sections
 ifeq ($(V),99)
 TGT_LDFLAGS		+= -Wl,--print-gc-sections
 endif
+
+#TGT_CFLAGS	+= -g
+#TGT_LDFLAGS	+= -g
 
 # Used libraries
 DEFS		+= -I$(OPENCM3_DIR)/include
@@ -214,12 +217,16 @@ dfu-clobber: $(UDEV_FILE_PATHS)
 #	$(DFU_UTIL) -s 0:force:unprotect --alt 1 --download flash_clobber.bin -Z 0xd --dfuse-address 0x1ffff800:leave
 
 # Write STM32 flash using ST-Link
-just-flash: just-erase $(ST_TOOLS_PATH)/st-flash | $(BINARY).bin $(UDEV_FILE_PATHS)
+just-flash: $(ST_TOOLS_PATH)/st-flash | $(BINARY).bin $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash --reset write $(BINARY).bin 0x08000000
 
 # Erase STM32 flash using ST-Link
 just-erase: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
-	$(ST_TOOLS_PATH)/st-flash --flash=0x100000 erase
+	$(ST_TOOLS_PATH)/st-flash --flash=0x100000 erase 0x08000000 0x3c000
+
+just-mxprog:
+	./mxprog -e -a 0x000000 -l 0x80000
+	./mxprog -wv A3000.47.111.rom -a 0x000000 -s 3210 -d /dev/ttyACM0 -bank 0
 
 # Protect/unprotect/clobber flash by writing the option byte area
 # The following can also be done by the STM32CubeProgrammer.
@@ -240,6 +247,9 @@ flash: all just-flash
 # Connect to remote STM32 via ST-Link (follow with "make gdb")
 stlink: | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-util --no-reset
+
+reset: | $(UDEV_FILE_PATHS)
+	$(ST_TOOLS_PATH)/st-info --probe
 
 # Get ST-TOOLS
 $(ST_BUILD_DIR) get-stutils:

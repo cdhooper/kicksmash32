@@ -312,28 +312,12 @@ gpio_show(int whichport, int whichpin)
     uint print_all = (whichport < 0) && (whichpin < 0);
 
     if (print_all) {
-#if BOARD_REV == 1
-        printf("Socket A0-A15=PE0-PE15 A16-A19=PC6-PC9\n"
-               "Socket D0-D15=PD0-PD15 D16-D23=PA0-PA15 D24-D27=PC0-PC3\n"
-               "Socket D28=PB4 D29=PB5 D30=PB8 D31=PB9  OE=PB15\n"
-               "Flash  A18=PC4 A19=PC5 RP=PB1 RB1=PB10 RB2=PB11\n"
-               "Flash  WE=PB12 OE=PB13 CE=PB14\n"
-               "USB    V5=PA9 CC1=PA8 CC2=PA10 DM=PA11 DP=PA12\n");
-#elif BOARD_REV == 2
-        printf("Socket A0-A15=PC0-PC15 A13-A19=PA1-PA7\n"
-               "Socket D0-D15=PD0-PD15 D16-D31=PE0-PE15\n"
-               "Socket OE=PA0 LED=PB9 KBRST=PB4 CC1=PA8 CC2=PA10\n"
-               "Flash  A18=PB10 A19=PB11 RP=PB1 RB1=PB15 RB2=PB0\n"
-               "Flash  CE=PB12 OE=PB13 WE=PB14\n"
-               "USB    V5=PA9 CC1=PA8 CC2=PA10 DM=PA11 DP=PA12\n");
-#else
         printf("Socket OE=PA0 LED=PB8 KBRST=PB4 CC1=PA8 CC2=PA10\n"
-               "Socket A0-A15=PC0-PC15 A13-A19=PA1-PA7\n"
+               "Socket A0-A15=PC0-PC15 A13-A19=PA1-PA7 D31=PB12\n"
                "Flash  D0-D15=PD0-PD15 D16-D31=PE0-PE15\n"
-               "Flash  A18=PB10 A19=PB11 RP=PB1 RB1=PB15 RB2=PB0\n"
-               "Flash  CE=PB12 OE=PB13 WE=PB14 OEWE=PB9\n"
+               "Flash  A18=PB10 RP=PB1 RB1=PB15 RB2=PB0\n"
+               "Flash  A19=PB11 OE=PB13 WE=PB14 OEWE=PB9\n"
                "USB    V5=PA9 CC1=PA8 CC2=PA10 DM=PA11 DP=PA12\n");
-#endif
         printf("\nMODE  ");
         for (pin = 15; pin >= 0; pin--)
             printf("%4d", pin);
@@ -528,11 +512,10 @@ gpio_init(void)
      * FLASH_RB1      INPUT, PU
      * FLASH_RB2      INPUT, PU
      * FLASH_WE       OUTPUT 1       0 if writing       Flash write enable
-     * FLASH_CE       OUTPUT 0       x                  Flash enable
      * FLASH_OE       INPUT          0 if reading
      * SOCKET_OE      INPUT, PU      x
      * SOCKET_A0-A19  INPUT          OUTPUT if !KBRST
-     * SOCKET_D0-D31  INPUT          OUTPUT if SOCKET_OE & !FLASH_OE
+     * FLASH_D0-D31   INPUT          OUTPUT if SOCKET_OE & !FLASH_OE
      * USB_CC1-CC2    INPUT          OUTPUT if USB reset desired
      */
 
@@ -561,9 +544,9 @@ gpio_init(void)
     gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 0);
     gpio_setmode(FLASH_OEWE_PORT, FLASH_OEWE_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
 
-    /* Assert flash CE# (chip enable) */
-    gpio_setv(FLASH_CE_PORT, FLASH_CE_PIN, 0);
-    gpio_setmode(FLASH_CE_PORT, FLASH_CE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+    /* Amiga D31 is connected to allow sensing of 16-bit or 32-bit mode */
+    gpio_setv(SOCKET_D31_PORT, SOCKET_D31_PIN, 0);
+    gpio_setmode(SOCKET_D31_PORT, SOCKET_D31_PIN, GPIO_SETMODE_INPUT);
 
     /* Weakly pull up socket OE# (output enable) */
     gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
