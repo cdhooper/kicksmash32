@@ -28,6 +28,8 @@ void     ee_snoop(uint mode);
 int      ee_verify(int verbose);
 void     ee_address_override(uint8_t bits, uint override);
 void     ee_set_mode(uint new_mode);
+void     ee_set_bank(uint8_t bank);
+
 const char *ee_id_string(uint32_t id);
 const char *ee_vendor_string(uint32_t id);
 int      address_log_replay(uint max);

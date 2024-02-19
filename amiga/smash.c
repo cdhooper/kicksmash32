@@ -99,6 +99,25 @@ struct Device   *TimerBase;
             CacheControl(oldcachestate, CACRF_EnableD | CACRF_DBE); \
         }
 
+/* MMU_DISABLE() and MMU_RESTORE() must be called from Supervisor state */
+#define MMU_DISABLE() \
+        { \
+            uint32_t oldmmustate = 0; \
+            if (cpu_type == 68030) { \
+                oldmmustate = mmu_get_tc_030(); \
+                mmu_set_tc_030(oldmmustate & ~BIT(31)); \
+            } else if ((cpu_type == 68040) || (cpu_type == 68060)) { \
+                oldmmustate = mmu_get_tc_040(); \
+                mmu_set_tc_040(oldmmustate & ~BIT(15)); \
+            }
+#define MMU_RESTORE() \
+            if (cpu_type == 68030) { \
+                mmu_set_tc_030(oldmmustate); \
+            } else if ((cpu_type == 68040) || (cpu_type == 68060)) { \
+                mmu_set_tc_040(oldmmustate); \
+            } \
+        }
+
 #define INTERRUPTS_DISABLE() if (irq_disabled++ == 0) \
                                  Disable()  /* Disable interrupts */
 #define INTERRUPTS_ENABLE()  if (--irq_disabled == 0) \
@@ -112,12 +131,61 @@ struct Device   *TimerBase;
 #define CIAA_PRA_OVERLAY BIT(0)
 #define CIAA_PRA_LED     BIT(1)
 
-#define MEM_LOOPS 1000000
+#define VALUE_UNASSIGNED 0xffffffff
+
+#define MEM_LOOPS        1000000
+#define ROM_WINDOW_SIZE  (512 << 10)  // 512 KB
+
+static const char cmd_options[] =
+    "usage: smash <options>\n"
+    "   -b <opt>     ROM bank operations (?, show, ...)\n"
+    "   -d           show debug output\n"
+    "   -e <opt>     erase flash (?, bank, ...)\n"
+    "   -i           identify Kicksmash and Flash parts\n"
+    "   -r <opt>     read from flash (?, bank, file, ...)\n"
+    "   -w <opt>     write to flash (?, bank, file, ...)\n"
+    "   -x <addr>    spin loop reading addr\n"
+    "   -y <addr>    spin loop reading addr with ROM OVL set\n"
+    "   -t           do pattern test\n";
+
+static const char cmd_read_options[] =
+    "smash -r options\n"
+    "   addr <hex>  - starting address (-a)\n"
+    "   bank <num>  - flash bank on which to operate (-b)\n"
+    "   dump        - save hex/ASCII instead of binary (-d)\n"
+    "   file <name> - file where to save content (-f)\n"
+    "   len <hex>   - length to read in bytes (-l)\n"
+    "   swap <mode> - byte swap mode (1032, 2301, 3210) (-s)\n"
+    "   yes         - skip prompt (-y)\n";
+
+static const char cmd_write_options[] =
+    "smash -w options\n"
+    "   addr <hex>  - starting address (-a)\n"
+    "   bank <num>  - flash bank on which to operate (-b)\n"
+//  "   dump        - save hex/ASCII instead of binary (-d)\n"
+    "   file <name> - file from which to read (-f)\n"
+    "   len <hex>   - length to program in bytes (-l)\n"
+    "   swap <mode> - byte swap mode (1032, 2301, 3210) (-s)\n"
+    "   yes         - skip prompt (-y)\n";
+
+static const char cmd_erase_options[] =
+    "smash -e options\n"
+    "   addr <hex>  - starting address (-a)\n"
+    "   bank <num>  - flash bank on which to operate (-b)\n"
+    "   len <hex>   - length to erase in bytes (-l)\n"
+    "   yes         - skip prompt (-y)\n";
+
+uint32_t mmu_get_type(void);
+uint32_t mmu_get_tc_030(void);
+uint32_t mmu_get_tc_040(void);
+// void     mmu_set_tc_030(uint32_t tc);
+void     mmu_set_tc_040(uint32_t tc);
 
 BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
 uint irq_disabled = 0;
 uint flag_debug = 0;
 uint flag_quiet = 0;
+static uint cpu_type = 0;
 
 static BOOL
 is_user_abort(void)
@@ -130,30 +198,163 @@ is_user_abort(void)
 static void
 usage(void)
 {
-    printf("%s\n\n"
-           "usage: smash <options>\n"
-           "   -b <bank>    set ROM bank for next reboot\n"
-           "   -bb <bank>   set ROM bank for programming\n"
-           "   -d           show debug output\n"
-           "   -i           identify Kicksmash and Flash parts\n"
-           "   -x <addr>    spin loop reading addr\n"
-           "   -y <addr>    spin loop reading addr with ROM OVL set\n"
-           "   -t           do pattern test\n"
-           "", version + 7);
+    printf("%s\n\n%s", version + 7, cmd_options);
+}
+
+static char
+printable_ascii(uint8_t ch)
+{
+    if (ch >= ' ' && ch <= '~')
+        return (ch);
+    if (ch == '\t' || ch == '\r' || ch == '\n' || ch == '\0')
+        return (' ');
+    return ('.');
 }
 
 static void
-dump_memory(uint32_t *src, uint len)
+dump_memory(uint32_t *src, uint len, uint dump_base)
 {
     uint pos;
-    for (pos = 0; pos < len; pos++) {
-        printf(" %08x", src[pos]);
-        if ((pos & 7) == 7)
-            printf("\n");
+    uint strpos;
+    char str[20];
+    len = (len + 3) / 4;
+    if (dump_base != VALUE_UNASSIGNED)
+        printf("%05x:", dump_base);
+    for (strpos = 0, pos = 0; pos < len; pos++) {
+        uint32_t val = src[pos];
+        printf(" %08x", val);
+        str[strpos++] = printable_ascii(val >> 24);
+        str[strpos++] = printable_ascii(val >> 16);
+        str[strpos++] = printable_ascii(val >> 8);
+        str[strpos++] = printable_ascii(val);
+        if ((pos & 3) == 3) {
+            str[strpos] = '\0';
+            strpos = 0;
+            printf(" %s\n", str);
+            if ((dump_base != VALUE_UNASSIGNED) && ((pos + 1) < len)) {
+                printf("%05x:", dump_base);
+                dump_base += 16;
+            }
+        }
     }
-    if ((pos & 7) != 0)
-        printf("\n");
+    if ((pos & 3) != 0) {
+        str[strpos] = '\0';
+        printf("%*s%s\n", (4 - (pos & 3)) * 5, "", str);
+    }
 }
+
+uint
+get_cpu(void)
+{
+    UWORD attnflags = SysBase->AttnFlags;
+
+    if (attnflags & 0x80)
+        return (68060);
+    if (attnflags & AFF_68040)
+        return (68040);
+    if (attnflags & AFF_68030)
+        return (68030);
+    if (attnflags & AFF_68020)
+        return (68020);
+    if (attnflags & AFF_68010)
+        return (68010);
+    return (68000);
+}
+
+/*
+ * mmu_get_tc_030
+ * --------------
+ * This function only works on the 68030.
+ * 68040 and 68060 have different MMU instructions.
+ */
+
+__attribute__ ((noinline))
+uint32_t
+mmu_get_tc_030(void)
+{
+    register uint32_t result;
+    __asm__ __volatile__("subq.l #4,sp \n\t"
+                         ".long 0xf0174200 \n\t"  // pmove tc,(sp)
+                         "move.l (sp)+,d0"
+                         : "=d" (result));
+    return (result);
+}
+
+/*
+ * mmu_set_tc_030
+ * --------------
+ * This function only works on the 68030.
+ */
+__attribute__ ((noinline))
+void mmu_set_tc_030(register uint32_t tc asm("%d0"))
+{
+#if 0
+    __asm__ __volatile__("adda.l #4,sp \n\t"
+                         ".long 0xf0174000 \n\t"  // pmove.l (sp),tc
+                         "suba.l #4,sp"
+                         : "=d" (tc));
+#elif 1
+    __asm__ __volatile__("move.l %0,-(sp) \n\t"
+                         ".long 0xf0174000 \n\t"  // pmove.l (sp),tc
+                         "adda.l #4,sp \n\t"
+                         : "=d" (tc));
+#else
+    __asm__ __volatile__(".long 0xf0174000 \n\t"  // pmove.l (sp),tc
+                         : "=d" (tc));
+#endif
+}
+
+/*
+ * mmu_get_tc_040
+ * --------------
+ * This function only works on 68040 and 68060.
+ */
+uint32_t
+mmu_get_tc_040(void)
+{
+    register uint32_t result;
+    __asm__ __volatile__(".long 0x4e7a0003"  // movec.l tc,d0
+                         : "=d" (result));
+    return (result);
+}
+
+/*
+ * mmu_set_tc_040
+ * --------------
+ * This function only works on 68040 and 68060.
+ */
+void mmu_set_tc_040(uint32_t tc)
+{
+    __asm__ __volatile__("move.l 4(sp),d0 \n\t"
+                         ".long 0x4e7b0003 \n\t"  // movec.l d0,tc
+                         : "=d" (tc));
+}
+
+void
+local_memcpy(void *dst, void *src, size_t len)
+{
+    uint32_t *dst32 = dst;
+    uint32_t *src32 = src;
+
+    if ((uintptr_t) dst | (uintptr_t) src | len) {
+        /* fast mode */
+        uint xlen = len >> 2;
+        len -= (xlen << 2);
+        while (xlen > 0) {
+            *(dst32++) = *(src32++);
+            xlen--;
+        }
+    }
+    if (len > 0) {
+        uint8_t *dst8 = (uint8_t *) dst32;
+        uint8_t *src8 = (uint8_t *) src32;
+        while (len > 0) {
+            *(dst8++) = *(src8++);
+            len--;
+        }
+    }
+}
+
 
 /* Status codes from local message handling */
 #define MSG_STATUS_SUCCESS    0           // No error
@@ -161,6 +362,8 @@ dump_memory(uint32_t *src, uint len)
 #define MSG_STATUS_BAD_LENGTH 0xfffffff8  // Bad length detected
 #define MSG_STATUS_BAD_CRC    0xfffffff7  // CRC failure detected
 #define MSG_STATUS_BAD_DATA   0xfffffff6  // Invalid data
+#define MSG_STATUS_PRG_TMOUT  0xfffffff5  // Programming timeout
+#define MSG_STATUS_PRG_FAIL   0xfffffff4  // Programming failure
 
 static const char *
 smash_err(uint code)
@@ -239,7 +442,6 @@ static const chip_ids_t chip_ids[] = {
     { 0x00000000, "Unknown" },     // Must remain last
 };
 
-#if 0
 typedef struct {
     uint16_t cb_chipid;   // Chip id code
     uint8_t  cb_bbnum;    // Boot block number (0=Bottom boot)
@@ -249,13 +451,26 @@ typedef struct {
 } chip_blocks_t;
 
 static const chip_blocks_t chip_blocks[] = {
-    { 0x22D2, 31, 32, 4, 0x71 },  // 01110001 16K 4K 4K 8K (top)
-    { 0x22D8,  0, 32, 4, 0x1d },  // 00011101 8K 4K 4K 16K (bottom)
-    { 0x22D6, 15, 32, 4, 0x71 },  // 01110001 16K 4K 4K 8K (top)
-    { 0x2258,  0, 32, 4, 0x1d },  // 00011101 8K 4K 4K 16K (bottom)
+    { 0x22D2, 31, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x22D8,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
+    { 0x22D6, 15, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x2258,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
     { 0x0000,  0, 32, 4, 0x1d },  // Default to bottom boot
 };
-#endif
+
+static const chip_blocks_t *
+get_chip_block_info(uint32_t chipid)
+{
+    uint16_t cid = (uint16_t) chipid;
+    uint pos;
+
+    /* Search for exact match */
+    for (pos = 0; pos < ARRAY_SIZE(chip_blocks) - 1; pos++)
+        if (chip_blocks[pos].cb_chipid == cid)
+            break;
+
+    return (&chip_blocks[pos]);
+}
 
 const char *
 ee_vendor_string(uint32_t id)
@@ -301,24 +516,25 @@ spin_memory(uint32_t addr)
 {
     uint     count;
 
+    SUPERVISOR_STATE_ENTER();
     INTERRUPTS_DISABLE();
     CACHE_DISABLE_DATA();
+    MMU_DISABLE();
+
 #if 0
     CacheClearE((void *)addr, MEM_LOOPS * 4, CACRF_ClearD);
 #endif
 
     for (count = 0; count < MEM_LOOPS; count += 4) {
-#if 0
-        uint32_t taddr = addr + (count & 0xfffc);
-        dummy += *ADDR32(taddr);
-#else
         (void) *ADDR32(addr);
-#endif
     }
 
     spin(MEM_LOOPS);
+
+    MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
     printf("done\n");
 }
 
@@ -327,8 +543,10 @@ spin_memory_ovl(uint32_t addr)
 {
     uint     count;
 
+    SUPERVISOR_STATE_ENTER();
     INTERRUPTS_DISABLE();
     CACHE_DISABLE_DATA();
+    MMU_DISABLE();
 
     *CIAA_PRA |= CIAA_PRA_OVERLAY | CIAA_PRA_LED;
     for (count = 0; count < MEM_LOOPS; count++) {
@@ -337,11 +555,13 @@ spin_memory_ovl(uint32_t addr)
     *CIAA_PRA &= ~(CIAA_PRA_OVERLAY | CIAA_PRA_LED);
 
     spin(MEM_LOOPS);
+
+    MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
     printf("done\n");
 }
-
 
 
 static const uint16_t sm_magic[] = { 0x0117, 0x0119, 0x1017, 0x0204 };
@@ -397,6 +617,8 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      * engines on 32-bit Amigas are started in a synchronized manner.
      * Might need more spin iterations on a faster CPU, or maybe
      * a real timer delay here.
+     *
+     * A3000 68030: 180 spins minimum
      */
     spin(300);
 
@@ -426,6 +648,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         if (magic < ARRAY_SIZE(sm_magic)) {
             if (val != sm_magic[magic]) {
                 magic = 0;
+                spin(20);
                 continue;
             }
         } else if (magic < ARRAY_SIZE(sm_magic) + 1) {
@@ -447,12 +670,11 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             if (*replyalen > replymax)
                 *replyalen = replymax;
         }
-fail:
         /* Ensure Kicksmash firmware has returned ROM to normal state */
         for (pos = 0; pos < 1000; pos++)
             (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        spin(1000000);
-        goto cleanup;
+        spin(500000);
+        goto scc_cleanup;
     }
 
     if (replyalen != NULL)
@@ -468,7 +690,7 @@ fail:
             if (*replyalen > replymax)
                 *replyalen = replymax;
         }
-        goto fail;
+        goto scc_cleanup;
     }
 
     replylen /= 2;  // Round up to 16-bit word count
@@ -498,7 +720,14 @@ fail:
         replycrc = *ADDR32(ROM_BASE);
     }
 
-cleanup:
+scc_cleanup:
+    if (replystatus != 0) {
+        /* Ensure Kicksmash firmware has returned ROM to normal state */
+        for (pos = 0; pos < 100; pos++)
+            (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
+        spin(10000);
+        spin(500000);  // Kicksmash might emit debug output
+    }
     if ((replystatus < 0x10000) && (replystatus != KS_STATUS_CRC)) {
         crc = crc32(crc, reply, replylen * 2);
         if (crc != replycrc)
@@ -507,7 +736,6 @@ cleanup:
 
     return (replystatus);
 }
-
 
 /*
  * send_cmd
@@ -534,9 +762,11 @@ send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
     SUPERVISOR_STATE_ENTER();
     INTERRUPTS_DISABLE();
     CACHE_DISABLE_DATA();
+    MMU_DISABLE();
 
     rc = send_cmd_core(cmd, arg, arglen, reply, replymax, replyalen);
 
+    MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
     SUPERVISOR_STATE_EXIT();
@@ -564,11 +794,11 @@ smash_identify(void)
     if (rc != 0) {
         printf("Reply message failure: %d (%s)\n", (int) rc, smash_err(rc));
         if (flag_debug)
-            dump_memory(reply_buf, rlen / 4);
+            dump_memory(reply_buf, rlen, VALUE_UNASSIGNED);
         return (rc);
     }
     printf("ID\n");
-    dump_memory(reply_buf, rlen / 4);
+    dump_memory(reply_buf, rlen, VALUE_UNASSIGNED);
     return (0);
 }
 #endif
@@ -596,12 +826,18 @@ smash_test(void)
     show_test_state("Test pattern", -1);
 
     memset(reply_buf, 0, sizeof (reply_buf));
+#ifdef SEND_TESTPATT_ALT
+    reply_buf[0] = 0xa5a5a5a5;
+    rc = send_cmd(KS_CMD_TESTPATT, reply_buf, 2, reply_buf,
+                  sizeof (reply_buf), &rlen);
+#else
     rc = send_cmd(KS_CMD_TESTPATT, NULL, 0, reply_buf,
                   sizeof (reply_buf), &rlen);
+#endif
     if (rc != 0) {
         printf("Reply message failure: %d (%s)\n", (int) rc, smash_err(rc));
         if (flag_debug)
-            dump_memory(reply_buf, rlen / 4);
+            dump_memory(reply_buf, rlen, VALUE_UNASSIGNED);
         show_test_state("Test pattern", rc);
         return (rc);
     }
@@ -611,10 +847,9 @@ smash_test(void)
             break;
 
     if (start == ARRAY_SIZE(reply_buf)) {
-//      printf("Unable to find test pattern marker [54534554] in reply\n");
-        printf("No test pattern marker [54455354] in reply\n");
+        printf("No test pattern marker [%08x] in reply\n", test_pattern[0]);
 fail:
-        dump_memory(reply_buf, ARRAY_SIZE(reply_buf));
+        dump_memory(reply_buf, sizeof (reply_buf), VALUE_UNASSIGNED);
         show_test_state("Test pattern", 1);
         return (1);
     }
@@ -636,7 +871,7 @@ fail:
     if (err_count > 6)
         goto fail;
     if (flag_debug > 1)
-        dump_memory(reply_buf, ARRAY_SIZE(reply_buf));
+        dump_memory(reply_buf, sizeof (reply_buf), VALUE_UNASSIGNED);
     show_test_state("Test pattern", 0);
     return (0);
 }
@@ -645,6 +880,9 @@ fail:
  * flash_cmd_core
  * --------------
  * Must be called with interrupts and cache disabled
+ *
+ * This function will send a command to the flash after setting the
+ * transaction up with the Kicksmash CPU.
  */
 static int
 flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
@@ -704,7 +942,7 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 
 #if 0
     // below is for debug, to ensure all Kicksmash DMA is drained.
-    for (pos = 0; pos < 1000; pos++) {
+    for (pos = 0; pos < 10000; pos++) {
         (void) *ADDR32(ROM_BASE);
     }
 #endif
@@ -721,6 +959,12 @@ flash_cmd_cleanup:
         for (pos = 0; pos < num_addr; pos++)
             *ADDR32(0x7780010 + pos * 4) = data[pos];
 #endif
+    } else {
+        /* Attempt to drain data and wait for Kicksmash to enable flash */
+        for (pos = 0; pos < 1000; pos++) {
+            (void) *ADDR32(ROM_BASE);
+        }
+        spin(100000);
     }
     return (rc);
 }
@@ -733,7 +977,11 @@ flash_cmd(uint32_t cmd, void *arg, uint argsize)
     SUPERVISOR_STATE_ENTER();
     INTERRUPTS_DISABLE();
     CACHE_DISABLE_DATA();
+    MMU_DISABLE();
+
     rc = flash_cmd_core(cmd, arg, argsize);
+
+    MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
     SUPERVISOR_STATE_EXIT();
@@ -750,9 +998,9 @@ flash_read(void)
 #endif
 
 static int
-flash_id(uint32_t *dev1, uint32_t *dev2)
+flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
 {
-    uint32_t data[64];
+    uint32_t data[32];
     uint     pos;
     int      rc1;
     int      rc2;
@@ -763,16 +1011,21 @@ flash_id(uint32_t *dev1, uint32_t *dev2)
     SUPERVISOR_STATE_ENTER();
     INTERRUPTS_DISABLE();
     CACHE_DISABLE_DATA();
+    MMU_DISABLE();
 
     rc1 = flash_cmd_core(KS_CMD_FLASH_ID, NULL, 0);
-    for (pos = 0; pos < ARRAY_SIZE(data); pos++) {
-        data[pos] = *ADDR32(ROM_BASE + pos * 4);
+    if (rc1 == 0) {
+        for (pos = 0; pos < ARRAY_SIZE(data); pos++) {
+            data[pos] = *ADDR32(ROM_BASE + pos * 4);
+        }
     }
     rc2 = flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
 
+    MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
     SUPERVISOR_STATE_EXIT();
+
     if (flag_debug || rc1 || rc2) {
         printf("rc1=%d (%s)  rc2=%d (%s)\n",
                rc1, smash_err(rc1), rc2, smash_err(rc2));
@@ -780,28 +1033,50 @@ flash_id(uint32_t *dev1, uint32_t *dev2)
 
     if (rc1 == 0) {
         /*
-         * XXX: This first value can be different depending on which
-         *      is installed. Need it to check against known vendors
-         *      and device types. Probably also need to expand it to
-         *      report vendor/device rather than raw dump. Also report
-         *      whether it's dual flash (32-bit)) or single flash (16-bit)
-         *      interface.
-         *
-         * Also, this test assumes a 32-bit flash interface. It will
-         * need ot be re-done for 16-bit because the pattern repeats
-         * every 8 bytes instead of every 16 bytes.
+         * Validation for a recognized flash device is done by
+         * get_chip_block_info(). The code just needs to determine
+         * whether it's a 16-bit or 32-bit device.
          */
-        if ((data[0x0] != 0x00040004) || (data[0x1] != 0x22d222d2) ||
-            (data[0x2] != 0x00000000) || (data[0x3] != 0x00000000) ||
-            (data[0x4] != data[0x0])  || (data[0x5] != data[0x1]) ||
-            (data[0x8] != data[0x0])  || (data[0x9] != data[0x1]) ||
-            (data[0xc] != data[0x0])  || (data[0xd] != data[0x1])) {
-            rc1 = 1;
+        uint flash_mode;
+        uint16_t device;
+        const chip_blocks_t *cb;
+
+        if ((data[0x2] == 0x00000000) && (data[0x3] == 0x00000000)) {
+            /* flash is 32-bit */
+            flash_mode = 32;
+            device = data[1] & 0xffff;
+            cb = get_chip_block_info(device);
+            if ((cb->cb_chipid == 0) ||  // Unknown chip
+                (data[0x4] != data[0x0]) || (data[0x5] != data[0x1]) ||
+                (data[0x8] != data[0x0]) || (data[0x9] != data[0x1]) ||
+                (data[0xc] != data[0x0]) || (data[0xd] != data[0x1])) {
+                rc1 = 1;
+            }
+        } else {
+            /* flash is 16-bit */
+            flash_mode = 16;
+            cb = get_chip_block_info(device);
+            device = data[0] & 0xffff;
+            cb = get_chip_block_info(device);
+            if ((cb->cb_chipid == 0) ||  // Unknown chip
+                (data[0x2] != data[0x0]) || (data[0x3] != data[0x1]) ||
+                (data[0x4] != data[0x0]) || (data[0x5] != data[0x1]) ||
+                (data[0x6] != data[0x0]) || (data[0x7] != data[0x1])) {
+                rc1 = 1;
+            }
         }
+        if (mode != NULL)
+            *mode = flash_mode;
+
+        if (flash_mode == 16)
+            smash_cmd_shift = 1;
+        else
+            smash_cmd_shift = 2;
+
         if (flag_debug) {
             printf("Flash ID: %svalid\n", rc1 ? "in" : "");
             if (flag_debug > 1)
-                dump_memory(data, ARRAY_SIZE(data) / 2);
+                dump_memory(data, sizeof (data) / 2, VALUE_UNASSIGNED);
         }
     }
     if (rc1 == 0) {
@@ -817,40 +1092,42 @@ flash_show_id(void)
 {
     int      rc;
     uint     mode;
-    uint32_t dev1;
-    uint32_t dev2;
+    uint32_t flash_dev1;
+    uint32_t flash_dev2;
     const char *id1;
     const char *id2;
 
-    rc = flash_id(&dev1, &dev2);
+    rc = flash_id(&flash_dev1, &flash_dev2, &mode);
     if (rc != 0) {
         printf("Flash id failure %d (%s)\n", rc, smash_err(rc));
         return (rc);
     }
 
-    id1 = ee_id_string(dev1);
-    id2 = ee_id_string(dev2);
+    id1 = ee_id_string(flash_dev1);
+    id2 = ee_id_string(flash_dev2);
 
     if (strcmp(id1, "Unknown") == 0) {
-        printf("Failed to identify device 1 (%08x)\n", dev1);
+        printf("Failed to identify device 1 (%08x)\n", flash_dev1);
         rc = MSG_STATUS_BAD_DATA;
     }
-    if ((dev2 != 0) && (strcmp(id2, "Unknown") == 0)) {
-        printf("Failed to identify device 2 (%08x)\n", dev2);
+    if ((mode == 32) && (strcmp(id2, "Unknown") == 0)) {
+        printf("Failed to identify device 2 (%08x)\n", flash_dev2);
         rc = MSG_STATUS_BAD_DATA;
     }
 
     if (flag_quiet)
         return (rc);
 
-    if (dev2 == 0) {
-        mode = 16;
-        printf("    %08x %s", dev1, id1);
+    if (mode == 16) {
+        printf("    %08x %s", flash_dev1, id1);
     } else {
-        mode = 32;
-        printf("    %08x %08x %s %s", dev1, dev2, id1, id2);
+        printf("    %08x %08x %s %s", flash_dev1, flash_dev2, id1, id2);
     }
     printf(" (%u-bit mode)\n", mode);
+    if ((mode == 32) && (flash_dev1 != flash_dev2)) {
+        printf("    Warning: flash device ids differ\n");
+        rc = MSG_STATUS_NO_REPLY;
+    }
 
 #if 0
     if (flag_debug > 1) {
@@ -882,10 +1159,10 @@ set_rom_bank(uint mode, uint bank)
 static void
 rom_bank_show(void)
 {
+    bank_info_t info;
     uint        rlen;
     uint        rc;
     uint        bank;
-    bank_info_t info;
 
     rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, &info, sizeof (info), &rlen);
     if (rc != 0) {
@@ -968,20 +1245,19 @@ cmd_bank(int argc, char *argv[])
 
     if (argc < 2) {
         printf("-b requires an argument\n");
-        printf("One of: ?, show, comment, nextreset, "
-               "atpoweron, longreset, "
-               "merge, unmerge\n");
+        printf("One of: ?, show, comment, longreset, nextreset, "
+               "poweron, merge, unmerge\n");
         return (1);
     }
     if (strcmp(argv[1], "?") == 0) {
-        printf(" show                      - Display all ROM bank information\n"
-              "  merge <start> <end>       - Merge banks for larger ROMs\n"
-              "  unmerge <start> <end>     - Unmerge banks\n"
-              "  longreset <bank>[,<bank>] - Banks to sequence at long reset\n"
-              "  poweron <bank> [reboot]   - Default bank at poweron\n"
-              "  current <bank> [reboot]   - Force new bank immediately\n"
-              "  nextreset <bank> [reboot] - Force new bank at next reset\n"
-              "  comment <bank> <text>     - Add bank description comment\n");
+        printf("  show                       Display all ROM bank information\n"
+               "  merge <start> <end>        Merge banks for larger ROMs\n"
+               "  unmerge <start> <end>      Unmerge banks\n"
+               "  longreset <bank>[,<bank>]  Banks to sequence at long reset\n"
+               "  poweron <bank> [reboot]    Default bank at poweron\n"
+               "  current <bank> [reboot]    Force new bank immediately\n"
+               "  nextreset <bank> [reboot]  Force new bank at next reset\n"
+               "  comment <bank> <text>      Add bank description comment\n");
     } else if (strcmp(argv[1], "show") == 0) {
         rom_bank_show();
         return (0);
@@ -1025,15 +1301,15 @@ cmd_bank(int argc, char *argv[])
         memcpy(argbuf, &arg, 2);
         strncpy(argbuf + 2, argv[3], sizeof (argbuf) - 3);
         argbuf[sizeof (argbuf) - 1] = '\0';
-        rc = send_cmd(KS_CMD_BANK_COMMENT | opt, argbuf,
+        rc = send_cmd(KS_CMD_BANK_COMMENT, argbuf,
                       strlen(argbuf + 2) + 3, NULL, 0, NULL);
         if (rc != 0)
             printf("Bank comment set failed: %d %s\n", rc, smash_err(rc));
         return (rc);
     }
     if (flag_bank_longreset) {
-        uint8_t     banks[ROM_BANKS];
         bank_info_t info;
+        uint8_t     banks[ROM_BANKS];
         uint        cur;
         uint        rlen;
 
@@ -1057,7 +1333,7 @@ cmd_bank(int argc, char *argv[])
                 }
                 sub = info.bi_merge[bank] & 0x0f;
                 if (sub != 0) {
-                    printf("Bank %u is part of a merged block, but is not the "
+                    printf("Bank %u is part of a merged bank, but is not the "
                            "first (use %u)\n", bank, bank - sub);
                     rc++;
                 }
@@ -1174,6 +1450,947 @@ cmd_bank(int argc, char *argv[])
     return (0);
 }
 
+/*
+ * are_you_sure() prompts the user to confirm that an operation is intended.
+ *
+ * @param  [in]  None.
+ *
+ * @return       TRUE  - User has confirmed (Y).
+ * @return       FALSE - User has denied (N).
+ */
+int
+are_you_sure(const char *prompt)
+{
+    int ch;
+ask_again:
+    printf("%s - are you sure? (y/n) ", prompt);
+    fflush(stdout);
+    while ((ch = getchar()) != EOF) {
+        if ((ch == 'y') || (ch == 'Y'))
+            return (TRUE);
+        if ((ch == 'n') || (ch == 'N'))
+            return (FALSE);
+        if (!isspace(ch))
+            goto ask_again;
+    }
+    return (FALSE);
+}
+
+static uint
+get_file_size(const char *filename)
+{
+    struct FileInfoBlock fb;
+    BPTR lock;
+    fb.fib_Size = VALUE_UNASSIGNED;
+    lock = Lock(filename, ACCESS_READ);
+    if (lock == 0L) {
+        printf("Lock %s failed\n", filename);
+        return (VALUE_UNASSIGNED);
+    }
+    if (Examine(lock, &fb) == 0) {
+        printf("Examine %s failed\n", filename);
+        UnLock(lock);
+        return (VALUE_UNASSIGNED);
+    }
+    UnLock(lock);
+    return (fb.fib_Size);
+}
+
+#define SWAPMODE_A500  0xA500   // Amiga 16-bit ROM format
+#define SWAPMODE_A3000 0xA3000  // Amiga 32-bit ROM format
+
+#define SWAP_TO_ROM    0  // Bytes originated in a file (to be written in ROM)
+#define SWAP_FROM_ROM  1  // Bytes originated in ROM (to be written to a file)
+
+/*
+ * execute_swapmode() swaps bytes in the specified buffer according to the
+ *                    currently active swap mode.
+ *
+ * @param  [io]  buf      - Buffer to modify.
+ * @param  [in]  len      - Length of data in the buffer.
+ * @gloabl [in]  dir      - Image swap direction (SWAP_TO_ROM or SWAP_FROM_ROM)
+ * @gloabl [in]  swapmode - Swap operation to perform (0123, 3210, etc)
+ * @return       None.
+ */
+static void
+execute_swapmode(uint8_t *buf, uint len, uint dir, uint swapmode)
+{
+    uint    pos;
+    uint8_t temp;
+    static const uint8_t str_f94e1411[] = { 0xf9, 0x4e, 0x14, 0x11 };
+    static const uint8_t str_11144ef9[] = { 0x11, 0x14, 0x4e, 0xf9 };
+    static const uint8_t str_1411f94e[] = { 0x14, 0x11, 0xf9, 0x4e };
+    static const uint8_t str_4ef91114[] = { 0x4e, 0xf9, 0x11, 0x14 };
+
+    switch (swapmode) {
+        case 0:
+        case 0123:
+            return;  // Normal (no swap)
+        swap_1032:
+        case 1032:
+            /* Swap adjacent bytes in 16-bit words */
+            for (pos = 0; pos < len - 1; pos += 2) {
+                temp         = buf[pos + 0];
+                buf[pos + 0] = buf[pos + 1];
+                buf[pos + 1] = temp;
+            }
+            return;
+        swap_2301:
+        case 2301:
+            /* Swap adjacent (16-bit) words */
+            for (pos = 0; pos < len - 3; pos += 4) {
+                temp         = buf[pos + 0];
+                buf[pos + 0] = buf[pos + 2];
+                buf[pos + 2] = temp;
+                temp         = buf[pos + 1];
+                buf[pos + 1] = buf[pos + 3];
+                buf[pos + 3] = temp;
+            }
+            return;
+        swap_3210:
+        case 3210:
+            /* Swap bytes in 32-bit longs */
+            for (pos = 0; pos < len - 3; pos += 4) {
+                temp         = buf[pos + 0];
+                buf[pos + 0] = buf[pos + 3];
+                buf[pos + 3] = temp;
+                temp         = buf[pos + 1];
+                buf[pos + 1] = buf[pos + 2];
+                buf[pos + 2] = temp;
+            }
+            return;
+        case SWAPMODE_A500:
+            if (dir == SWAP_TO_ROM) {
+                /* Need bytes in order: 14 11 f9 4e */
+                if (memcmp(buf, str_1411f94e, 4) == 0)
+                    return;  // Already in desired order
+                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                    printf("Swap mode 2301\n");
+                    goto swap_2301;  // Swap adjacent 16-bit words
+                }
+            }
+            if (dir == SWAP_FROM_ROM) {
+                /* Need bytes in order: 11 14 4e f9 */
+                if (memcmp(buf, str_11144ef9, 4) == 0)
+                    return;  // Already in desired order
+                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                    printf("Swap mode 1032\n");
+                    goto swap_1032;  // Swap odd/even bytes
+                }
+            }
+            goto unrecognized;
+        case SWAPMODE_A3000:
+            if (dir == SWAP_TO_ROM) {
+                /* Need bytes in order: f9 4e 14 11 */
+                if (memcmp(buf, str_f94e1411, 4) == 0)
+                    return;  // Already in desired order
+                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                    printf("Swap mode 3210\n");
+                    goto swap_3210;  // Swap bytes in 32-bit longs
+                }
+                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                    printf("Swap mode 2301\n");
+                    goto swap_2301;  // Swap adjacent 16-bit words
+                }
+                if (memcmp(buf, str_4ef91114, 4) == 0) {
+                    printf("Swap mode 1032\n");
+                    goto swap_1032;  // Swap odd/even bytes
+                }
+            }
+            if (dir == SWAP_FROM_ROM) {
+                /* Need bytes in order: 11 14 4e f9 */
+                if (memcmp(buf, str_11144ef9, 4) == 0)
+                    return;  // Already in desired order
+                if (memcmp(buf, str_f94e1411, 4) == 0) {
+                    printf("Swap mode 3210\n");
+                    goto swap_3210;  // Swap bytes in 32-bit longs
+                }
+                if (memcmp(buf, str_4ef91114, 4) == 0) {
+                    printf("Swap mode 2301\n");
+                    goto swap_2301;  // Swap adjacent 16-bit words
+                }
+                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                    printf("Swap mode 1032\n");
+                    goto swap_1032;  // Swap odd/even bytes
+                }
+            }
+unrecognized:
+            printf("Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
+                   buf[0], buf[1], buf[2], buf[3]);
+            exit(EXIT_FAILURE);
+    }
+}
+
+static uint
+read_from_flash(uint bank, uint addr, void *buf, uint len)
+{
+    uint rc;
+    uint16_t bankarg = bank;
+    SUPERVISOR_STATE_ENTER();
+    INTERRUPTS_DISABLE();
+    CACHE_DISABLE_DATA();
+    MMU_DISABLE();
+
+#undef USE_OVERLAY
+#ifdef USE_OVERLAY
+    *CIAA_PRA |= CIAA_PRA_OVERLAY | CIAA_PRA_LED;
+#endif
+    rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
+                       &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    spin(10000);
+#ifdef USE_OVERLAY
+    local_memcpy(buf, (void *) (addr), len);
+    *CIAA_PRA &= ~(CIAA_PRA_OVERLAY | CIAA_PRA_LED);
+#else
+    local_memcpy(buf, (void *) (ROM_BASE + addr), len);
+#endif
+    rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
+                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    spin(10000);
+
+    MMU_RESTORE();
+    CACHE_RESTORE_STATE();
+    INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
+    return (rc);
+}
+
+static int
+wait_for_flash_done(uint timeout_usec)
+{
+    uint32_t status;
+    uint32_t cstatus = 0;
+    uint32_t lstatus = 0;
+    uint     spins = timeout_usec * 10;
+    uint     spin_count = 0;
+    int      same_count = 0;
+    int      see_fail_count = 0;
+
+    while (spin_count < spins) {
+        __asm__ __volatile__("nop");
+        status = *ADDR32(ROM_BASE);
+
+        cstatus = status;
+        /* Filter out checking of status which is already done */
+        if (((cstatus ^ lstatus) & 0x0000ffff) == 0)
+            cstatus &= ~0x0000ffff;
+        if (((cstatus ^ lstatus) & 0xffff0000) == 0)
+            cstatus &= ~0xffff0000;
+
+        if (status == lstatus) {
+            if (same_count++ >= 1) {
+                /* Same for 2 tries */
+                return (0);
+            }
+        } else {
+            same_count = 0;
+            lstatus = status;
+        }
+
+        if (cstatus & (BIT(5) | BIT(5 + 16)))  // Program / erase failure
+            if (see_fail_count++ > 5)
+                break;
+    }
+
+    if (cstatus & (BIT(5) | BIT(5 + 16))) {
+        /* Program / erase failure */
+        return (MSG_STATUS_PRG_FAIL);
+    }
+
+    /* Program / erase timeout */
+    return (MSG_STATUS_PRG_TMOUT);
+}
+
+static uint
+write_to_flash(uint bank, uint addr, void *buf, uint len)
+{
+    uint rc;
+    uint xlen;
+    uint8_t *xbuf = buf;
+    uint16_t bankarg = bank;
+
+    SUPERVISOR_STATE_ENTER();
+    INTERRUPTS_DISABLE();
+    CACHE_DISABLE_DATA();
+    MMU_DISABLE();
+
+    /* Switch to flash bank to be programmed */
+    rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
+                       &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    spin(10000);
+
+    if (rc == 0) {
+        /* Write flash data */
+        while (len > 0) {
+            xlen = len;
+            if (xlen > 4)
+                xlen = 4;
+
+            rc = flash_cmd_core(KS_CMD_FLASH_WRITE, xbuf, xlen);
+            if (rc != 0)
+                break;
+
+            *ADDR32(ROM_BASE + addr);  // Generate address for write
+            rc = wait_for_flash_done(360);
+            if (rc != 0)
+                break;
+
+            len  -= xlen;
+            xbuf += xlen;
+            addr += xlen;
+        }
+    }
+    spin(10000);
+
+    /* Restore flash to read mode */
+    rc |= flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
+    spin(10000);
+
+    /* Return to "current" flash bank */
+    rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
+                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    spin(10000);
+
+    MMU_RESTORE();
+    CACHE_RESTORE_STATE();
+    INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
+    return (rc);
+}
+
+static uint
+erase_flash_block(uint bank, uint addr)
+{
+    uint rc;
+    uint16_t bankarg = bank;
+
+    SUPERVISOR_STATE_ENTER();
+    INTERRUPTS_DISABLE();
+    CACHE_DISABLE_DATA();
+    MMU_DISABLE();
+
+    /* Switch to flash bank to be programmed */
+    rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
+                       &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    spin(10000);
+
+    /* Send erase command */
+    rc = flash_cmd_core(KS_CMD_FLASH_ERASE, NULL, 0);
+    if (rc == 0) {
+        *ADDR32(ROM_BASE + addr);  // Generate address for erase
+        rc = wait_for_flash_done(10000);  // about 1 second
+    }
+    spin(10000);
+
+    /* Restore flash to read mode */
+    rc |= flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
+    spin(10000);
+
+    /* Return to "current" flash bank */
+    rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
+                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    spin(10000);
+
+    MMU_RESTORE();
+    CACHE_RESTORE_STATE();
+    INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
+    return (0);
+}
+
+/*
+ * cmd_readwrite
+ * -------------
+ * Read from flash and write to file or read from file and write to flash.
+ */
+int
+cmd_readwrite(int argc, char *argv[])
+{
+    bank_info_t info;
+    const char *ptr;
+    const char *filename = NULL;
+    int         arg;
+    int         pos;
+    int         bytes;
+    uint        flag_dump = 0;
+    uint        flag_yes = 0;
+    uint        addr = VALUE_UNASSIGNED;
+    uint        bank = VALUE_UNASSIGNED;
+    uint        len  = VALUE_UNASSIGNED;
+    uint        file_is_stdio = 0;
+    uint        rlen;
+    uint        rc = 1;
+    uint        bank_sub;
+    uint        bank_size;
+    FILE       *file;
+    uint        swapmode = 0123;  // no swap
+    uint        writemode = 0;
+    uint8_t    *buf;
+
+    if ((strcmp(argv[0], "-w") == 0) || (strcmp(argv[0], "write") == 0))
+        writemode = 1;
+
+    for (arg = 1; arg < argc; ) {
+        ptr = argv[arg++];
+        if ((strcmp(ptr, "?") == 0) || (strcmp(ptr, "help") == 0)) {
+            rc = 0;
+usage:
+            if (writemode)
+                printf("%s", cmd_write_options);
+            else
+                printf("%s", cmd_read_options);
+            return (rc);
+        } else if ((strncmp(ptr, "addr", 4) == 0) || (strcmp(ptr, "-a") == 0)) {
+            if (arg + 1 > argc) {
+                printf("smash %s %s requires an option\n", argv[0], ptr);
+                goto usage;
+            }
+            pos = 0;
+            if ((sscanf(argv[arg], "%x%n", &addr, &pos) != 1) || (pos == 0)) {
+                printf("Invalid argument \"%s\" for %s %s\n",
+                       argv[arg], argv[0], ptr);
+                goto usage;
+            }
+            arg++;
+        } else if ((strcmp(ptr, "bank") == 0) || (strcmp(ptr, "-b") == 0)) {
+            if (arg + 1 > argc) {
+                printf("smash %s %s requires an option\n", argv[0], ptr);
+                goto usage;
+            }
+            pos = 0;
+            if ((sscanf(argv[arg], "%x%n", &bank, &pos) != 1) || (pos == 0) ||
+                (bank >= ROM_BANKS)) {
+                printf("Invalid argument \"%s\" for %s %s\n",
+                       argv[arg], argv[0], ptr);
+                goto usage;
+            }
+            arg++;
+        } else if ((strncmp(ptr, "deb", 3) == 0) || (strcmp(ptr, "-D") == 0)) {
+            flag_debug++;
+        } else if ((strcmp(ptr, "dump") == 0) || (strcmp(ptr, "-d") == 0)) {
+            flag_dump++;
+        } else if ((strcmp(ptr, "file") == 0) || (strcmp(ptr, "-f") == 0)) {
+            if (arg + 1 > argc) {
+                printf("smash %s %s requires an option\n", argv[0], ptr);
+                goto usage;
+            }
+            filename = argv[arg];
+            if (strcmp(filename, "-") == 0)
+                file_is_stdio++;
+            arg++;
+        } else if ((strncmp(ptr, "len", 3) == 0) || (strcmp(ptr, "-l") == 0)) {
+            if (arg + 1 > argc) {
+                printf("smash %s %s requires an option\n", argv[0], ptr);
+                goto usage;
+            }
+            pos = 0;
+            if ((sscanf(argv[arg], "%x%n", &len, &pos) != 1) ||
+                (pos == 0) || (argv[arg][pos] != '\0')) {
+                printf("Invalid argument \"%s\" for %s %s\n",
+                       argv[arg], argv[0], ptr);
+                goto usage;
+            }
+            arg++;
+        } else if ((strncmp(ptr, "swap", 3) == 0) || (strcmp(ptr, "-s") == 0)) {
+            if (arg + 1 > argc) {
+                printf("smash %s %s requires an option\n", argv[0], ptr);
+                goto usage;
+            }
+            pos = 0;
+            if ((strcasecmp(argv[arg], "a3000") == 0) ||
+                (strcasecmp(argv[arg], "a4000") == 0) ||
+                (strcasecmp(argv[arg], "a3000t") == 0) ||
+                (strcasecmp(argv[arg], "a4000t") == 0) ||
+                (strcasecmp(argv[arg], "a1200") == 0)) {
+                swapmode = SWAPMODE_A3000;
+                break;
+            }
+            if ((strcasecmp(argv[arg], "a500") == 0) ||
+                (strcasecmp(argv[arg], "a600") == 0) ||
+                (strcasecmp(argv[arg], "a1000") == 0) ||
+                (strcasecmp(argv[arg], "a2000") == 0) ||
+                (strcasecmp(argv[arg], "cdtv") == 0)) {
+                swapmode = SWAPMODE_A500;
+                break;
+            }
+            if ((sscanf(argv[arg], "%u%n", &swapmode, &pos) != 1) ||
+                (pos == 0) || (argv[arg][pos] != '\0') ||
+                ((swapmode != 0123) && (swapmode != 1032) &&
+                 (swapmode != 2301) && (swapmode != 3210))) {
+                printf("Invalid argument \"%s\" for %s %s\n",
+                       argv[arg], argv[0], ptr);
+                printf("Use 1032, 2301, or 3210\n");
+                return (1);
+            }
+            arg++;
+        } else if ((strncmp(ptr, "yes", 3) == 0) || (strcmp(ptr, "-y") == 0)) {
+            flag_yes++;
+        } else {
+            printf("Unknown argument %s \"%s\"\n",
+                   argv[0], ptr);
+            goto usage;
+        }
+    }
+    if (filename == NULL) {
+        if (flag_dump) {
+            file_is_stdio++;
+            filename = "-";
+        } else {
+            printf("You must supply a filename or - for stdout\n");
+            goto usage;
+        }
+    }
+    if (bank == VALUE_UNASSIGNED) {
+        printf("You must supply a bank number\n");
+        goto usage;
+    }
+    if (flag_dump && !file_is_stdio) {
+        printf("Can only dump ASCII text to stdout\n");
+        return (1);
+    }
+    if (addr == VALUE_UNASSIGNED)
+        addr = 0;
+
+    rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, &info, sizeof (info), &rlen);
+    if (rc != 0) {
+        printf("Failed to get bank information: %d %s\n",
+               rc, smash_err(rc));
+        return (rc);
+    }
+    bank_sub  = info.bi_merge[bank] & 0x0f;
+    bank_size = ((info.bi_merge[bank] + 0x10) & 0xf0) << 15;  // size in bytes
+    if (bank_sub != 0) {
+        printf("Bank %u is part of a merged bank, but is not the "
+               "first (use %u)\n", bank, bank - bank_sub);
+        return (1);
+    }
+
+    if (len == VALUE_UNASSIGNED) {
+        if (writemode) {
+            /* Get length from size of file */
+            len = get_file_size(filename);
+            if (len == VALUE_UNASSIGNED) {
+                return (1);
+            }
+        } else {
+            /* Get length from size of bank */
+            len = bank_size;
+        }
+    } else if (len > bank_size) {
+        printf("Specified length 0x%x is greater than bank size 0x%x\n",
+               len, bank_size);
+        return (1);
+    } else if (addr + len > bank_size) {
+        printf("Specified address + length 0x%x is overflows bank "
+               "(size 0x%x)\n",
+               addr + len, bank_size);
+        return (1);
+    }
+
+    if (writemode && file_is_stdio) {
+        printf("STDIO input not supported\n");
+        return (1);
+    }
+
+    if (writemode) {
+        printf("Write bank=%u addr=%x len=%x from ", bank, addr, len);
+        if (file_is_stdio)
+            printf("stdin");
+        else
+            printf("file=\"%s\"", filename);
+        printf("\n");
+    } else {
+        printf("Read bank=%u addr=%x len=%x to ", bank, addr, len);
+        if (file_is_stdio)
+            printf("stdout");
+        else
+            printf("file=\"%s\"", filename);
+        if (flag_dump)
+            printf(" (ASCII dump)");
+        printf("\n");
+    }
+    if ((!flag_yes) && (!file_is_stdio || (flag_dump && (len >= 0x1000))) &&
+        (!are_you_sure("Proceed"))) {
+        return (1);
+    }
+
+#define MAX_CHUNK (64 << 10)   // 64 KB
+    buf = AllocMem(MAX_CHUNK, MEMF_PUBLIC);
+    if (buf == NULL) {
+        printf("Failed to allocate 0x%x bytes\n", MAX_CHUNK);
+        return (1);
+    }
+
+    if (file_is_stdio) {
+        file = stdout;
+    } else {
+        if (writemode) {
+            file = fopen(filename, "r");
+            if (file == NULL) {
+                printf("Failed to open \"%s\", for read\n", filename);
+                rc = 1;
+                goto fail_end;
+            }
+        } else {
+            file = fopen(filename, "w");
+            if (file == NULL) {
+                printf("Failed to open \"%s\", for write\n", filename);
+                rc = 1;
+                goto fail_end;
+            }
+        }
+    }
+
+    rc = 0;
+    if (!file_is_stdio) {
+        printf("Progress [%*s]\rProgress [",
+               (len + MAX_CHUNK - 1) / MAX_CHUNK, "");
+        fflush(stdout);
+    }
+    bank += addr / ROM_WINDOW_SIZE;
+    addr &= (ROM_WINDOW_SIZE - 1);
+
+    while (len > 0) {
+        uint xlen = len;
+        if (xlen > MAX_CHUNK)
+            xlen = MAX_CHUNK;
+        if (xlen > ROM_WINDOW_SIZE - addr) {
+            xlen = ROM_WINDOW_SIZE - addr;
+        }
+
+        if (writemode) {
+            /* Read from file */
+            bytes = fread(buf, 1, xlen, file);
+            if (bytes < (int) xlen) {
+                printf("\nFailed to read %u bytes from %s\n", xlen, filename);
+                rc = 1;
+                break;
+            }
+        } else {
+            /* Read from flash */
+            rc = read_from_flash(bank, addr, buf, xlen);
+            if (rc != 0) {
+                printf("\nKicksmash failure %d (%s)\n", rc, smash_err(rc));
+                break;
+            }
+        }
+
+        execute_swapmode(buf, xlen, SWAP_FROM_ROM, swapmode);
+
+        if (writemode) {
+            /* Write to flash */
+            rc = write_to_flash(bank, addr, buf, xlen);
+            if (rc != 0) {
+                printf("\nKicksmash failure %d (%s)\n", rc, smash_err(rc));
+                break;
+            }
+        } else {
+            /* Output to file or stdout */
+            if (file_is_stdio) {
+                dump_memory((uint32_t *)buf, xlen, addr);
+            } else {
+                bytes = fwrite(buf, 1, xlen, file);
+                if (bytes < (int) xlen) {
+                    printf("\nFailed to write all bytes to %s\n", filename);
+                    rc = 1;
+                    break;
+                }
+            }
+        }
+        if (!file_is_stdio) {
+            printf(".");
+            fflush(stdout);
+        }
+
+        len  -= xlen;
+        addr += xlen;
+        if (addr >= ROM_WINDOW_SIZE) {
+            addr -= ROM_WINDOW_SIZE;
+            bank++;
+        }
+    }
+    if (!file_is_stdio) {
+        if (rc == 0)
+            printf("]\n");
+        fclose(file);
+    }
+fail_end:
+    FreeMem(buf, MAX_CHUNK);
+    return (rc);
+}
+
+static uint
+get_flash_bsize(const chip_blocks_t *cb, uint flash_addr)
+{
+    uint flash_bsize = cb->cb_bsize << (10 + smash_cmd_shift);
+    uint flash_bnum  = flash_addr / flash_bsize;
+#undef ERASE_DEBUG
+#ifdef ERASE_DEBUG
+    printf("bbnum=%x flash_bsize=%x flash_addr=%x flash_bnum=%x\n",
+           cb->cb_bbnum, flash_bsize, flash_addr, flash_bnum);
+#endif
+    if (flash_bnum == cb->cb_bbnum) {
+        /*
+         * Boot block has variable block size.
+         *
+         * This code does not find the actual block size. It finds the
+         * size from the current location until the end of the block
+         * and captures that as flash_bsize. This allows following code
+         * to know where the next erase boundary begins.
+         * */
+        uint bboff = flash_addr & (flash_bsize - 1);
+        uint bsnum = (bboff / cb->cb_ssize) >> (10 + smash_cmd_shift);
+        uint snum;
+        uint smap = cb->cb_map;
+#ifdef ERASE_DEBUG
+        printf("bblock bb_off=%x snum=%x s_map=%x\n", bboff, bsnum, smap);
+#endif
+        flash_bsize = 0;
+        /* Find first bit of this map */
+        while (bsnum > 0) {
+            if (smap & BIT(bsnum))  // Found base
+                break;
+            bsnum--;
+        }
+        for (snum = bsnum + 1; snum < 8; snum++)
+            if (smap & BIT(snum))
+                break;  // At next block
+        flash_bsize = (cb->cb_ssize * (snum - bsnum)) << (10 + smash_cmd_shift);
+#ifdef ERASE_DEBUG
+        printf(" bsnum=%x esnum=%x bb ssize %x\n", bsnum, snum, flash_bsize);
+#endif
+    }
+#ifdef ERASE_DEBUG
+    else {
+        printf(" normal block %x\n", flash_bsize);
+    }
+#endif
+    return (flash_bsize);
+}
+
+/*
+ * cmd_erase
+ * ---------
+ * Erase flash
+ */
+int
+cmd_erase(int argc, char *argv[])
+{
+    bank_info_t info;
+    const chip_blocks_t *cb;
+    const char *ptr;
+    uint32_t    flash_dev1;
+    uint32_t    flash_dev2;
+    const char *id1;
+    const char *id2;
+    uint        addr = VALUE_UNASSIGNED;
+    uint        bank = VALUE_UNASSIGNED;
+    uint        len  = VALUE_UNASSIGNED;
+    uint        flag_yes = 0;
+    uint        rc = 1;
+    uint        rlen;
+    uint        bank_sub;
+    uint        bank_size;
+    uint        flash_start_addr;
+    uint        flash_end_addr;
+    uint        flash_start_bsize;
+    uint        flash_end_bsize;
+    uint        mode;
+    uint        tlen = 0;
+    int         arg;
+    int         pos;
+
+    for (arg = 1; arg < argc; ) {
+        ptr = argv[arg++];
+        if ((strcmp(ptr, "?") == 0) || (strcmp(ptr, "help") == 0)) {
+            rc = 0;
+usage:
+            printf("%s", cmd_erase_options);
+            return (rc);
+        } else if ((strncmp(ptr, "addr", 4) == 0) || (strcmp(ptr, "-a") == 0)) {
+            if (arg + 1 > argc) {
+                printf("smash %s %s requires an option\n", argv[0], ptr);
+                goto usage;
+            }
+            pos = 0;
+            if ((sscanf(argv[arg], "%x%n", &addr, &pos) != 1) || (pos == 0)) {
+                printf("Invalid argument \"%s\" for %s %s\n",
+                       argv[arg], argv[0], ptr);
+                goto usage;
+            }
+            arg++;
+        } else if ((strcmp(ptr, "bank") == 0) || (strcmp(ptr, "-b") == 0)) {
+            if (arg + 1 > argc) {
+                printf("smash %s %s requires an option\n", argv[0], ptr);
+                goto usage;
+            }
+            pos = 0;
+            if ((sscanf(argv[arg], "%x%n", &bank, &pos) != 1) || (pos == 0) ||
+                (bank >= ROM_BANKS)) {
+                printf("Invalid argument \"%s\" for %s %s\n",
+                       argv[arg], argv[0], ptr);
+                goto usage;
+            }
+            arg++;
+        } else if ((strncmp(ptr, "deb", 3) == 0) || (strcmp(ptr, "-d") == 0)) {
+            flag_debug++;
+        } else if ((strncmp(ptr, "len", 3) == 0) || (strcmp(ptr, "-l") == 0)) {
+            if (arg + 1 > argc) {
+                printf("smash %s %s requires an option\n", argv[0], ptr);
+                goto usage;
+            }
+            pos = 0;
+            if ((sscanf(argv[arg], "%x%n", &len, &pos) != 1) ||
+                (pos == 0) || (argv[arg][pos] != '\0')) {
+                printf("Invalid argument \"%s\" for %s %s\n",
+                       argv[arg], argv[0], ptr);
+                goto usage;
+            }
+            arg++;
+        } else if ((strncmp(ptr, "yes", 3) == 0) || (strcmp(ptr, "-y") == 0)) {
+            flag_yes++;
+        } else {
+            printf("Unknown argument %s \"%s\"\n",
+                   argv[0], ptr);
+            goto usage;
+        }
+    }
+
+    if (bank == VALUE_UNASSIGNED) {
+        printf("You must supply a bank number\n");
+        goto usage;
+    }
+    if (addr == VALUE_UNASSIGNED)
+        addr = 0;
+
+    rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, &info, sizeof (info), &rlen);
+    if (rc != 0) {
+        printf("Failed to get bank information: %d %s\n",
+               rc, smash_err(rc));
+        return (rc);
+    }
+
+    bank_sub  = info.bi_merge[bank] & 0x0f;
+    bank_size = ((info.bi_merge[bank] + 0x10) & 0xf0) << 15;  // size in bytes
+    if (bank_sub != 0) {
+        printf("Bank %u is part of a merged bank, but is not the "
+               "first (use %u)\n", bank, bank - bank_sub);
+        return (1);
+    }
+
+    if (len == VALUE_UNASSIGNED) {
+        /* Get length from size of bank */
+        len = bank_size - (addr & (bank_size - 1));
+    } else if (len > bank_size) {
+        printf("Specified length 0x%x is greater than bank size 0x%x\n",
+               len, bank_size);
+        return (1);
+    } else if (addr + len > bank_size) {
+        printf("Specified address + length (0x%x) overflows bank (size 0x%x)\n",
+               addr + len, bank_size);
+        return (1);
+    }
+
+    /* Acquire flash id to get block erase zones */
+    rc = flash_id(&flash_dev1, &flash_dev2, &mode);
+    if (rc != 0) {
+        printf("Flash id failure %d (%s)\n", rc, smash_err(rc));
+        return (rc);
+    }
+    id1 = ee_id_string(flash_dev1);
+    id2 = ee_id_string(flash_dev2);
+    if (flag_debug) {
+        if (mode == 16)
+            printf("    %08x %s", flash_dev1, id1);
+        else
+            printf("    %08x %08x %s %s", flash_dev1, flash_dev2, id1, id2);
+        printf(" (%u-bit mode)\n", mode);
+    }
+
+    if (strcmp(id1, "Unknown") == 0) {
+        printf("Failed to identify device 1 (%08x)\n", flash_dev1);
+        rc = MSG_STATUS_BAD_DATA;
+    }
+    if ((mode == 32) && (strcmp(id2, "Unknown") == 0)) {
+        printf("Failed to identify device 2 (%08x)\n", flash_dev2);
+        rc = MSG_STATUS_BAD_DATA;
+    }
+    if ((mode == 32) && (flash_dev1 != flash_dev2)) {
+        printf("    Failure: flash device ids differ (%08x %08x)\n",
+               flash_dev1, flash_dev2);
+        rc = MSG_STATUS_NO_REPLY;
+    }
+    if (rc != 0)
+        return (rc);
+
+    cb = get_chip_block_info(flash_dev1);
+    if (cb == NULL) {
+        printf("Failed to determine erase block information for %08x\n",
+               flash_dev1);
+        return (1);
+    }
+    flash_start_addr  = bank * ROM_WINDOW_SIZE + addr;
+    flash_end_addr    = bank * ROM_WINDOW_SIZE + addr + len - 1;
+    flash_start_bsize = get_flash_bsize(cb, flash_start_addr);
+    flash_end_bsize   = get_flash_bsize(cb, flash_end_addr);
+
+#ifdef ERASE_DEBUG
+    printf("pre saddr=%x eaddr=%x\n", flash_start_addr, flash_end_addr);
+#endif
+    /* Round start address down and end address up, then compute length */
+    flash_start_addr = flash_start_addr & ~(flash_start_bsize - 1);
+    flash_end_addr   = (flash_end_addr | (flash_end_bsize - 1)) + 1;
+    len = flash_end_addr - flash_start_addr;
+    addr = addr & ~(flash_start_bsize - 1);
+
+#ifdef ERASE_DEBUG
+    printf("saddr=%x sbsize=%x\n", flash_start_addr, flash_start_bsize);
+    printf("eaddr=%x ebsize=%x\n", flash_end_addr, flash_end_bsize);
+#endif
+
+    printf("Erase bank=%u addr=%x len=%x\n", bank, addr, len);
+    if ((!flag_yes) && (!are_you_sure("Proceed"))) {
+        return (1);
+    }
+
+    printf("Progress [%*s]\rProgress [",
+           (len + MAX_CHUNK - 1) / MAX_CHUNK, "");
+    fflush(stdout);
+    bank += addr / ROM_WINDOW_SIZE;
+    addr &= (ROM_WINDOW_SIZE - 1);
+
+    while (len > 0) {
+        uint xlen = get_flash_bsize(cb, bank * ROM_WINDOW_SIZE + addr);
+
+        rc = erase_flash_block(bank, addr);
+        if (rc != 0) {
+            printf("\nKicksmash failure %d (%s)\n", rc, smash_err(rc));
+            break;
+        }
+
+        tlen += xlen;
+        len  -= xlen;
+        addr += xlen;
+        if (addr >= ROM_WINDOW_SIZE) {
+            addr -= ROM_WINDOW_SIZE;
+            bank++;
+        }
+        if (tlen >= MAX_CHUNK) {
+            while (tlen >= MAX_CHUNK) {
+                tlen -= MAX_CHUNK;
+                printf(".");
+            }
+            fflush(stdout);
+        }
+    }
+    if (rc == 0) {
+        if (tlen > 0)
+            printf(".");
+        printf("]\n");
+    }
+
+    return (rc);
+}
 
 int
 main(int argc, char *argv[])
@@ -1184,17 +2401,18 @@ main(int argc, char *argv[])
     uint     loops = 1;
     uint     flag_bank = 0;
     uint     flag_inquiry = 0;
+    uint     flag_test = 0;
     uint     flag_x_spin = 0;
     uint     flag_y_spin = 0;
-    uint     flag_test = 0;
     uint     bank   = 0;
-    int      pos = 0;
+    int      pos;
     uint     rc = 0;
     uint32_t addr;
 
 #ifndef _DCC
     SysBase = *(struct ExecBase **)4UL;
 #endif
+    cpu_type = get_cpu();
 
     for (arg = 1; arg < argc; arg++) {
         char *ptr = argv[arg];
@@ -1206,6 +2424,9 @@ main(int argc, char *argv[])
                         break;
                     case 'd':  // debug
                         flag_debug++;
+                        break;
+                    case 'e':  // erase flash
+                        exit(cmd_erase(argc - arg, argv + arg));
                         break;
                     case 'i':  // inquiry
                         flag_inquiry++;
@@ -1220,11 +2441,17 @@ main(int argc, char *argv[])
                     case 'q':  // quiet
                         flag_quiet++;
                         break;
+                    case 'r':  // read flash to file
+                        exit(cmd_readwrite(argc - arg, argv + arg));
+                        break;
                     case 's':  // spin
                         spin(MEM_LOOPS);
                         exit(0);
                     case 't':  // test
                         flag_test++;
+                        break;
+                    case 'w':  // write file to flash
+                        exit(cmd_readwrite(argc - arg, argv + arg));
                         break;
                     case 'x':  // spin reading address
                         if (++arg >= argc) {
@@ -1232,9 +2459,10 @@ main(int argc, char *argv[])
                             exit(1);
                         }
 
+                        pos = 0;
                         if ((sscanf(argv[arg], "%x%n", &addr, &pos) != 1) ||
                             (pos == 0)) {
-                            printf("invalid argument \"%s\" for -%c\n",
+                            printf("Invalid argument \"%s\" for -%c\n",
                                    argv[arg], *ptr);
                             exit(1);
                         }
@@ -1246,9 +2474,10 @@ main(int argc, char *argv[])
                             exit(1);
                         }
 
+                        pos = 0;
                         if ((sscanf(argv[arg], "%x%n", &addr, &pos) != 1) ||
                             (pos == 0)) {
-                            printf("invalid argument \"%s\" for -%c\n",
+                            printf("Invalid argument \"%s\" for -%c\n",
                                    argv[arg], *ptr);
                             exit(1);
                         }
@@ -1268,6 +2497,7 @@ main(int argc, char *argv[])
             exit(1);
         }
     }
+
     if ((flag_bank | flag_inquiry | flag_test | flag_x_spin |
          flag_y_spin) == 0) {
         printf("You must specify an operation to perform\n");

@@ -92,6 +92,7 @@ static uint64_t ee_last_access = 0;
 static bool     ee_enabled = false;
 static uint8_t  capture_mode = CAPTURE_ADDR;
 static uint     consumer_wrap;
+static uint     consumer_spin;
 static uint     rx_consumer = 0;
 static uint     message_count = 0;
 
@@ -180,18 +181,25 @@ ee_address_override(uint8_t bits, uint override)
             uint     shift = (bits & BIT(bit + 4)) ? 0 : 16;
             gpio_setmode(port, pin, GPIO_SETMODE_OUTPUT_PPULL_2);
             GPIO_BSRR(port) = pin << shift;
+#undef ADDR_OVERRIDE_DEBUG
+#ifdef ADDR_OVERRIDE_DEBUG
             if (override == 0)             // XXX: Remove output when debugged
                 printf(" A%u=%u", 17 + bit, !shift);
+#endif
         } else {
             /* Disable drive: Weak pull down pin */
             gpio_setmode(port, pin, GPIO_SETMODE_INPUT_PULLUPDOWN);
             GPIO_BSRR(port) = pin << 16;
+#ifdef ADDR_OVERRIDE_DEBUG
             if (override == 0)             // XXX: Remove output when debugged
                 printf(" !A%u", 17 + bit);
+#endif
         }
     }
+#ifdef ADDR_OVERRIDE_DEBUG
     if (override == 0)  // XXX: Remove output when debugged
         printf("\n");
+#endif
 }
 
 /*
@@ -930,10 +938,10 @@ typedef struct {
 } chip_blocks_t;
 
 static const chip_blocks_t chip_blocks[] = {
-    { 0x22D2, 31, 32, 4, 0x71 },  // 01110001 16K 4K 4K 8K (top)
-    { 0x22D8,  0, 32, 4, 0x1d },  // 00011101 8K 4K 4K 16K (bottom)
-    { 0x22D6, 15, 32, 4, 0x71 },  // 01110001 16K 4K 4K 8K (top)
-    { 0x2258,  0, 32, 4, 0x1d },  // 00011101 8K 4K 4K 16K (bottom)
+    { 0x22D2, 31, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x22D8,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
+    { 0x22D6, 15, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x2258,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
     { 0x0000,  0, 32, 4, 0x1d },  // Default to bottom boot
 };
 
@@ -1198,6 +1206,7 @@ ee_id_string(uint32_t id)
 void
 ee_poll(void)
 {
+    static uint consumer_spin_last = 0;
     if (ee_last_access != 0) {
         uint64_t usec = timer_tick_to_usec(timer_tick_get() - ee_last_access);
         if (usec > 1000000) {
@@ -1205,7 +1214,14 @@ ee_poll(void)
             ee_last_access = 0;
         }
     }
-    timer_enable_irq(TIM5, TIM_DIER_CC1IE);
+    if (consumer_spin_last != consumer_spin) {
+        consumer_spin_last = consumer_spin;
+        /*
+         * Re-enable message interrupt if it was disabled during
+         * interrupt processing due to excessive time.
+         */
+        timer_enable_irq(TIM5, TIM_DIER_CC1IE);
+    }
 }
 
 static void
@@ -1382,9 +1398,10 @@ fail:
     return (rc);
 }
 
-static void
+void
 ee_set_bank(uint8_t bank)
 {
+    uint8_t oldbank = config.bi.bi_bank_current;
     /*
      * bi_merge tells what bits of A17, A18, and A19 to force.
      * If the width of the bank is 8, then none are forced.
@@ -1409,7 +1426,8 @@ ee_set_bank(uint8_t bank)
 
     config.bi.bi_bank_current = bank;
     config.bi.bi_bank_nextreset = 0xff;
-    printf("Bank select %u %s\n", bank, config.bi.bi_desc[bank]);
+    if (bank != oldbank)
+        printf("Bank select %u %s\n", bank, config.bi.bi_desc[bank]);
 }
 
 void
@@ -1419,6 +1437,8 @@ ee_update_bank_at_reset(void)
         (config.bi.bi_bank_nextreset != config.bi.bi_bank_current)) {
 printf("nextreset bank %u\n", config.bi.bi_bank_nextreset);
         ee_set_bank(config.bi.bi_bank_nextreset);
+    } else {
+        ee_set_bank(config.bi.bi_bank_current);
     }
 }
 
@@ -1431,8 +1451,10 @@ ee_update_bank_at_longreset(void)
         if (cur == config.bi.bi_longreset_seq[bank]) {
             /* Switch to the next bank in the sequence */
             uint nextbank = bank + 1;
-            if (nextbank == ROM_BANKS)
+            if ((nextbank == ROM_BANKS) ||
+                (config.bi.bi_longreset_seq[nextbank] >= ROM_BANKS)) {
                 nextbank = 0;
+            }
 printf("longreset bank %u\n", config.bi.bi_longreset_seq[nextbank]);
             ee_set_bank(config.bi.bi_longreset_seq[nextbank]);
             break;
@@ -1458,6 +1480,9 @@ configure_oe_capture_rx(bool verbose)
     config_tim5_ch1_dma(verbose);
 
     disable_irq();
+// Not enough memory bandwidth on at least one CPU I have to have both
+// DMAs active and STM32 keep up with the Amiga. That particular STM32 does
+// not have DFU, so it might be a remarked STM32F103 or something else.
     TIM_CCER(TIM2) |= TIM_CCER_CC1E;  // timer_enable_oc_output()
     TIM_CCER(TIM5) |= TIM_CCER_CC1E;
     enable_irq();
@@ -1766,7 +1791,7 @@ ks_reply(uint hold_we, uint len, const void *reply_buf, uint status)
         dma_last = dma_left;
     }
     timer_delay_ticks(ticks_per_200_nsec);
-    timer_delay_usec(1);  // probably not necessary
+//  timer_delay_usec(1);  // probably not necessary
 #ifdef CAPTURE_GPIOS
 }
 #endif
@@ -1890,7 +1915,7 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
             break;
         }
         case KS_CMD_FLASH_READ: {
-            /* Send flash read array command */
+            /* Send command sequence for flash read array command */
             uint32_t addr = SWAP32(0x00555);
             ks_reply(0, sizeof (addr), &addr, KS_STATUS_OK);
             if (ee_mode == EE_MODE_32) {
@@ -1903,7 +1928,7 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
             break;
         }
         case KS_CMD_FLASH_ID: {
-            /* Send flash sequence to put it in identify mode */
+            /* Send command sequence to put it in identify mode */
             static const uint32_t addr[] = {
                 SWAP32(0x00555), SWAP32(0x002aa), SWAP32(0x00555)
             };
@@ -1916,6 +1941,76 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
             } else {
                 static const uint16_t data16[] = {
                     0x00aa, 0x0055, 0x0090
+                };
+                ks_reply(1, sizeof (data16), &data16, 0);  // WE will be set
+            }
+            break;
+        }
+        case KS_CMD_FLASH_WRITE: {
+            /* Send command sequence to perform flash write */
+            static const uint32_t addr[] = {
+                SWAP32(0x00555), SWAP32(0x002aa), SWAP32(0x00555)
+            };
+            uint32_t data;
+
+            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+
+            if (ee_mode == EE_MODE_32) {
+                if (cmd_len != 4) {
+                    ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                    break;
+                }
+                data = buffer_rxa_lo[cons_s] << 16;
+                cons_s++;
+                if (cons_s == ARRAY_SIZE(buffer_rxa_lo))
+                    cons_s = 0;
+                data |= buffer_rxa_lo[cons_s];
+            } else {
+                if (cmd_len != 2) {
+                    ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                    break;
+                }
+                data = buffer_rxa_lo[cons_s];
+            }
+
+            ks_reply(0, sizeof (addr), &addr, KS_STATUS_OK);
+            if (ee_mode == EE_MODE_32) {
+                static uint32_t data32[] = {
+                    0x00aa00aa, 0x00550055, 0x00a000a0, 0
+                };
+                data32[3] = data;
+                ks_reply(1, sizeof (data32), &data32, 0);  // WE will be set
+            } else {
+                static uint16_t data16[] = {
+                    0x00aa, 0x0055, 0x00a0, 0
+                };
+                data16[3] = data;
+                ks_reply(1, sizeof (data16), &data16, 0);  // WE will be set
+            }
+            break;
+        }
+        case KS_CMD_FLASH_ERASE: {
+            static const uint32_t addr[] = {
+                SWAP32(0x00555), SWAP32(0x002aa), SWAP32(0x00555),
+                SWAP32(0x00555), SWAP32(0x002aa),
+            };
+            if (cmd_len != 0) {
+                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                break;
+            }
+            ks_reply(0, sizeof (addr), &addr, KS_STATUS_OK);
+            if (ee_mode == EE_MODE_32) {
+                static const uint32_t data32[] = {
+                    0x00aa00aa, 0x00550055, 0x00800080,
+                    0x00aa00aa, 0x00550055, 0x00300030,
+                };
+                ks_reply(1, sizeof (data32), &data32, 0);  // WE will be set
+            } else {
+                static const uint16_t data16[] = {
+                    0x00aa, 0x0055, 0x00a0,
+                    0x00aa, 0x0055, 0x0030
                 };
                 ks_reply(1, sizeof (data16), &data16, 0);  // WE will be set
             }
@@ -1944,6 +2039,12 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
             ks_reply(0, 0, NULL, KS_STATUS_OK);
             if (cmd & KS_BANK_SETCURRENT) {
                 ee_set_bank(bank);
+            }
+            if (cmd & KS_BANK_SETTEMP) {
+                ee_address_override((bank << 4) | 0x7, 0);
+            }
+            if (cmd & KS_BANK_UNSETTEMP) {
+                ee_set_bank(config.bi.bi_bank_current);
             }
             if (cmd & KS_BANK_SETRESET) {
                 config.bi.bi_bank_nextreset = bank;
@@ -2107,7 +2208,6 @@ static inline void
 process_addresses(void)
 {
     static uint     magic_pos = 0;
-    static uint     crc_pos = 0;
     static uint16_t len = 0;
     static uint16_t cmd = 0;
     static uint16_t cmd_len = 0;
@@ -2122,64 +2222,99 @@ new_cmd:
     prod     = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
 
     while (rx_consumer != prod) {
-        if (magic_pos == 0) {
-            /* Special case to speed up skip of non-matches */
-            if (buffer_rxa_lo[rx_consumer] != sm_magic[0])
-                goto no_match;
-            magic_pos++;
-        } else if (magic_pos++ < ARRAY_SIZE(sm_magic)) {
-            /* Magic phase */
-            if (buffer_rxa_lo[rx_consumer] != sm_magic[magic_pos - 1])
-                magic_pos = 0;  // No match
-        } else if (magic_pos == ARRAY_SIZE(sm_magic) + 1) {
-            /* Length phase */
-            message_count++;
-            len = cmd_len = buffer_rxa_lo[rx_consumer];
-            crc = crc32r(0, &len, sizeof (uint16_t));
-            crc_pos = 0;
-        } else if (magic_pos == ARRAY_SIZE(sm_magic) + 2) {
-            /* Command phase */
-            cmd = buffer_rxa_lo[rx_consumer];
-            crc = crc32r(crc, &cmd, sizeof (uint16_t));
-        } else if (len != 0) {
-            /* Data phase */
-            len--;
-            if (len != 0) {
-                crc = crc32r(crc, (void *) &buffer_rxa_lo[rx_consumer], 2);
+        switch (magic_pos) {
+            case 0:
+                /* Look for start of Magic sequence (needs to be fast) */
+                if (buffer_rxa_lo[rx_consumer] != sm_magic[0])
+                    break;
+                magic_pos = 1;
+                break;
+            case 1:
+            case 2:
+            case 3:  // 1 ... ARRAY_SIZE(sm_magic) - 1
+                /* Magic phase */
+                if (buffer_rxa_lo[rx_consumer] != sm_magic[magic_pos]) {
+                    magic_pos = 0;  // No match
+                    break;
+                }
+                magic_pos++;
+                break;
+            case ARRAY_SIZE(sm_magic):
+                /* Length phase */
+                message_count++;
+                len = cmd_len = buffer_rxa_lo[rx_consumer];
+                crc = crc32r(0, &len, sizeof (uint16_t));
+                magic_pos++;
+                break;
+            case ARRAY_SIZE(sm_magic) + 1:
+                /* Command phase */
+                cmd = buffer_rxa_lo[rx_consumer];
+                crc = crc32r(crc, &cmd, sizeof (uint16_t));
+                if (len == 0)
+                    magic_pos++;  // Skip following Data Phase
+                magic_pos++;
+                break;
+            case ARRAY_SIZE(sm_magic) + 2:
+                /* Data phase */
                 len--;
-            } else {
-                /* Special case -- odd byte at end */
-                crc = crc32(crc, (void *) &buffer_rxa_lo[rx_consumer], 1);
-            }
-        } else if (crc_pos < 2) {
-            if (crc_pos == 0) {
+                if (len != 0) {
+                    crc = crc32r(crc, (void *) &buffer_rxa_lo[rx_consumer], 2);
+                    len--;
+                } else {
+                    /* Special case -- odd byte at end */
+                    crc = crc32r(crc, (void *) &buffer_rxa_lo[rx_consumer], 1);
+                }
+                if (len == 0)
+                    magic_pos++;
+                break;
+            case ARRAY_SIZE(sm_magic) + 3:
+                /* Top half of CRC */
                 crc_rx = buffer_rxa_lo[rx_consumer] << 16;
-            } else {
+                magic_pos++;
+                break;
+            case ARRAY_SIZE(sm_magic) + 4:
+                /* Bottom half of CRC */
                 crc_rx |= buffer_rxa_lo[rx_consumer];
                 if (crc_rx != crc) {
                     uint16_t error[2];
                     error[0] = KS_STATUS_CRC;
                     error[1] = crc;
+{
+// XXX: not fast enough to deal with log
+    static uint16_t tempcap[16];
+    uint c = rx_consumer;
+    int pos;
+    for (pos = ARRAY_SIZE(tempcap) - 1; pos > 0; pos--) {
+        tempcap[pos] = buffer_rxa_lo[c];
+        if (--c == 0)
+            c = ARRAY_SIZE(buffer_rxa_lo) - 1;
+    }
                     ks_reply(0, sizeof (error), &error, KS_STATUS_CRC);
                     magic_pos = 0;  // Reset magic sequencer
+
                     printf("cmd=%x l=%04x CRC %08lx != calc %08lx\n",
                            cmd, cmd_len, crc_rx, crc);
-                    return;
+    for (pos = 0; pos < ARRAY_SIZE(tempcap); pos++) {
+        printf(" %04x", tempcap[pos]);
+        if (((pos & 0xf) == 0xf) && (pos != ARRAY_SIZE(tempcap) - 1))
+            printf("\n");
+    }
+    printf("\n");
+}
+                    magic_pos = 0;  // Restart magic detection
+                    break;
                 }
 
                 /* Execution phase */
                 execute_cmd(cmd, cmd_len);
                 magic_pos = 0;  // Restart magic detection
                 goto new_cmd;
-            }
-            crc_pos++;
-        } else {
-            /* Should not get here */
-            printf("?");
-            magic_pos = 0;  // Restart magic detection
-            goto new_cmd;
+            default:
+                printf("?");
+                magic_pos = 0;  // Restart magic detection
+                goto new_cmd;
         }
-no_match:
+
         if (++rx_consumer == ARRAY_SIZE(buffer_rxa_lo)) {
             rx_consumer = 0;
             consumer_wrap++;
@@ -2187,13 +2322,15 @@ no_match:
             if (consumer_wrap - start_wrap > 10) {
                 /*
                  * Spinning too much in interrupt context.
-                 * Disable interrupt -- it will get re-enabled in ee_poll().
+                 * Disable interrupt -- it will be re-enabled in ee_poll().
                  */
                 timer_disable_irq(TIM5, TIM_DIER_CC1IE);
+                consumer_spin++;
                 return;
             }
         }
     }
+
     dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER, LOG_DMA_CHANNEL);
     prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
     if (rx_consumer != prod)
@@ -2477,10 +2614,13 @@ address_log_replay(uint max)
         printf("T2C1=%04x %08x\n"
                "T5C1=%04x %08x\n"
                "Wrap=%u\n"
+               "Spin=%u\n"
                "Msgs=%u\n",
                (uint) DMA_CNDTR(DMA1, DMA_CHANNEL5), (uintptr_t)buffer_rxd,
                (uint) DMA_CNDTR(DMA2, DMA_CHANNEL5), (uintptr_t)buffer_rxa_lo,
-               consumer_wrap, message_count);
+               consumer_wrap, consumer_spin, message_count);
+        consumer_wrap = 0;
+        consumer_spin = 0;
         message_count = 0;
         return (0);
     }

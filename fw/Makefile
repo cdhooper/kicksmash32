@@ -70,7 +70,7 @@ OBJCOPY		:= $(PREFIX)-objcopy
 OBJDUMP		:= $(PREFIX)-objdump
 GDB		:= $(PREFIX)-gdb
 STFLASH		= $(shell which st-flash)
-OPT		:= -Os
+OPT		:= -O2
 DEBUG		:= -ggdb3
 CSTD		?= -std=gnu99
 
@@ -225,8 +225,8 @@ just-erase: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash --flash=0x100000 erase 0x08000000 0x3c000
 
 just-mxprog:
-	./mxprog -e -a 0x000000 -l 0x80000
-	./mxprog -wv A3000.47.111.rom -a 0x000000 -s 3210 -d /dev/ttyACM0 -bank 0
+	./mxprog -d /dev/ttyACM0 -e -a 0x000000 -l 0x80000
+	./mxprog -d /dev/ttyACM0 -wv A3000.47.111.rom -a 0x000000 -s 3210
 
 # Protect/unprotect/clobber flash by writing the option byte area
 # The following can also be done by the STM32CubeProgrammer.

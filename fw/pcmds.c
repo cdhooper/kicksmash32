@@ -29,6 +29,7 @@
 #include "irq.h"
 #include "kbrst.h"
 #include "m29f160xt.h"
+#include "config.h"
 
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/stm32/gpio.h>
@@ -43,6 +44,8 @@
 #define SRAM_BASE 0x20000000U
 #endif
 
+#define ROM_BANKS 8
+
 #if defined(STM32F4)
 #define FLASH_BASE FLASH_MEM_INTERFACE_BASE
 #endif
@@ -55,6 +58,7 @@ const char cmd_gpio_help[] =
 
 const char cmd_prom_help[] =
 "prom bank <bits> <mode> - override A18 & A19 (\"7 0\" = force bank 0)\n"
+"prom bank <cmd>         - show or set PROM bank for AmigaOS\n"
 "prom cmd <cmd> [<addr>] - send a 16-bit command to the EEPROM chip\n"
 "prom id                 - report EEPROM chip vendor and id\n"
 "prom disable            - disable and power off EEPROM\n"
@@ -266,6 +270,186 @@ cmd_prom_temp(int argc, char * const *argv)
     return (RC_SUCCESS);
 }
 
+static int
+cmd_prom_bank(int argc, char * const *argv)
+{
+    uint8_t  bank_start = 0;
+    uint8_t  bank_end   = 0;
+    uint     flag_bank_merge       = 0;
+    uint     flag_bank_unmerge     = 0;
+    uint     flag_bank_longreset   = 0;
+    uint     flag_set_current_bank = 0;
+    uint     flag_set_reset_bank   = 0;
+    uint     flag_set_poweron_bank = 0;
+    uint     flag_set_bank_comment = 0;
+    uint     bank;
+    uint     rc;
+
+    if (argc < 2) {
+        printf("prom bank requires an argument\n");
+        printf("One of: ?, show, comment, current, longreset, nextreset, "
+               "poweron, merge, unmerge\n");
+        return (1);
+    }
+    if (strcmp(argv[1], "?") == 0) {
+        printf("  show                       Display all ROM bank information\n"
+               "  merge <start> <end>        Merge banks for larger ROMs\n"
+               "  unmerge <start> <end>      Unmerge banks\n"
+               "  longreset <bank>[,<bank>]  Banks to sequence at long reset\n"
+               "  poweron <bank>             Default bank at poweron\n"
+               "  current <bank>             Force new bank immediately\n"
+               "  nextreset <bank>           Force new bank at next reset\n"
+               "  comment <bank> <text>      Add bank description comment\n");
+    } else if (strcmp(argv[1], "show") == 0) {
+        config_bank_show();
+        return (0);
+    } else if ((strcmp(argv[1], "current") == 0) ||
+               (strcmp(argv[1], "set") == 0)) {
+        flag_set_current_bank++;
+    } else if (strcmp(argv[1], "poweron") == 0) {
+        flag_set_poweron_bank++;
+    } else if (strcmp(argv[1], "longreset") == 0) {
+        flag_bank_longreset++;
+    } else if (strcmp(argv[1], "nextreset") == 0) {
+        flag_set_reset_bank++;
+    } else if (strcmp(argv[1], "merge") == 0) {
+        flag_bank_merge++;
+    } else if (strcmp(argv[1], "unmerge") == 0) {
+        flag_bank_unmerge++;
+    } else if (strcmp(argv[1], "comment") == 0) {
+        flag_set_bank_comment++;
+    } else {
+        printf("Unknown argument prom bank '%s'\n", argv[1]);
+        return (1);
+    }
+    if (flag_set_bank_comment) {
+        if (argc != 4) {
+            printf("prom bank %s requires a <bank> number and "
+                   "\"comment text\"\n", argv[1]);
+            return (1);
+        }
+        bank = atoi(argv[2]);
+        if (bank >= ROM_BANKS) {
+            printf("Bank %u is invalid (maximum bank is %u)\n",
+                   bank, ROM_BANKS - 1);
+            return (1);
+        }
+        return (config_set_bank_comment(bank, argv[3]));
+    }
+    if (flag_bank_longreset) {
+        uint8_t     banks[ROM_BANKS];
+        uint        cur;
+
+        rc = 0;
+        for (cur = 0; cur < ROM_BANKS; cur++) {
+            if (cur + 2 < (uint) argc) {
+                bank = atoi(argv[cur + 2]);
+                if (bank >= ROM_BANKS) {
+                    printf("Bank %u is invalid (maximum bank is %u)\n",
+                           bank, ROM_BANKS - 1);
+                    rc++;
+                    continue;
+                }
+                banks[cur] = bank;
+            } else {
+                banks[cur] = 0xff;
+            }
+        }
+        if (rc != 0)
+            return (rc);
+        return (config_set_bank_longreset(banks));
+    }
+    if (flag_set_current_bank || flag_set_poweron_bank || flag_set_reset_bank) {
+        if (argc != 3) {
+            printf("prom bank %s requires a <bank> number to set\n", argv[1]);
+            return (1);
+        }
+
+        bank = atoi(argv[2]);
+        if (bank >= ROM_BANKS) {
+            printf("Bank %u is invalid (maximum bank is %u)\n",
+                   bank, ROM_BANKS - 1);
+            return (1);
+        }
+
+        return (config_set_bank(bank, flag_set_current_bank,
+                                flag_set_poweron_bank, flag_set_reset_bank));
+    }
+    if (flag_bank_merge || flag_bank_unmerge) {
+        uint        count;
+        if (argc != 4) {
+            printf("prom bank %s requires <start> and <end> bank numbers "
+                   "(range)\n", argv[1]);
+            return (1);
+        }
+        bank_start = atoi(argv[2]);
+        bank_end   = atoi(argv[3]);
+        count = bank_end - bank_start + 1;
+        if (bank_start > bank_end) {
+            printf("bank %u is not less than end %u\n", bank_start, bank_end);
+            return (1);
+        }
+        if (bank_end >= ROM_BANKS) {
+            printf("Bank %u is invalid (maximum bank is %u)\n",
+                   bank_end, ROM_BANKS - 1);
+            return (1);
+        }
+        if ((count != 1) && (count != 2) && (count != 4) && (count != 8)) {
+            printf("Bank sizes must be a power of 2 (1, 2, 4, or 8 banks)\n");
+            return (1);
+        }
+        if ((count == 2) && (bank_start & 1)) {
+            printf("Two-bank ranges must start with an even bank number "
+                   "(0, 2, 4, or 6)\n");
+            return (1);
+        }
+        if ((count == 4) && (bank_start != 0) && (bank_start != 4)) {
+            printf("Four-bank ranges must start with either bank 0 or "
+                   "bank 4\n");
+            return (1);
+        }
+        if ((count == 8) && (bank_start != 0)) {
+            printf("Eight-bank ranges must start with bank 0\n");
+            return (1);
+        }
+
+        return (config_set_bank_merge(bank_start, bank_end, flag_bank_unmerge));
+    }
+    return (0);
+}
+
+#if 0
+static int
+cmd_prom_bank(int argc, char *argv[])
+{
+    int arg;
+    for (arg = 1; arg < argc; arg++) {
+    }
+    uint bits;
+    uint mode;
+    // XXX: The "prom bank" command will be changed significantly
+    //      in the near future.
+    if ((argc < 2) || (argc > 3)) {
+        printf("prom bank <bits> <mode>\n"
+               "   bit 0   1=Drive A17     mode 0 = Assign new override\n"
+               "   bit 1   1=Drive A18     mode 1 = Temp disable override\n"
+               "   bit 2   1=Drive A19     mode 2 = Restore override\n"
+               "   bit 4   A17\n"
+               "   bit 5   A18\n"
+               "   bit 6   A19\n");
+        return (RC_FAILURE);
+    }
+    rc = parse_value(argv[1], (uint8_t *) &bits, 2);
+    if (rc != RC_SUCCESS)
+        return (rc);
+    rc = parse_value(argv[2], (uint8_t *) &mode, 4);
+    if (rc != RC_SUCCESS)
+        return (rc);
+    ee_address_override(bits, mode);
+    return (RC_SUCCESS);
+}
+#endif
+
 rc_t
 cmd_prom(int argc, char * const *argv)
 {
@@ -298,28 +482,7 @@ cmd_prom(int argc, char * const *argv)
         arg = argv[0];
     }
     if (strcmp("bank", arg) == 0) {
-        uint bits;
-        uint mode;
-        // XXX: The "prom bank" command will be changed significantly
-        //      in the near future.
-        if ((argc < 2) || (argc > 3)) {
-            printf("prom bank <bits> <mode>\n"
-                   "   bit 0   1=Drive A17     mode 0 = Assign new override\n"
-                   "   bit 1   1=Drive A18     mode 1 = Temp disable override\n"
-                   "   bit 2   1=Drive A19     mode 2 = Restore override\n"
-                   "   bit 4   A17\n"
-                   "   bit 5   A18\n"
-                   "   bit 6   A19\n");
-            return (RC_FAILURE);
-        }
-        rc = parse_value(argv[1], (uint8_t *) &bits, 2);
-        if (rc != RC_SUCCESS)
-            return (rc);
-        rc = parse_value(argv[2], (uint8_t *) &mode, 4);
-        if (rc != RC_SUCCESS)
-            return (rc);
-        ee_address_override(bits, mode);
-        return (RC_SUCCESS);
+        return (cmd_prom_bank(argc, argv));
     } else if (strcmp("cmd", arg) == 0) {
         uint32_t cmd;
         if ((argc < 2) || (argc > 3)) {

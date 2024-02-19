@@ -19,6 +19,8 @@
 #include "config.h"
 #include "crc32.h"
 #include "stm32flash.h"
+#include "utils.h"
+#include "m29f160xt.h"
 
 #define CONFIG_MAGIC     0x19460602
 #define CONFIG_VERSION   0x01
@@ -171,5 +173,153 @@ config_poll(void)
     if ((config_timer != 0) && timer_tick_has_elapsed(config_timer)) {
         config_timer = 0;
         config_write();
+    }
+}
+
+int
+config_set_bank_comment(uint bank, const char *comment)
+{
+    uint len = strlen(comment);
+    if (len >= ARRAY_SIZE(config.bi.bi_desc[bank])) {
+        printf("Bank comment \"%s\" is too long.\n", comment);
+        return (1);
+    }
+    strcpy(config.bi.bi_desc[bank], comment);
+    config_updated();
+    return (0);
+}
+
+int
+config_set_bank_longreset(uint8_t *banks)
+{
+    uint bank;
+    uint sub;
+    for (bank = 0; bank < ROM_BANKS; bank++) {
+        sub = config.bi.bi_merge[bank] & 0x0f;
+        if (sub != 0) {
+            printf("Bank %u is part of a merged block, but is not the "
+                   "first (use %u)\n", bank, bank - sub);
+            return (1);
+        }
+    }
+    memcpy(config.bi.bi_longreset_seq, banks, ROM_BANKS);
+    config_updated();
+    return (0);
+}
+
+int
+config_set_bank_merge(uint bank_start, uint bank_end, uint flag_unmerge)
+{
+    uint bank;
+    uint banks_add = bank_end - bank_start;
+
+    for (bank = bank_start; bank <= bank_end; bank++) {
+        if (!flag_unmerge && (config.bi.bi_merge[bank] != 0)) {
+            uint banks = (config.bi.bi_merge[bank] >> 4) + 1;
+            printf("Bank %u is already part of a%s %u bank range\n",
+                   bank, (banks == 8) ? "n" : "", banks);
+            return (1);
+        }
+        if (flag_unmerge && (config.bi.bi_merge[bank] == 0)) {
+            printf("Bank %u is not part of a bank range\n", bank);
+            return (1);
+        }
+    }
+
+    for (bank = bank_start; bank <= bank_end; bank++) {
+        if (flag_unmerge) {
+            config.bi.bi_merge[bank] = 0;
+        } else {
+            config.bi.bi_merge[bank] = (banks_add << 4) |
+                                       (bank - bank_start);
+        }
+    }
+    config_updated();
+    return (0);
+}
+
+int
+config_set_bank(uint bank, uint set_cur, uint set_poweron, uint set_reset)
+{
+    uint sub = config.bi.bi_merge[bank] & 0x0f;
+    if (sub != 0) {
+        printf("Bank %u is part of a merged block, but is not the "
+               "first (use %u)\n", bank, bank - sub);
+        return (1);
+    }
+
+    if (set_cur) {
+        ee_set_bank(bank);
+    }
+    if (set_poweron) {
+        config.bi.bi_bank_poweron = bank;
+        config_updated();
+    }
+    if (set_reset) {
+        config.bi.bi_bank_nextreset = bank;
+    }
+    return (0);
+}
+
+void
+config_bank_show(void)
+{
+    uint bank;
+
+    printf("Bank  Comment         Merge LongReset  PowerOn  Current  "
+           "NextReset\n");
+
+    for (bank = 0; bank < ROM_BANKS; bank++) {
+        uint aspaces = 2;
+        uint pos;
+        uint banks_add = config.bi.bi_merge[bank] >> 4;
+        uint bank_sub  = config.bi.bi_merge[bank] & 0xf;
+        printf("%-5u %-15s ", bank, config.bi.bi_desc[bank]);
+
+        if (banks_add < 1)
+            aspaces += 4;
+        else if (bank_sub == 0)
+            printf("-\\  ");
+        else if (bank_sub == banks_add)
+            printf("-/  ");
+        else
+            printf("  | ");
+
+        for (pos = 0; pos < ARRAY_SIZE(config.bi.bi_longreset_seq); pos++)
+            if (config.bi.bi_longreset_seq[pos] == bank)
+                break;
+
+        if (pos < ARRAY_SIZE(config.bi.bi_longreset_seq)) {
+            printf("%*s%u", aspaces, "", pos);
+            aspaces = 0;
+        } else {
+            aspaces++;
+        }
+        aspaces += 10;
+
+        if (bank == config.bi.bi_bank_poweron) {
+            printf("%*s*", aspaces, "");
+            aspaces = 0;
+        } else {
+            aspaces++;
+        }
+        aspaces += 8;
+
+        if (bank == config.bi.bi_bank_current) {
+            printf("%*s*", aspaces, "");
+            aspaces = 0;
+        } else {
+            aspaces++;
+        }
+        aspaces += 8;
+
+        if (bank == config.bi.bi_bank_nextreset) {
+            printf("%*s*", aspaces, "");
+            aspaces = 0;
+        } else {
+            aspaces++;
+        }
+        aspaces += 8;
+        printf("\n");
     }
 }

@@ -20,10 +20,10 @@
 #define KS_CMD_ROMSEL        0x04  // Force or release A17, A18, and A19
 #define KS_CMD_LOOPBACK      0x05  // Reply with sent message
 #define KS_CMD_FLASH_READ    0x06  // Generate flash read mode sequence
-#define KS_CMD_FLASH_ID      0x07  // Generate flash ID sequence
-#define KS_CMD_FLASH_WRITE   0x08  // Generate flash write sequence
-#define KS_CMD_FLASH_ERASE   0x09  // Generate flash erase sequence
-#define KS_CMD_FLASH_CMD     0x0a  // Issue low level command to EEPROM
+#define KS_CMD_FLASH_CMD     0x07  // Issue low level command to EEPROM
+#define KS_CMD_FLASH_ID      0x08  // Generate flash ID sequence
+#define KS_CMD_FLASH_WRITE   0x09  // Generate flash write sequence
+#define KS_CMD_FLASH_ERASE   0x0a  // Generate flash erase sequence
 #define KS_CMD_BANK_INFO     0x10  // Get ROM bank information structure
 #define KS_CMD_BANK_SET      0x11  // Set bank (options in high bits)
 #define KS_CMD_BANK_MERGE    0x12  // Merge or unmerge banks
@@ -48,6 +48,8 @@
 #define KS_BANK_SETCURRENT 0x0100  // Set current ROM bank (immediate change)
 #define KS_BANK_SETRESET   0x0200  // Set ROM bank in effect at next reset
 #define KS_BANK_SETPOWERON 0x0400  // Set ROM bank in effect at cold poweron
+#define KS_BANK_SETTEMP    0x1000  // Temporarily set ROM bank (unmerged)
+#define KS_BANK_UNSETTEMP  0x2000  // Remove temporary ROM bank setting
 #define KS_BANK_REBOOT     0x8000  // Option to reboot Amiga when complete
 
 #define KS_BANK_UNMERGE    0x0100  // Unmerge bank range (KS_BANK_MERGE)
@@ -124,13 +126,24 @@
 
 #define ROM_BANKS 8
 typedef struct {
-    uint8_t bi_valid;                    // 0x01 = valid
-    uint8_t bi_bank_current;             // currently active bank
-    uint8_t bi_bank_nextreset;           // bank at next reset
-    uint8_t bi_bank_poweron;             // bank at cold poweron
-    uint8_t bi_longreset_seq[ROM_BANKS]; // 0xff = end of list
-    uint8_t bi_merge[ROM_BANKS];         // bank is merged with next
-    char    bi_desc[ROM_BANKS][16];      // bank description string
+    uint8_t  bi_valid;                    // 0x01 = valid
+    uint8_t  bi_bank_current;             // currently active bank
+    uint8_t  bi_bank_nextreset;           // bank at next reset
+    uint8_t  bi_bank_poweron;             // bank at cold poweron
+    uint8_t  bi_longreset_seq[ROM_BANKS]; // 0xff = end of list
+    uint8_t  bi_merge[ROM_BANKS];         // bank is merged with next
+    char     bi_desc[ROM_BANKS][16];      // bank description string
+    uint8_t  bi_unused[12];                // Unused space
 } bank_info_t;
+
+typedef struct {
+    uint32_t si_rev;                     // Protocol revision (xxxx 00.01)
+    uint32_t si_usbid;                   // USB id (0x12091610)
+    uint32_t si_ks_version;              // Kicksmash version
+    uint8_t  si_ks_date[4];              // Kicksmash build date (cc-yy-mm-dd)
+    uint8_t  si_ks_time[4];              // Kicksmash build time (hh-mm-ss-00)
+    uint32_t si_features;                // Available features
+    uint8_t  si_unused[16];              // Unused space
+} smash_id_t;
 
 #endif /* _SMASH_H */
