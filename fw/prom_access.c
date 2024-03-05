@@ -271,30 +271,6 @@ prom_id(void)
     return (RC_SUCCESS);
 }
 
-rc_t
-prom_status(void)
-{
-    char status[64];
-
-    if (warn_amiga_not_in_reset())
-        return (RC_BUSY);
-
-    ee_enable();
-    printf("%04x %s\n", ee_status_read(status, sizeof (status)), status);
-    return (RC_SUCCESS);
-}
-
-rc_t
-prom_status_clear(void)
-{
-    if (warn_amiga_not_in_reset())
-        return (RC_BUSY);
-
-    ee_enable();
-    ee_status_clear();
-    return (RC_SUCCESS);
-}
-
 static int
 getchar_wait(uint pos)
 {
@@ -521,12 +497,6 @@ fail:
         }
     }
     return (RC_SUCCESS);
-}
-
-void
-prom_disable(void)
-{
-    ee_disable();
 }
 
 int

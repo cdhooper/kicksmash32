@@ -29,6 +29,7 @@
 #define CONFIG_AREA_END  (CONFIG_AREA_BASE + CONFIG_AREA_SIZE)
 
 uint64_t config_timer = 0;
+uint8_t  cold_poweron = 0;
 
 config_t config;
 
@@ -114,8 +115,15 @@ config_read(void)
             uint crclen = sizeof (config_t) - crcpos;
             uint32_t crc = crc32(0, &ptr->crc + 1, crclen);
             if (crc == ptr->crc) {
-                printf("Valid config at %lx\n", addr);
+                printf("Valid config at %lx", addr);
                 memcpy(&config, (void *) addr, sizeof (config));
+                if (config.name[0] != '\0')
+                    printf("  (%s)", config.name);
+                printf("\n");
+                if (cold_poweron) {
+                    config.bi.bi_bank_current = config.bi.bi_bank_poweron;
+                    config.bi.bi_bank_nextreset = 0xff;
+                }
                 return;
             }
         }
@@ -129,35 +137,10 @@ config_read(void)
     config.ee_mode = 3;  // EE_MODE_AUTO
 
     config.bi.bi_bank_current = 0;
-    config.bi.bi_bank_nextreset = 0;
+    config.bi.bi_bank_nextreset = 0xff;
     config.bi.bi_bank_poweron = 0;
     memset(&config.bi.bi_longreset_seq, 0xff,
            sizeof (config.bi.bi_longreset_seq));
-
-#if 1
-    // XXX: For debug
-    config.bi.bi_longreset_seq[0] = 2;
-    config.bi.bi_longreset_seq[1] = 0;
-    config.bi.bi_longreset_seq[2] = 0xff;
-    config.bi.bi_longreset_seq[3] = 0xff;
-    config.bi.bi_longreset_seq[4] = 0xff;
-    config.bi.bi_longreset_seq[5] = 0xff;
-    config.bi.bi_longreset_seq[6] = 0xff;
-    config.bi.bi_longreset_seq[7] = 0xff;
-    config.bi.bi_longreset_seq[7] = 0xff;
-    config.bi.bi_merge[0] = 0x00;  // 512KB bank
-    config.bi.bi_merge[1] = 0x00;  // 512KB bank
-    config.bi.bi_merge[2] = 0x00;  // 512KB bank
-    config.bi.bi_merge[3] = 0x00;  // 512KB bank
-    config.bi.bi_merge[4] = 0x30;  // 2MB bank
-    config.bi.bi_merge[5] = 0x31;
-    config.bi.bi_merge[6] = 0x32;
-    config.bi.bi_merge[7] = 0x33;
-    strcpy(config.bi.bi_desc[0], "3.2.2 A");
-    strcpy(config.bi.bi_desc[1], "3.2.2 B");
-    strcpy(config.bi.bi_desc[2], "DiagROM");
-    strcpy(config.bi.bi_desc[4], "2MB ROM");
-#endif
 
     config_updated();
 }
@@ -259,6 +242,25 @@ config_set_bank(uint bank, uint set_cur, uint set_poweron, uint set_reset)
         config.bi.bi_bank_nextreset = bank;
     }
     return (0);
+}
+
+void
+config_name(const char *name)
+{
+    if (name == NULL) {
+        /* Show current name */
+        if (config.name[0] == '\0') {
+            printf("Board is unnamed\n");
+        } else {
+            printf("%s\n", config.name);
+        }
+    } else {
+        if (strcmp(config.name, name) == 0)
+            return;
+        strncpy(config.name, name, sizeof (config.name) - 1);
+        config.name[sizeof (config.name) - 1] = '\0';
+        config_updated();
+    }
 }
 
 void

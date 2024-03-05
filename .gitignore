@@ -16,5 +16,6 @@ cscope.out
 .cscope_cmd.*
 objs/
 rev*/
+photos
 fw/libopencm3/
 stutils/

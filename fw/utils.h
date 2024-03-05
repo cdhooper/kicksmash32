@@ -26,4 +26,6 @@ void reset_check(void);
 void show_reset_reason(void);
 void identify_cpu(void);
 
+extern uint8_t cold_poweron;
+
 #endif /* _UTILS_H */

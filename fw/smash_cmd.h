@@ -17,7 +17,6 @@
 #define KS_CMD_NOP           0x01  // Do nothing
 #define KS_CMD_ID            0x02  // Reply with software ID
 #define KS_CMD_TESTPATT      0x03  // Reply with bit test pattern
-#define KS_CMD_ROMSEL        0x04  // Force or release A17, A18, and A19
 #define KS_CMD_LOOPBACK      0x05  // Reply with sent message
 #define KS_CMD_FLASH_READ    0x06  // Generate flash read mode sequence
 #define KS_CMD_FLASH_CMD     0x07  // Issue low level command to EEPROM

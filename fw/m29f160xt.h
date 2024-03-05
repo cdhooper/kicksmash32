@@ -20,7 +20,6 @@ void     ee_id(uint32_t *part1, uint32_t *part2);
 void     ee_init(void);
 void     ee_read_mode(void);
 int      ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose);
-uint16_t ee_status_read(char *status, uint status_len);
 void     ee_status_clear(void);
 void     ee_cmd(uint32_t addr, uint32_t cmd);
 void     ee_poll(void);
@@ -33,6 +32,7 @@ void     ee_set_bank(uint8_t bank);
 const char *ee_id_string(uint32_t id);
 const char *ee_vendor_string(uint32_t id);
 int      address_log_replay(uint max);
+void     ee_update_bank_at_poweron(void);
 void     ee_update_bank_at_reset(void);
 void     ee_update_bank_at_longreset(void);
 

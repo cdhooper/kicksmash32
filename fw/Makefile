@@ -218,11 +218,11 @@ dfu-clobber: $(UDEV_FILE_PATHS)
 
 # Write STM32 flash using ST-Link
 just-flash: $(ST_TOOLS_PATH)/st-flash | $(BINARY).bin $(UDEV_FILE_PATHS)
-	$(ST_TOOLS_PATH)/st-flash --reset write $(BINARY).bin 0x08000000
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write $(BINARY).bin 0x08000000
 
 # Erase STM32 flash using ST-Link
 just-erase: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
-	$(ST_TOOLS_PATH)/st-flash --flash=0x100000 erase 0x08000000 0x3c000
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --flash=0x100000 erase 0x08000000 0x3c000
 
 just-mxprog:
 	./mxprog -d /dev/ttyACM0 -e -a 0x000000 -l 0x80000
@@ -233,22 +233,28 @@ just-mxprog:
 # F105 unlocked  1ffff800: a5 5a 07 f8 00 ff 00 ff ff 00 ff 00 ff 00 ff 00
 # F105 protect   1ffff800: 00 ff 07 f8 ff 00 ff 00 00 ff 00 ff 00 ff 00 ff
 # F105 clobber   1ffff800: 00 00 00 00 00 03 00 03 00 ff 00 ff 00 ff 00 ff
+
+# Select specific programmer ("make stinfo" to get serial)
+# export ST_ARGS="--serial 57FF6E064975545225502187"		# amiga1
+# export ST_ARGS="--serial 53FF74064986525547421187"		# amiga2
+# export ST_ARGS="--serial 303030303030303030303031"		# amiga1
+
 just-unprotect: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
-	$(ST_TOOLS_PATH)/st-flash --reset write flash_unprotect.bin 0x1ffff800
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_unprotect.bin 0x1ffff800
 just-protect: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
-	$(ST_TOOLS_PATH)/st-flash --reset write flash_protect.bin 0x1ffff800
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_protect.bin 0x1ffff800
 just-clobber: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
-	$(ST_TOOLS_PATH)/st-flash --reset write flash_clobber.bin 0x1ffff800
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_clobber.bin 0x1ffff800
 just-clobber2:
 
 dfu: all just-dfu
 flash: all just-flash
 
 # Connect to remote STM32 via ST-Link (follow with "make gdb")
-stlink: | $(UDEV_FILE_PATHS)
-	$(ST_TOOLS_PATH)/st-util --no-reset
+stlink: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
+	$(ST_TOOLS_PATH)/st-util $(ST_ARGS) --no-reset
 
-reset: | $(UDEV_FILE_PATHS)
+stinfo reset: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-info --probe
 
 # Get ST-TOOLS

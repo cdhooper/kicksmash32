@@ -72,6 +72,15 @@ static void config_dma(uint32_t dma, uint32_t channel, uint to_periph,
                        uint32_t wraplen);
 
 static const uint16_t sm_magic[] = { 0x0117, 0x0119, 0x1017, 0x0204 };
+// static const uint16_t reset_magic_32[] = { 0x0000, 0x0001, 0x0034, 0x0035 };
+// static const uint16_t reset_magic_16[] = { 0x0002, 0x0003, 0x0068, 0x0069 };
+#define REBOOT_MAGIC_NUM 8
+static const uint16_t reboot_magic_32[] =
+        { 0x0004, 0x0003, 0x0003, 0x0002, 0x0002, 0x0001, 0x0001, 0x0000 };
+static const uint16_t reboot_magic_16[] =
+        { 0x0007, 0x0006, 0x0005, 0x0004, 0x0003, 0x0002, 0x0001, 0x0000 };
+static const uint16_t *reboot_magic;
+static uint16_t reboot_magic_end;
 
 /*
  * EE_MODE_32      = 32-bit flash
@@ -92,6 +101,7 @@ static uint64_t ee_last_access = 0;
 static bool     ee_enabled = false;
 static uint8_t  capture_mode = CAPTURE_ADDR;
 static uint     consumer_wrap;
+static uint     consumer_wrap_last_poll;
 static uint     consumer_spin;
 static uint     rx_consumer = 0;
 static uint     message_count = 0;
@@ -302,9 +312,9 @@ data_output_disable(void)
 /*
  * oewe_output
  * -----------
- * Drives the OEWE (flash write enable on output enable) pin with the specified value.
- * If this pin is high, when the host drives OE# low, it will result in WE# being
- * driven low.
+ * Drives the OEWE (flash write enable on output enable) pin with the
+ * specified value. If this pin is high, when the host drives OE# low,
+ * it will result in WE# being driven low.
  */
 static void
 oewe_output(uint value)
@@ -404,13 +414,17 @@ ee_set_mode(uint new_mode)
     if (ee_mode == EE_MODE_32) {
         ee_cmd_mask = 0xffffffff;  // 32-bit
         ee_addr_shift = 2;
+        reboot_magic = reboot_magic_32;
     } else if (ee_mode == EE_MODE_16_LOW) {
         ee_cmd_mask = 0x0000ffff;  // 16-bit low
         ee_addr_shift = 1;
+        reboot_magic = reboot_magic_16;
     } else {
         ee_cmd_mask = 0xffff0000;  // 16-bit high
         ee_addr_shift = 1;
+        reboot_magic = reboot_magic_16;
     }
+    reboot_magic_end = reboot_magic[0];
 }
 
 /*
@@ -852,54 +866,6 @@ ee_read_mode(void)
     ee_cmd(0x00555, 0x00f000f0);
 }
 
-/*
- * ee_status_read
- * --------------
- * Acquires and converts to readable text the current value of the status
- * register from the EEPROM.
- *
- * @param [out] status     - A buffer where to store the status string.
- * @param [in]  status_len - The buffer length
- *
- * @return      status value read from the EEPROM.
- *
- * XXX: This code does not yet support the M29F160xT
- */
-uint16_t
-ee_status_read(char *status, uint status_len)
-{
-    uint32_t data;
-    const char *sstr;
-
-    ee_cmd(0x00555, 0x00700070);
-    ee_read_word(0x00000, &data);
-    ee_read_mode();
-
-    switch (ee_status) {
-        case EE_STATUS_NORMAL:
-            sstr = "Normal";
-            break;
-        case EE_STATUS_ERASE_TIMEOUT:
-            sstr = "Erase Timeout";
-            break;
-        case EE_STATUS_PROG_TIMEOUT:
-            sstr = "Program Timeout";
-            break;
-        case EE_STATUS_ERASE_FAILURE:
-            sstr = "Erase Failure";
-            break;
-        case EE_STATUS_PROG_FAILURE:
-            sstr = "Program Failure";
-            break;
-        default:
-            sstr = "Unknown";
-            break;
-    }
-    snprintf(status, status_len, sstr);
-
-    return (ee_status);
-}
-
 typedef struct {
     uint16_t cv_id;       // Vendor code
     char     cv_vend[12]; // Vendor string
@@ -1206,7 +1172,6 @@ ee_id_string(uint32_t id)
 void
 ee_poll(void)
 {
-    static uint consumer_spin_last = 0;
     if (ee_last_access != 0) {
         uint64_t usec = timer_tick_to_usec(timer_tick_get() - ee_last_access);
         if (usec > 1000000) {
@@ -1214,8 +1179,8 @@ ee_poll(void)
             ee_last_access = 0;
         }
     }
-    if (consumer_spin_last != consumer_spin) {
-        consumer_spin_last = consumer_spin;
+    if (consumer_wrap_last_poll != consumer_wrap) {
+        consumer_wrap_last_poll = consumer_wrap;
         /*
          * Re-enable message interrupt if it was disabled during
          * interrupt processing due to excessive time.
@@ -1443,6 +1408,12 @@ printf("nextreset bank %u\n", config.bi.bi_bank_nextreset);
 }
 
 void
+ee_update_bank_at_poweron(void)
+{
+    ee_set_bank(config.bi.bi_bank_poweron);
+}
+
+void
 ee_update_bank_at_longreset(void)
 {
     uint bank;
@@ -1591,17 +1562,20 @@ gpio_showbuf(uint count)
 /*
  * ks_reply
  * --------
- * This function sends a reply message to the host operating system.
+ * This function sends a reply message to the Amiga host operating system.
  * It will disable flash output and drive data lines directly from the STM32.
  * This routine is called from interrupt context.
  */
 static void
-ks_reply(uint hold_we, uint len, const void *reply_buf, uint status)
+ks_reply(uint hold_we, uint status, uint rlen1, const void *rbuf1,
+         uint rlen2, const void *rbuf2)
 {
-    uint      count = 0;
+    uint      count;
+    uint      pos = 0;
     uint      tlen = (ee_mode == EE_MODE_32) ? 4 : 2;
     uint      dma_left;
     uint      dma_last;
+    uint16_t  rlen = rlen1 + rlen2;
 
     /* FLASH_OE=1 disables flash from driving data pins */
     oe_output(1);
@@ -1615,7 +1589,7 @@ ks_reply(uint hold_we, uint len, const void *reply_buf, uint status)
     if (hold_we) {
         we_output(1);
 // XXX: remove once stronger pull-up resistor (1K?) is in place
-#define STM32_HARD_DRIVE_WE_ON_SHARED_WRITE
+#undef STM32_HARD_DRIVE_WE_ON_SHARED_WRITE
 #ifdef STM32_HARD_DRIVE_WE_ON_SHARED_WRITE
         we_enable(1);      // Drive high
 #else
@@ -1656,30 +1630,52 @@ ks_reply(uint hold_we, uint len, const void *reply_buf, uint status)
          * For 32-bit mode, we need to separate low and high 16 bits as
          * they are driven out by separate DMA engines (TIM5 and TIM2).
          */
-        uint pos;
+        uint32_t *rbp;
         if (hold_we) {
-            for (pos = 0; pos < len / 4; pos++) {
-                uint32_t val = ((uint32_t *)reply_buf)[pos];
+            rbp = (uint32_t *) rbuf1;
+            rlen1 /= 4;
+            for (count = 0; count < rlen1; count++, pos++) {
+                uint32_t val = *(rbp++);
                 buffer_txd_hi[pos] = val >> 16;
                 buffer_txd_lo[pos] = (uint16_t) val;
             }
+            if (rlen2 != 0) {
+                rbp = (uint32_t *) rbuf2;
+                rlen2 /= 4;
+                for (count = 0; count < rlen2; count++, pos++) {
+                    uint32_t val = *(rbp++);
+                    buffer_txd_hi[pos] = val >> 16;
+                    buffer_txd_lo[pos] = (uint16_t) val;
+                }
+            }
         } else {
             uint32_t crc;
-            for (pos = 0, count = 0; count < ARRAY_SIZE(sm_magic); pos++) {
+            for (count = 0; count < ARRAY_SIZE(sm_magic); pos++) {
                 buffer_txd_hi[pos] = sm_magic[count++];
                 buffer_txd_lo[pos] = sm_magic[count++];
             }
-            buffer_txd_hi[pos] = len;
+            buffer_txd_hi[pos] = rlen;
             buffer_txd_lo[pos] = status;
             pos++;
-            crc = crc32r(0, &len, 2);
+            crc = crc32r(0, &rlen, 2);
             crc = crc32r(crc, &status, 2);
-            crc = crc32(crc, reply_buf, len);
-            len /= tlen;
-            for (count = 0; count < len; count++, pos++) {
-                uint32_t val = ((uint32_t *)reply_buf)[count];
+            crc = crc32(crc, rbuf1, rlen1);
+            rlen1 /= tlen;
+            rbp = (uint32_t *) rbuf1;
+            for (count = 0; count < rlen1; count++, pos++) {
+                uint32_t val = *(rbp++);
                 buffer_txd_hi[pos] = (val << 8)  | ((val >> 8) & 0x00ff);
                 buffer_txd_lo[pos] = (val >> 24) | ((val >> 8) & 0xff00);
+            }
+            if (rlen2 != 0) {
+                crc = crc32(crc, rbuf2, rlen2);
+                rlen2 /= tlen;
+                rbp = (uint32_t *) rbuf2;
+                for (count = 0; count < rlen2; count++, pos++) {
+                    uint32_t val = *(rbp++);
+                    buffer_txd_hi[pos] = (val << 8)  | ((val >> 8) & 0x00ff);
+                    buffer_txd_lo[pos] = (val >> 24) | ((val >> 8) & 0xff00);
+                }
             }
             buffer_txd_hi[pos] = crc >> 16;
             buffer_txd_lo[pos] = (uint16_t) crc;
@@ -1722,22 +1718,28 @@ ks_reply(uint hold_we, uint len, const void *reply_buf, uint status)
         enable_irq();
     } else {
         /* For 16-bit mode, a single DMA engine can be used */
-        uint pos;
         if (hold_we) {
-            memcpy((void *)buffer_txd_lo, reply_buf, len);
-            pos = len / 2;
+            memcpy((void *)buffer_txd_lo, rbuf1, rlen1);
+            if (rlen2 != 0) {
+                memcpy(((uint8_t *)buffer_txd_lo) + rlen1, rbuf2, rlen2);
+            }
+            pos = rlen / 2;
         } else {
             uint32_t crc;
             memcpy((void *)buffer_txd_lo, sm_magic, sizeof (sm_magic));
-            pos = sizeof (sm_magic);
-            buffer_txd_lo[pos++] = len;
+            pos = sizeof (sm_magic) / 2;
+            buffer_txd_lo[pos++] = rlen1;
             buffer_txd_lo[pos++] = status;
-            crc = crc32r(0, &len, 2);
+            crc = crc32r(0, &rlen1, 2);
             crc = crc32r(crc, &status, 2);
-            crc = crc32(crc, reply_buf, len);
-            if (len > 0) {
-                memcpy((void *)&buffer_txd_lo[pos], reply_buf, len);
-                pos += len / 2;
+            crc = crc32(crc, rbuf1, rlen1);
+            if (rlen1 != 0) {
+                memcpy((void *)&buffer_txd_lo[pos], rbuf1, rlen1);
+                pos += rlen1 / 2;
+            }
+            if (rlen2 != 0) {
+                memcpy((void *)&buffer_txd_lo[pos], rbuf2, rlen2);
+                pos += rlen2 / 2;
             }
             buffer_txd_lo[pos++] = crc >> 16;
             buffer_txd_lo[pos++] = (uint16_t) crc;
@@ -1790,8 +1792,7 @@ ks_reply(uint hold_we, uint len, const void *reply_buf, uint status)
         }
         dma_last = dma_left;
     }
-    timer_delay_ticks(ticks_per_200_nsec);
-//  timer_delay_usec(1);  // probably not necessary
+//  timer_delay_ticks(ticks_per_200_nsec);
 #ifdef CAPTURE_GPIOS
 }
 #endif
@@ -1829,7 +1830,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             break;
         case KS_CMD_NOP:
             /* Do nothing but reply */
-            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             break;
         case KS_CMD_ID: {
             /* Send Kickflash identification and configuration */
@@ -1840,7 +1841,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 0x00000000,  // Unused
                 0x00000000,  // Unused
             };
-            ks_reply(0, sizeof (reply), &reply, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
             break;  // End processing
         }
         case KS_CMD_TESTPATT: {
@@ -1854,7 +1855,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 0xfdfffeff, 0xf7fffbff, 0xdfffefff, 0x7fffbfff,
                 0x54534554, 0x54544150, 0x444e4520, 0x68646320,
             };
-            ks_reply(0, sizeof (reply), &reply, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
             break;  // End processing
         }
         case KS_CMD_LOOPBACK: {
@@ -1871,7 +1872,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 /* Send data doesn't wrap */
                 len1 = cmd_len;
                 buf1 = ((uint8_t *) &buffer_rxa_lo[cons_s]) - len1;
-                ks_reply(we, len1, buf1, KS_STATUS_OK);
+                ks_reply(we, KS_STATUS_OK, len1, &buf1, 0, NULL);
                 if (we) {
                     uint pos;
                     printf("we l=%x b=", len1);
@@ -1888,8 +1889,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 buf2 = ((uint8_t *) buffer_rxa_lo) +
                        sizeof (buffer_rxa_lo) - len2;
                 if (len2 != 0)
-                    ks_reply(we, len2, buf2, KS_STATUS_OK);
-                ks_reply(we, len1, buf1, KS_STATUS_OK);
+                    ks_reply(we, KS_STATUS_OK, len2, buf2, 0, NULL);
+                ks_reply(we, KS_STATUS_OK, len1, buf1, 0, NULL);
 // XXX: This won't work. Maybe need to modify ks_reply() to handle
 //      two buffer pointers and lengths. A better option may be
 //      to give a flag to ks_reply() which says whether to not
@@ -1898,32 +1899,16 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             }
             break;  // End processing
         }
-        case KS_CMD_ROMSEL: {
-            uint16_t bank;
-            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
-            if ((int) cons_s < 0)
-                cons_s += ARRAY_SIZE(buffer_rxa_lo);
-            bank = buffer_rxa_lo[cons_s];
-
-            if (cmd_len != 2) {
-                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
-                break;
-            }
-            ks_reply(0, 0, NULL, KS_STATUS_OK);
-printf("RS l=%u b=%04x\n", cmd_len, bank);
-//          ee_address_override(buffer_rxa_lo[cons_s] >> 8, 0);
-            break;
-        }
         case KS_CMD_FLASH_READ: {
             /* Send command sequence for flash read array command */
             uint32_t addr = SWAP32(0x00555);
-            ks_reply(0, sizeof (addr), &addr, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, sizeof (addr), &addr, 0, NULL);
             if (ee_mode == EE_MODE_32) {
                 uint32_t data = 0x00f000f0;
-                ks_reply(1, sizeof (data), &data, 0);  // WE will be set
+                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
             } else {
                 uint16_t data = 0x00f0;
-                ks_reply(1, sizeof (data), &data, 0);  // WE will be set
+                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
             }
             break;
         }
@@ -1932,17 +1917,17 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
             static const uint32_t addr[] = {
                 SWAP32(0x00555), SWAP32(0x002aa), SWAP32(0x00555)
             };
-            ks_reply(0, sizeof (addr), &addr, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, sizeof (addr), &addr, 0, NULL);
             if (ee_mode == EE_MODE_32) {
-                static const uint32_t data32[] = {
+                static const uint32_t data[] = {
                     0x00aa00aa, 0x00550055, 0x00900090
                 };
-                ks_reply(1, sizeof (data32), &data32, 0);  // WE will be set
+                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
             } else {
-                static const uint16_t data16[] = {
+                static const uint16_t data[] = {
                     0x00aa, 0x0055, 0x0090
                 };
-                ks_reply(1, sizeof (data16), &data16, 0);  // WE will be set
+                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
             }
             break;
         }
@@ -1951,7 +1936,7 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
             static const uint32_t addr[] = {
                 SWAP32(0x00555), SWAP32(0x002aa), SWAP32(0x00555)
             };
-            uint32_t data;
+            uint32_t wdata;
 
             cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
             if ((int) cons_s < 0)
@@ -1959,35 +1944,35 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
 
             if (ee_mode == EE_MODE_32) {
                 if (cmd_len != 4) {
-                    ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                    ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                     break;
                 }
-                data = buffer_rxa_lo[cons_s] << 16;
+                wdata = buffer_rxa_lo[cons_s] << 16;
                 cons_s++;
                 if (cons_s == ARRAY_SIZE(buffer_rxa_lo))
                     cons_s = 0;
-                data |= buffer_rxa_lo[cons_s];
+                wdata |= buffer_rxa_lo[cons_s];
             } else {
                 if (cmd_len != 2) {
-                    ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                    ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                     break;
                 }
-                data = buffer_rxa_lo[cons_s];
+                wdata = buffer_rxa_lo[cons_s];
             }
 
-            ks_reply(0, sizeof (addr), &addr, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, sizeof (addr), &addr, 0, NULL);
             if (ee_mode == EE_MODE_32) {
-                static uint32_t data32[] = {
+                static uint32_t data[] = {
                     0x00aa00aa, 0x00550055, 0x00a000a0, 0
                 };
-                data32[3] = data;
-                ks_reply(1, sizeof (data32), &data32, 0);  // WE will be set
+                data[3] = wdata;
+                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
             } else {
-                static uint16_t data16[] = {
+                static uint16_t data[] = {
                     0x00aa, 0x0055, 0x00a0, 0
                 };
-                data16[3] = data;
-                ks_reply(1, sizeof (data16), &data16, 0);  // WE will be set
+                data[3] = wdata;
+                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
             }
             break;
         }
@@ -1997,28 +1982,28 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
                 SWAP32(0x00555), SWAP32(0x002aa),
             };
             if (cmd_len != 0) {
-                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                 break;
             }
-            ks_reply(0, sizeof (addr), &addr, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, sizeof (addr), &addr, 0, NULL);
             if (ee_mode == EE_MODE_32) {
-                static const uint32_t data32[] = {
+                static const uint32_t data[] = {
                     0x00aa00aa, 0x00550055, 0x00800080,
                     0x00aa00aa, 0x00550055, 0x00300030,
                 };
-                ks_reply(1, sizeof (data32), &data32, 0);  // WE will be set
+                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
             } else {
-                static const uint16_t data16[] = {
+                static const uint16_t data[] = {
                     0x00aa, 0x0055, 0x00a0,
                     0x00aa, 0x0055, 0x0030
                 };
-                ks_reply(1, sizeof (data16), &data16, 0);  // WE will be set
+                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
             }
             break;
         }
         case KS_CMD_BANK_INFO:
             /* Get bank info */
-            ks_reply(0, sizeof (config.bi), &config.bi, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, sizeof (config.bi), &config.bi, 0, NULL);
             break;
         case KS_CMD_BANK_SET: {
             /* Set ROM bank (options in high bits of command) */
@@ -2029,14 +2014,14 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
             bank = buffer_rxa_lo[cons_s];
 
             if (cmd_len != 2) {
-                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                 break;
             }
             if (bank >= ROM_BANKS) {
-                ks_reply(0, 0, NULL, KS_STATUS_BADARG);
+                ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
                 break;
             }
-            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             if (cmd & KS_BANK_SETCURRENT) {
                 ee_set_bank(bank);
             }
@@ -2070,7 +2055,7 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
             bank = buffer_rxa_lo[cons_s];
 
             if (cmd_len != 2) {
-                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                 break;
             }
             bank_start = (uint8_t) bank;
@@ -2090,7 +2075,7 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
                 ((banks_add == 1) && (bank_start & 1)) ||
                 ((banks_add == 3) && (bank_start != 0) && (bank_start != 4)) ||
                 ((banks_add == 7) && (bank_start != 0))) {
-                ks_reply(0, 0, NULL, KS_STATUS_BADARG);
+                ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
                 break;
             }
             for (bank = bank_start; bank <= bank_end; bank++) {
@@ -2102,10 +2087,10 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
                 }
             }
             if (bank < bank_end) {
-                ks_reply(0, 0, NULL, KS_STATUS_FAIL);
+                ks_reply(0, KS_STATUS_FAIL, 0, NULL, 0, NULL);
                 break;
             }
-            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             for (bank = bank_start; bank <= bank_end; bank++) {
                 if (cmd & KS_BANK_UNMERGE) {
                     config.bi.bi_merge[bank] = 0;
@@ -2129,14 +2114,14 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
             bank = buffer_rxa_lo[cons_s];
             slen = cmd_len - 2;
             if (bank >= ROM_BANKS) {
-                ks_reply(0, 0, NULL, KS_STATUS_BADARG);
+                ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
                 break;
             }
             if (slen > sizeof (config.bi.bi_desc[0])) {
-                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                 break;
             }
-            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             while (slen > 0) {
                 if (++cons_s >= ARRAY_SIZE(buffer_rxa_lo))
                     cons_s = 0;
@@ -2165,7 +2150,7 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
                  * All bytes of sequence must be specified.
                  * Unused sequence bytes at the end are 0xff.
                  */
-                ks_reply(0, 0, NULL, KS_STATUS_BADLEN);
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                 break;
             }
             for (bank = 0; bank < ROM_BANKS; bank += 2) {
@@ -2181,17 +2166,17 @@ printf("RS l=%u b=%04x\n", cmd_len, bank);
                     break;  // Not start of bank
             }
             if (bank < ROM_BANKS) {
-                ks_reply(0, 0, NULL, KS_STATUS_BADARG);
+                ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
                 break;
             }
-            ks_reply(0, 0, NULL, KS_STATUS_OK);
+            ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             memcpy(config.bi.bi_longreset_seq, banks, ROM_BANKS);
             config_updated();
             break;
         }
         default:
             /* Unknown command */
-            ks_reply(0, 0, NULL, KS_STATUS_UNKCMD);
+            ks_reply(0, KS_STATUS_UNKCMD, 0, NULL, 0, NULL);
             printf("KS cmd %x?\n", cmd);
             break;
     }
@@ -2213,7 +2198,6 @@ process_addresses(void)
     static uint16_t cmd_len = 0;
     static uint32_t crc;
     static uint32_t crc_rx;
-    uint            start_wrap = consumer_wrap;
     uint            dma_left;
     uint            prod;
 
@@ -2223,12 +2207,30 @@ new_cmd:
 
     while (rx_consumer != prod) {
         switch (magic_pos) {
-            case 0:
+            case 0: {
+                uint16_t val = buffer_rxa_lo[rx_consumer];
+                /* Check for reboot sequence */
+                if (val == reboot_magic_end) {
+                    int pos;
+                    uint c = rx_consumer;
+
+                    for (pos = 1; pos < REBOOT_MAGIC_NUM; pos++) {
+                        if (c-- == 0)
+                            c = ARRAY_SIZE(buffer_rxa_lo) - 1;
+                        if (reboot_magic[pos] != buffer_rxa_lo[c])
+                            break;
+                    }
+                    if (pos < REBOOT_MAGIC_NUM)
+                        break;
+                    amiga_reboot_detect++;
+                    break;
+                }
                 /* Look for start of Magic sequence (needs to be fast) */
-                if (buffer_rxa_lo[rx_consumer] != sm_magic[0])
+                if (val != sm_magic[0])
                     break;
                 magic_pos = 1;
                 break;
+            }
             case 1:
             case 2:
             case 3:  // 1 ... ARRAY_SIZE(sm_magic) - 1
@@ -2279,28 +2281,34 @@ new_cmd:
                     uint16_t error[2];
                     error[0] = KS_STATUS_CRC;
                     error[1] = crc;
-{
-// XXX: not fast enough to deal with log
-    static uint16_t tempcap[16];
-    uint c = rx_consumer;
-    int pos;
-    for (pos = ARRAY_SIZE(tempcap) - 1; pos > 0; pos--) {
-        tempcap[pos] = buffer_rxa_lo[c];
-        if (--c == 0)
-            c = ARRAY_SIZE(buffer_rxa_lo) - 1;
-    }
-                    ks_reply(0, sizeof (error), &error, KS_STATUS_CRC);
+#undef CRC_DEBUG
+#ifdef CRC_DEBUG
+                {
+                // XXX: not fast enough to deal with log
+                    static uint16_t tempcap[16];
+                    uint c = rx_consumer;
+                    int pos;
+                    for (pos = ARRAY_SIZE(tempcap) - 1; pos > 0; pos--) {
+                        tempcap[pos] = buffer_rxa_lo[c];
+                        if (c-- == 0)
+                            c = ARRAY_SIZE(buffer_rxa_lo) - 1;
+                    }
+#endif  // CRC_DEBUG
+                    ks_reply(0, KS_STATUS_CRC, sizeof (error), &error, 0, NULL);
                     magic_pos = 0;  // Reset magic sequencer
 
                     printf("cmd=%x l=%04x CRC %08lx != calc %08lx\n",
                            cmd, cmd_len, crc_rx, crc);
-    for (pos = 0; pos < ARRAY_SIZE(tempcap); pos++) {
-        printf(" %04x", tempcap[pos]);
-        if (((pos & 0xf) == 0xf) && (pos != ARRAY_SIZE(tempcap) - 1))
-            printf("\n");
-    }
-    printf("\n");
-}
+#ifdef CRC_DEBUG
+                        for (pos = 0; pos < ARRAY_SIZE(tempcap); pos++) {
+                            printf(" %04x", tempcap[pos]);
+                            if (((pos & 0xf) == 0xf) &&
+                                (pos != ARRAY_SIZE(tempcap) - 1))
+                                printf("\n");
+                        }
+                        printf("\n");
+                    }
+#endif  // CRC_DEBUG
                     magic_pos = 0;  // Restart magic detection
                     break;
                 }
@@ -2317,9 +2325,7 @@ new_cmd:
 
         if (++rx_consumer == ARRAY_SIZE(buffer_rxa_lo)) {
             rx_consumer = 0;
-            consumer_wrap++;
-
-            if (consumer_wrap - start_wrap > 10) {
+            if (++consumer_wrap - consumer_wrap_last_poll > 10) {
                 /*
                  * Spinning too much in interrupt context.
                  * Disable interrupt -- it will be re-enabled in ee_poll().

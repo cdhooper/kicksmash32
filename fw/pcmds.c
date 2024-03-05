@@ -57,16 +57,14 @@ const char cmd_gpio_help[] =
 "gpio [name=value/mode/?] - display or set GPIOs";
 
 const char cmd_prom_help[] =
-"prom bank <bits> <mode> - override A18 & A19 (\"7 0\" = force bank 0)\n"
 "prom bank <cmd>         - show or set PROM bank for AmigaOS\n"
 "prom cmd <cmd> [<addr>] - send a 16-bit command to the EEPROM chip\n"
 "prom id                 - report EEPROM chip vendor and id\n"
-"prom disable            - disable and power off EEPROM\n"
 "prom erase chip|<addr>  - erase EEPROM chip or 128K sector; <len> optional\n"
 "prom log [<count>]      - show log of Amiga address accesses\n"
 "prom mode 0|1|2         - set EEPROM access mode (0=32, 1=16lo, 2=16hi)\n"
+"prom name [<name>]      - set or show name of this board\n"
 "prom read <addr> <len>  - read binary data from EEPROM (to terminal)\n"
-"prom status [clear]     - display or clear EEPROM status\n"
 "prom temp               - show STM32 die temperature\n"
 "prom verify             - verify PROM is connected\n"
 "prom write <addr> <len> - write binary data to EEPROM (from terminal)";
@@ -303,20 +301,20 @@ cmd_prom_bank(int argc, char * const *argv)
     } else if (strcmp(argv[1], "show") == 0) {
         config_bank_show();
         return (0);
-    } else if ((strcmp(argv[1], "current") == 0) ||
+    } else if ((strncmp(argv[1], "current", 3) == 0) ||
                (strcmp(argv[1], "set") == 0)) {
         flag_set_current_bank++;
-    } else if (strcmp(argv[1], "poweron") == 0) {
+    } else if (strncmp(argv[1], "poweron", 5) == 0) {
         flag_set_poweron_bank++;
-    } else if (strcmp(argv[1], "longreset") == 0) {
+    } else if (strncmp(argv[1], "longreset", 4) == 0) {
         flag_bank_longreset++;
-    } else if (strcmp(argv[1], "nextreset") == 0) {
+    } else if (strncmp(argv[1], "nextreset", 4) == 0) {
         flag_set_reset_bank++;
     } else if (strcmp(argv[1], "merge") == 0) {
         flag_bank_merge++;
     } else if (strcmp(argv[1], "unmerge") == 0) {
         flag_bank_unmerge++;
-    } else if (strcmp(argv[1], "comment") == 0) {
+    } else if (strncmp(argv[1], "comment", 3) == 0) {
         flag_set_bank_comment++;
     } else {
         printf("Unknown argument prom bank '%s'\n", argv[1]);
@@ -418,38 +416,6 @@ cmd_prom_bank(int argc, char * const *argv)
     return (0);
 }
 
-#if 0
-static int
-cmd_prom_bank(int argc, char *argv[])
-{
-    int arg;
-    for (arg = 1; arg < argc; arg++) {
-    }
-    uint bits;
-    uint mode;
-    // XXX: The "prom bank" command will be changed significantly
-    //      in the near future.
-    if ((argc < 2) || (argc > 3)) {
-        printf("prom bank <bits> <mode>\n"
-               "   bit 0   1=Drive A17     mode 0 = Assign new override\n"
-               "   bit 1   1=Drive A18     mode 1 = Temp disable override\n"
-               "   bit 2   1=Drive A19     mode 2 = Restore override\n"
-               "   bit 4   A17\n"
-               "   bit 5   A18\n"
-               "   bit 6   A19\n");
-        return (RC_FAILURE);
-    }
-    rc = parse_value(argv[1], (uint8_t *) &bits, 2);
-    if (rc != RC_SUCCESS)
-        return (rc);
-    rc = parse_value(argv[2], (uint8_t *) &mode, 4);
-    if (rc != RC_SUCCESS)
-        return (rc);
-    ee_address_override(bits, mode);
-    return (RC_SUCCESS);
-}
-#endif
-
 rc_t
 cmd_prom(int argc, char * const *argv)
 {
@@ -503,9 +469,6 @@ cmd_prom(int argc, char * const *argv)
 
         prom_cmd(addr, cmd);
         return (RC_SUCCESS);
-    } else if (strcmp("disable", arg) == 0) {
-        prom_disable();
-        return (RC_SUCCESS);
     } else if (strncmp(arg, "erase", 2) == 0) {
         if (argc < 2) {
             printf("error: prom erase requires either chip or "
@@ -537,14 +500,14 @@ cmd_prom(int argc, char * const *argv)
             prom_show_mode();
         }
         return (RC_SUCCESS);
+    } else if (strcmp("name", arg) == 0) {
+        const char *name = argv[1];
+        if (argc < 1)
+            name = NULL;
+        config_name(name);
+        return (RC_SUCCESS);
     } else if (strcmp("read", arg) == 0) {
         op_mode = OP_READ;
-    } else if (strcmp("status", arg) == 0) {
-        if ((argc > 1) && (strcmp("clear", argv[1]) == 0))
-            prom_status_clear();
-        else
-            prom_status();
-        return (RC_SUCCESS);
     } else if (strcmp("temp", arg) == 0) {
         return (cmd_prom_temp(argc - 1, argv + 1));
     } else if (strcmp("verify", arg) == 0) {

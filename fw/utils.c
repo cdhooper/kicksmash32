@@ -31,7 +31,6 @@
 
 static void SystemInit_post(void) { }
 
-
 #ifdef STM32F103xE
 #define COMPILE_CPU "STM32F103xE"
 #elif defined(STM32F105xC)
@@ -136,12 +135,14 @@ show_reset_reason(void)
         printf("    %s\n", "Window Watchdog reset");
     if (reg & RCC_CSR_IWDGRSTF)
         printf("    %s\n", "Independent Watchdog reset");
-    if (reg & RCC_CSR_PORRSTF)
+    if (reg & RCC_CSR_PORRSTF) {
         printf("    %s\n", "Power-on reset");
-    else if (reg & RCC_CSR_SFTRSTF)
+        cold_poweron = 1;
+    } else if (reg & RCC_CSR_SFTRSTF) {
         printf("    %s\n", "Software reset");
-    else if (reg & RCC_CSR_PINRSTF)
+    } else if (reg & RCC_CSR_PINRSTF) {
         printf("    %s\n", "NRST pin reset");
+    }
 }
 
 void

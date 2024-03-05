@@ -127,9 +127,12 @@ struct Device   *TimerBase;
 #define AMIGA_PPORT_DIR  0x00bfe301  /* Amiga parallel port dir register */
 #define AMIGA_PPORT_DATA 0x00bfe101  /* Amiga parallel port data reg. */
 
-#define CIAA_PRA         ADDR8(0xbfe001)
+#define CIAA_PRA         ADDR8(0x00bfe001)
+#define CIAA_TBLO        ADDR8(0x00bfe601)
+#define CIAA_TBHI        ADDR8(0x00bfe701)
 #define CIAA_PRA_OVERLAY BIT(0)
 #define CIAA_PRA_LED     BIT(1)
+#define CIA_USEC(x)      (x##U * 715909 / 1000000)
 
 #define VALUE_UNASSIGNED 0xffffffff
 
@@ -141,7 +144,7 @@ static const char cmd_options[] =
     "   -b <opt>     ROM bank operations (?, show, ...)\n"
     "   -d           show debug output\n"
     "   -e <opt>     erase flash (?, bank, ...)\n"
-    "   -i           identify Kicksmash and Flash parts\n"
+    "   -i[ii]       identify Kicksmash and Flash parts\n"
     "   -r <opt>     read from flash (?, bank, file, ...)\n"
     "   -w <opt>     write to flash (?, bank, file, ...)\n"
     "   -x <addr>    spin loop reading addr\n"
@@ -179,7 +182,7 @@ uint32_t mmu_get_type(void);
 uint32_t mmu_get_tc_030(void);
 uint32_t mmu_get_tc_040(void);
 // void     mmu_set_tc_030(uint32_t tc);
-void     mmu_set_tc_040(uint32_t tc);
+// void     mmu_set_tc_040(uint32_t tc);
 
 BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
 uint irq_disabled = 0;
@@ -268,8 +271,7 @@ get_cpu(void)
  * 68040 and 68060 have different MMU instructions.
  */
 
-__attribute__ ((noinline))
-uint32_t
+__attribute__ ((noinline)) uint32_t
 mmu_get_tc_030(void)
 {
     register uint32_t result;
@@ -285,8 +287,8 @@ mmu_get_tc_030(void)
  * --------------
  * This function only works on the 68030.
  */
-__attribute__ ((noinline))
-void mmu_set_tc_030(register uint32_t tc asm("%d0"))
+__attribute__ ((noinline)) void
+mmu_set_tc_030(register uint32_t tc asm("%d0"))
 {
 #if 0
     __asm__ __volatile__("adda.l #4,sp \n\t"
@@ -298,9 +300,6 @@ void mmu_set_tc_030(register uint32_t tc asm("%d0"))
                          ".long 0xf0174000 \n\t"  // pmove.l (sp),tc
                          "adda.l #4,sp \n\t"
                          : "=d" (tc));
-#else
-    __asm__ __volatile__(".long 0xf0174000 \n\t"  // pmove.l (sp),tc
-                         : "=d" (tc));
 #endif
 }
 
@@ -309,11 +308,12 @@ void mmu_set_tc_030(register uint32_t tc asm("%d0"))
  * --------------
  * This function only works on 68040 and 68060.
  */
-uint32_t
+__attribute__ ((noinline)) uint32_t
 mmu_get_tc_040(void)
 {
     register uint32_t result;
-    __asm__ __volatile__(".long 0x4e7a0003"  // movec.l tc,d0
+    __asm__ __volatile__(".long 0x4e7a0003 \n\t"  // movec.l tc,d0
+                         "rts \n\t"
                          : "=d" (result));
     return (result);
 }
@@ -323,10 +323,11 @@ mmu_get_tc_040(void)
  * --------------
  * This function only works on 68040 and 68060.
  */
-void mmu_set_tc_040(uint32_t tc)
+__attribute__ ((noinline)) void
+mmu_set_tc_040(register uint32_t tc asm("%d0"))
 {
-    __asm__ __volatile__("move.l 4(sp),d0 \n\t"
-                         ".long 0x4e7b0003 \n\t"  // movec.l d0,tc
+    __asm__ __volatile__(".long 0x4e7b0003 \n\t"  // movec.l d0,tc
+                         "rts \n\t"
                          : "=d" (tc));
 }
 
@@ -502,6 +503,45 @@ ee_id_string(uint32_t id)
     return (chip_ids[pos].ci_dev);
 }
 
+static uint
+cia_ticks(void)
+{
+    uint8_t hi1;
+    uint8_t hi2;
+    uint8_t lo;
+
+    hi1 = *CIAA_TBHI;
+    lo  = *CIAA_TBLO;
+    hi2 = *CIAA_TBHI;
+
+    /*
+     * The below operation will provide the same effect as:
+     *     if (hi2 != hi1)
+     *         lo = 0xff;  // rollover occurred
+     */
+    lo |= (hi2 - hi1);  // rollover of hi forces lo to 0xff value
+
+    return (lo | (hi2 << 8));
+}
+
+static void
+cia_spin(uint ticks)
+{
+    uint16_t start = cia_ticks();
+    uint16_t now;
+    uint16_t diff;
+
+    while (ticks != 0) {
+        now = cia_ticks();
+        diff = start - now;
+        if (diff >= ticks)
+            break;
+        ticks -= diff;
+        start = now;
+        __asm__ __volatile__("nop");
+    }
+}
+
 static void __attribute__ ((noinline))
 spin(uint loops)
 {
@@ -618,9 +658,10 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      * Might need more spin iterations on a faster CPU, or maybe
      * a real timer delay here.
      *
-     * A3000 68030: 180 spins minimum
+     * A3000 68030-25:  ? spins minimum
+     * A3000 A3660 50M: 4 spins minimum
      */
-    spin(300);
+    cia_spin(CIA_USEC(20));
 
     /*
      * Find reply magic, length, and status.
@@ -648,7 +689,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         if (magic < ARRAY_SIZE(sm_magic)) {
             if (val != sm_magic[magic]) {
                 magic = 0;
-                spin(20);
+                cia_spin(CIA_USEC(3));
                 continue;
             }
         } else if (magic < ARRAY_SIZE(sm_magic) + 1) {
@@ -673,7 +714,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         /* Ensure Kicksmash firmware has returned ROM to normal state */
         for (pos = 0; pos < 1000; pos++)
             (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        spin(500000);
+        cia_spin(CIA_USEC(250000));
         goto scc_cleanup;
     }
 
@@ -725,8 +766,8 @@ scc_cleanup:
         /* Ensure Kicksmash firmware has returned ROM to normal state */
         for (pos = 0; pos < 100; pos++)
             (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        spin(10000);
-        spin(500000);  // Kicksmash might emit debug output
+        cia_spin(CIA_USEC(4000));
+        cia_spin(CIA_USEC(250000));  // Kicksmash might emit debug output
     }
     if ((replystatus < 0x10000) && (replystatus != KS_STATUS_CRC)) {
         crc = crc32(crc, reply, replylen * 2);
@@ -764,7 +805,9 @@ send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
     CACHE_DISABLE_DATA();
     MMU_DISABLE();
 
+#if 1
     rc = send_cmd_core(cmd, arg, arglen, reply, replymax, replyalen);
+#endif
 
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
@@ -781,7 +824,6 @@ smash_nop(void)
 }
 #endif
 
-#if 0
 static uint
 smash_identify(void)
 {
@@ -801,7 +843,6 @@ smash_identify(void)
     dump_memory(reply_buf, rlen, VALUE_UNASSIGNED);
     return (0);
 }
-#endif
 
 static const uint32_t test_pattern[] = {
     0x54455354, 0x50415454, 0x202d2053, 0x54415254,
@@ -911,7 +952,7 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
     num_addr /= 4;
 
     *CIAA_PRA |= CIAA_PRA_OVERLAY;
-    spin(500);
+    cia_spin(CIA_USEC(100));
     for (pos = 0; pos < num_addr; pos++) {
 //      uint32_t addr = ROM_BASE + ((addrs[pos] << smash_cmd_shift) & 0x7ffff);
         uint32_t addr = ((addrs[pos] << smash_cmd_shift) & 0x7ffff);
@@ -938,7 +979,7 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
     }
 
     *CIAA_PRA &= ~CIAA_PRA_OVERLAY;
-    spin(200);
+    cia_spin(CIA_USEC(100));
 
 #if 0
     // below is for debug, to ensure all Kicksmash DMA is drained.
@@ -964,7 +1005,7 @@ flash_cmd_cleanup:
         for (pos = 0; pos < 1000; pos++) {
             (void) *ADDR32(ROM_BASE);
         }
-        spin(100000);
+        cia_spin(CIA_USEC(25000));
     }
     return (rc);
 }
@@ -1140,19 +1181,6 @@ flash_show_id(void)
     }
 #endif
 
-    return (rc);
-}
-
-static int
-set_rom_bank(uint mode, uint bank)
-{
-    int      rc;
-    uint     rlen;
-    uint16_t arg;
-    uint32_t reply_buf[2];
-
-    arg = mode | (bank << 8);
-    rc = send_cmd(KS_CMD_ROMSEL, &arg, sizeof (arg), reply_buf, sizeof (reply_buf), &rlen);
     return (rc);
 }
 
@@ -1637,7 +1665,7 @@ read_from_flash(uint bank, uint addr, void *buf, uint len)
 #endif
     rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 #ifdef USE_OVERLAY
     local_memcpy(buf, (void *) (addr), len);
     *CIAA_PRA &= ~(CIAA_PRA_OVERLAY | CIAA_PRA_LED);
@@ -1646,7 +1674,7 @@ read_from_flash(uint bank, uint addr, void *buf, uint len)
 #endif
     rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
                         &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
@@ -1667,7 +1695,6 @@ wait_for_flash_done(uint timeout_usec)
     int      see_fail_count = 0;
 
     while (spin_count < spins) {
-        __asm__ __volatile__("nop");
         status = *ADDR32(ROM_BASE);
 
         cstatus = status;
@@ -1690,6 +1717,7 @@ wait_for_flash_done(uint timeout_usec)
         if (cstatus & (BIT(5) | BIT(5 + 16)))  // Program / erase failure
             if (see_fail_count++ > 5)
                 break;
+        __asm__ __volatile__("nop");
     }
 
     if (cstatus & (BIT(5) | BIT(5 + 16))) {
@@ -1717,7 +1745,7 @@ write_to_flash(uint bank, uint addr, void *buf, uint len)
     /* Switch to flash bank to be programmed */
     rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 
     if (rc == 0) {
         /* Write flash data */
@@ -1740,16 +1768,16 @@ write_to_flash(uint bank, uint addr, void *buf, uint len)
             addr += xlen;
         }
     }
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 
     /* Restore flash to read mode */
     rc |= flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 
     /* Return to "current" flash bank */
     rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
                         &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
@@ -1772,7 +1800,7 @@ erase_flash_block(uint bank, uint addr)
     /* Switch to flash bank to be programmed */
     rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 
     /* Send erase command */
     rc = flash_cmd_core(KS_CMD_FLASH_ERASE, NULL, 0);
@@ -1780,16 +1808,16 @@ erase_flash_block(uint bank, uint addr)
         *ADDR32(ROM_BASE + addr);  // Generate address for erase
         rc = wait_for_flash_done(10000);  // about 1 second
     }
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 
     /* Restore flash to read mode */
     rc |= flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 
     /* Return to "current" flash bank */
     rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
                         &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    spin(10000);
+    cia_spin(CIA_USEC(1000));
 
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
@@ -2195,7 +2223,7 @@ cmd_erase(int argc, char *argv[])
     uint        flash_end_addr;
     uint        flash_start_bsize;
     uint        flash_end_bsize;
-    uint        mode;
+    uint        mode = 0;
     uint        tlen = 0;
     int         arg;
     int         pos;
@@ -2399,12 +2427,10 @@ main(int argc, char *argv[])
     char    *arg1;
     uint     loop;
     uint     loops = 1;
-    uint     flag_bank = 0;
     uint     flag_inquiry = 0;
     uint     flag_test = 0;
     uint     flag_x_spin = 0;
     uint     flag_y_spin = 0;
-    uint     bank   = 0;
     int      pos;
     uint     rc = 0;
     uint32_t addr;
@@ -2421,7 +2447,6 @@ main(int argc, char *argv[])
                 switch (*ptr) {
                     case 'b':  // bank
                         exit(cmd_bank(argc - arg, argv + arg));
-                        break;
                     case 'd':  // debug
                         flag_debug++;
                         break;
@@ -2498,8 +2523,7 @@ main(int argc, char *argv[])
         }
     }
 
-    if ((flag_bank | flag_inquiry | flag_test | flag_x_spin |
-         flag_y_spin) == 0) {
+    if ((flag_inquiry | flag_test | flag_x_spin | flag_y_spin) == 0) {
         printf("You must specify an operation to perform\n");
         usage();
         exit(1);
@@ -2513,13 +2537,7 @@ main(int argc, char *argv[])
                     fflush(stdout);
                 }
             } else {
-                printf("Pass %-4u", loop + 1);
-            }
-        }
-        if (flag_bank) {
-            if (set_rom_bank(flag_bank, bank) && ((loops == 1) || (loop > 1))) {
-                rc++;
-                break;
+                printf("Pass %-4u ", loop + 1);
             }
         }
         if (flag_x_spin) {
@@ -2529,13 +2547,13 @@ main(int argc, char *argv[])
             spin_memory_ovl(addr);
         }
         if (flag_inquiry) {
-#if 0
-            if (smash_identify() && ((loops == 1) || (loop > 1))) {
+            if ((flag_inquiry & 1) &&
+                smash_identify() && ((loops == 1) || (loop > 1))) {
                 rc++;
                 break;
             }
-#endif
-            if (flash_show_id() && ((loops == 1) || (loop > 1))) {
+            if ((flag_inquiry & 2) &&
+                flash_show_id() && ((loops == 1) || (loop > 1))) {
                 rc++;
                 break;
             }

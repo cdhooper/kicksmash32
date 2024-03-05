@@ -131,7 +131,6 @@ cons_rb_get(void)
     if (cons_in_rb_consumer == cons_in_rb_producer)
         return (-1);  // Ring buffer empty
 
-    uart_console_active = true;
     ch = cons_in_rb[cons_in_rb_consumer];
     cons_in_rb_consumer = (cons_in_rb_consumer + 1) % sizeof (cons_in_rb);
     return (ch);
@@ -292,6 +291,8 @@ putchar(int ch)
     last_putc = ch;
 
     usb_putchar_wait(ch);
+    if (usb_console_active && !uart_console_active)
+        return (0);
     return (uart_putchar(ch));
 }
 
@@ -316,6 +317,8 @@ getchar(void)
 void
 CONSOLE_IRQHandler(void)
 {
+    if (USART_SR(CONSOLE_USART) & (USART_SR_RXNE | USART_SR_ORE))
+        uart_console_active = true;
     while (USART_SR(CONSOLE_USART) & (USART_SR_RXNE | USART_SR_ORE))
         uart_rb_put(uart_recv(CONSOLE_USART));
 }

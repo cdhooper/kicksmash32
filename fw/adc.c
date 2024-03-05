@@ -270,10 +270,13 @@ adc_show_sensors(void)
     scale = adc_get_scale(adc[0]);
 
     uint calc_temp;
+    uint calc_vref;
     calc_temp = ((int)(TEMP_V25 * 10000 - adc[1] * scale)) / TEMP_AVGSLOPE +
                 TEMP_BASE;
-    printf("Vrefint=%04x scale=%d\n", adc[0], scale);
-    printf("  Vtemp=%04x %8u ", adc[1], adc[1] * scale);
+    calc_vref = adc[0] * 3300 / 4096;
+    printf("Vrefint=%04x scale=%-4u ", adc[0], scale);
+    print_reading(calc_vref, "V\n");
+    printf("  Vtemp=%04x %8u   ", adc[1], adc[1] * scale);
     print_reading(calc_temp, "C\n");
 }
 
@@ -284,13 +287,13 @@ adc_show_sensors(void)
 void
 adc_poll(int verbose, int force)
 {
-    uint16_t        adc[CHANNEL_COUNT];
+//  uint16_t        adc[CHANNEL_COUNT];
     static uint64_t next_check = 0;
 
     if ((timer_tick_has_elapsed(next_check) == false) && (force == false))
         return;
     next_check = timer_tick_plus_msec(1);  // Limit rate to prevent overshoot
 
-    memcpy(adc, (void *)adc_buffer, sizeof (adc));
+//  memcpy(adc, (void *)adc_buffer, sizeof (adc));
 //  scale = adc_get_scale(adc[0]);
 }
