@@ -58,6 +58,7 @@
 
 #define SWAP16(x) __builtin_bswap16(x)
 #define SWAP32(x) __builtin_bswap32(x)
+#define SWAP64(x) __builtin_bswap64(x)
 
 #define LOG_DMA_CONTROLLER DMA2
 #define LOG_DMA_CHANNEL    DMA_CHANNEL5
@@ -106,7 +107,14 @@ static uint     consumer_spin;
 static uint     rx_consumer = 0;
 static uint     message_count = 0;
 
-static uint32_t address_input(void);
+/* Buffers for DMA from/to GPIOs and Timer event generation registers */
+#define ADDR_BUF_COUNT 1024
+#define ALIGN  __attribute__((aligned(16)))
+ALIGN volatile uint16_t buffer_rxa_lo[ADDR_BUF_COUNT];
+ALIGN volatile uint16_t buffer_rxd[ADDR_BUF_COUNT];
+ALIGN volatile uint16_t buffer_txd_lo[ADDR_BUF_COUNT * 2];
+ALIGN volatile uint16_t buffer_txd_hi[ADDR_BUF_COUNT];
+
 /*
  * address_output
  * --------------
@@ -1434,14 +1442,6 @@ printf("longreset bank %u\n", config.bi.bi_longreset_seq[nextbank]);
 }
 
 
-/* Buffers for DMA from/to GPIOs and Timer event generation registers */
-#define ADDR_BUF_COUNT 512
-#define ALIGN  __attribute__((aligned(16)))
-ALIGN volatile uint16_t buffer_rxa_lo[ADDR_BUF_COUNT];
-ALIGN volatile uint16_t buffer_rxd[ADDR_BUF_COUNT];
-ALIGN volatile uint16_t buffer_txd_lo[ADDR_BUF_COUNT * 2];
-ALIGN volatile uint16_t buffer_txd_hi[ADDR_BUF_COUNT];
-
 static void
 configure_oe_capture_rx(bool verbose)
 {
@@ -1559,6 +1559,11 @@ gpio_showbuf(uint count)
 }
 #endif
 
+/* Flags to ks_reply() */
+#define KS_REPLY_RAW    BIT(0)  // Don't emit header or CRC (raw data)
+#define KS_REPLY_WE     BIT(1)  // Set up WE to trigger when host drives OE
+#define KS_REPLY_WE_RAW (KS_REPLY_RAW | KS_REPLY_WE)
+
 /*
  * ks_reply
  * --------
@@ -1567,7 +1572,7 @@ gpio_showbuf(uint count)
  * This routine is called from interrupt context.
  */
 static void
-ks_reply(uint hold_we, uint status, uint rlen1, const void *rbuf1,
+ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
          uint rlen2, const void *rbuf2)
 {
     uint      count;
@@ -1586,15 +1591,9 @@ ks_reply(uint hold_we, uint status, uint rlen1, const void *rbuf1,
      * always drive data bus so long as FLASH_OE is disabled.
      */
     data_output_enable();  // Drive data pins
-    if (hold_we) {
+    if (flags & KS_REPLY_WE) {
         we_output(1);
-// XXX: remove once stronger pull-up resistor (1K?) is in place
-#undef STM32_HARD_DRIVE_WE_ON_SHARED_WRITE
-#ifdef STM32_HARD_DRIVE_WE_ON_SHARED_WRITE
-        we_enable(1);      // Drive high
-#else
         we_enable(0);      // Pull up
-#endif
         oewe_output(1);
     }
 
@@ -1631,21 +1630,21 @@ ks_reply(uint hold_we, uint status, uint rlen1, const void *rbuf1,
          * they are driven out by separate DMA engines (TIM5 and TIM2).
          */
         uint32_t *rbp;
-        if (hold_we) {
+        if (flags & KS_REPLY_RAW) {
             rbp = (uint32_t *) rbuf1;
             rlen1 /= 4;
             for (count = 0; count < rlen1; count++, pos++) {
                 uint32_t val = *(rbp++);
-                buffer_txd_hi[pos] = val >> 16;
-                buffer_txd_lo[pos] = (uint16_t) val;
+                buffer_txd_lo[pos] = val >> 16;
+                buffer_txd_hi[pos] = (uint16_t) val;
             }
             if (rlen2 != 0) {
                 rbp = (uint32_t *) rbuf2;
                 rlen2 /= 4;
                 for (count = 0; count < rlen2; count++, pos++) {
                     uint32_t val = *(rbp++);
-                    buffer_txd_hi[pos] = val >> 16;
-                    buffer_txd_lo[pos] = (uint16_t) val;
+                    buffer_txd_lo[pos] = val >> 16;
+                    buffer_txd_hi[pos] = (uint16_t) val;
                 }
             }
         } else {
@@ -1718,7 +1717,7 @@ ks_reply(uint hold_we, uint status, uint rlen1, const void *rbuf1,
         enable_irq();
     } else {
         /* For 16-bit mode, a single DMA engine can be used */
-        if (hold_we) {
+        if (flags & KS_REPLY_RAW) {
             memcpy((void *)buffer_txd_lo, rbuf1, rlen1);
             if (rlen2 != 0) {
                 memcpy(((uint8_t *)buffer_txd_lo) + rlen1, rbuf2, rlen2);
@@ -1772,7 +1771,7 @@ ks_reply(uint hold_we, uint status, uint rlen1, const void *rbuf1,
 //  enable_oe_capture_tx();
 
 #ifdef CAPTURE_GPIOS
-    if (hold_we) {
+    if (flags & KS_REPLY_RAW) {
         count = gpio_watch();
     } else {
 #endif
@@ -1798,11 +1797,8 @@ ks_reply(uint hold_we, uint status, uint rlen1, const void *rbuf1,
 #endif
 
 oe_reply_end:
-    if (hold_we) {
+    if (flags & KS_REPLY_WE) {
         oewe_output(0);
-#ifndef STM32_HARD_DRIVE_WE_ON_SHARED_WRITE
-        we_output(1);      // Pull up
-#endif
     }
 
     data_output_disable();
@@ -1813,7 +1809,7 @@ oe_reply_end:
     data_output(0xffffffff);    // Return to pull-up of data pins
 
 #ifdef CAPTURE_GPIOS
-    if (hold_we) {
+    if (flags & KS_REPLY_RAW) {
         gpio_showbuf(count);
     }
 #endif
@@ -1826,12 +1822,12 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
 
     switch ((uint8_t) cmd) {
         case KS_CMD_NULL:
-            /* Do absolutely nothing (dscard command) */
+            /* Do absolutely nothing (discard command) */
             break;
         case KS_CMD_NOP:
             /* Do nothing but reply */
             ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
-            break;
+            break;  // End processing
         case KS_CMD_ID: {
             /* Send Kickflash identification and configuration */
             static const uint32_t reply[] = {
@@ -1842,7 +1838,14 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 0x00000000,  // Unused
             };
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
-            break;  // End processing
+            break;
+        }
+        case KS_CMD_UPTIME: {
+            uint64_t now = timer_tick_get();
+            uint64_t usec = timer_tick_to_usec(now);
+            usec = SWAP64(usec);  // Big endian format
+            ks_reply(0, KS_STATUS_OK, sizeof (usec), &usec, 0, NULL);
+            break;
         }
         case KS_CMD_TESTPATT: {
             /* Send special data pattern (for test / diagnostic) */
@@ -1856,48 +1859,34 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 0x54534554, 0x54544150, 0x444e4520, 0x68646320,
             };
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
-            break;  // End processing
+            break;
         }
         case KS_CMD_LOOPBACK: {
-            /* Send loopback data (for test / diagnostic) */
-            const uint we = cmd & KS_EEPROM_WE;
+            /* Answer back with loopback data (for test / diagnostic) */
             uint8_t *buf1;
             uint8_t *buf2;
             uint len1;
             uint len2;
-            cons_s = rx_consumer;
-            if ((int) cons_s <= 0)
-                cons_s += ARRAY_SIZE(buffer_rxa_lo);
-            if (cons_s * 2 >= cmd_len) {
+            uint raw_len = cmd_len + 8 + 2 + 2 + 4;  // Magic + len + cmd + CRC
+            cons_s = rx_consumer - (raw_len - 1) / 2;
+            if ((int) cons_s >= 0) {
                 /* Send data doesn't wrap */
-                len1 = cmd_len;
-                buf1 = ((uint8_t *) &buffer_rxa_lo[cons_s]) - len1;
-                ks_reply(we, KS_STATUS_OK, len1, &buf1, 0, NULL);
-                if (we) {
-                    uint pos;
-                    printf("we l=%x b=", len1);
-                    for (pos = 0; pos < len1 && pos < 10; pos++) {
-                        printf("%02x ", buf1[pos]);
-                    }
-                    printf("\n");
-                }
+                len1 = raw_len;
+                buf1 = (uint8_t *) &buffer_rxa_lo[cons_s];
+                ks_reply(KS_REPLY_RAW, 0, len1, buf1, 0, NULL);
             } else {
-                /* Send data from end and beginning of buffer */
-                len1 = cons_s * 2;
-                buf1 = (void *) buffer_rxa_lo;
-                len2 = cmd_len - len1;
-                buf2 = ((uint8_t *) buffer_rxa_lo) +
-                       sizeof (buffer_rxa_lo) - len2;
-                if (len2 != 0)
-                    ks_reply(we, KS_STATUS_OK, len2, buf2, 0, NULL);
-                ks_reply(we, KS_STATUS_OK, len1, buf1, 0, NULL);
-// XXX: This won't work. Maybe need to modify ks_reply() to handle
-//      two buffer pointers and lengths. A better option may be
-//      to give a flag to ks_reply() which says whether to not
-//      send header/do CRC. Then that can be used for the flash
-//      write.
+                /* Send data from end of buffer + beginning of buffer */
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+
+                len1 = (ARRAY_SIZE(buffer_rxa_lo) - cons_s) * 2;
+                buf1 = (uint8_t *) &buffer_rxa_lo[cons_s];
+
+                len2 = raw_len - len1;
+                buf2 = (uint8_t *) buffer_rxa_lo;
+
+                ks_reply(KS_REPLY_RAW, 0, len1, buf1, len2, buf2);
             }
-            break;  // End processing
+            break;
         }
         case KS_CMD_FLASH_READ: {
             /* Send command sequence for flash read array command */
@@ -1905,10 +1894,10 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             ks_reply(0, KS_STATUS_OK, sizeof (addr), &addr, 0, NULL);
             if (ee_mode == EE_MODE_32) {
                 uint32_t data = 0x00f000f0;
-                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
+                ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             } else {
                 uint16_t data = 0x00f0;
-                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
+                ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             }
             break;
         }
@@ -1922,12 +1911,12 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 static const uint32_t data[] = {
                     0x00aa00aa, 0x00550055, 0x00900090
                 };
-                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
+                ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             } else {
                 static const uint16_t data[] = {
                     0x00aa, 0x0055, 0x0090
                 };
-                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
+                ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             }
             break;
         }
@@ -1947,11 +1936,11 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                     break;
                 }
-                wdata = buffer_rxa_lo[cons_s] << 16;
+                wdata = buffer_rxa_lo[cons_s];
                 cons_s++;
                 if (cons_s == ARRAY_SIZE(buffer_rxa_lo))
                     cons_s = 0;
-                wdata |= buffer_rxa_lo[cons_s];
+                wdata |= (buffer_rxa_lo[cons_s] << 16);
             } else {
                 if (cmd_len != 2) {
                     ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
@@ -1966,13 +1955,13 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     0x00aa00aa, 0x00550055, 0x00a000a0, 0
                 };
                 data[3] = wdata;
-                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
+                ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             } else {
                 static uint16_t data[] = {
                     0x00aa, 0x0055, 0x00a0, 0
                 };
                 data[3] = wdata;
-                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
+                ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             }
             break;
         }
@@ -1991,13 +1980,13 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     0x00aa00aa, 0x00550055, 0x00800080,
                     0x00aa00aa, 0x00550055, 0x00300030,
                 };
-                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
+                ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             } else {
                 static const uint16_t data[] = {
                     0x00aa, 0x0055, 0x00a0,
                     0x00aa, 0x0055, 0x0030
                 };
-                ks_reply(1, KS_STATUS_OK, sizeof (data), &data, 0, NULL); // WE
+                ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             }
             break;
         }

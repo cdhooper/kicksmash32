@@ -16,7 +16,8 @@
 #define KS_CMD_NULL          0x00  // Do nothing
 #define KS_CMD_NOP           0x01  // Do nothing
 #define KS_CMD_ID            0x02  // Reply with software ID
-#define KS_CMD_TESTPATT      0x03  // Reply with bit test pattern
+#define KS_CMD_UPTIME        0x03  // Report KS uptime in microseconds
+#define KS_CMD_TESTPATT      0x04  // Reply with bit test pattern
 #define KS_CMD_LOOPBACK      0x05  // Reply with sent message
 #define KS_CMD_FLASH_READ    0x06  // Generate flash read mode sequence
 #define KS_CMD_FLASH_CMD     0x07  // Issue low level command to EEPROM
@@ -31,19 +32,13 @@
 
 /* Status codes returned by Kicksmash */
 #define KS_STATUS_OK       0x0000  // Success
-#define KS_STATUS_FAIL     0x0001  // Generic dailure
-#define KS_STATUS_CRC      0x0002  // CRC failure
-#define KS_STATUS_UNKCMD   0x0003  // Unknown command
-#define KS_STATUS_BADARG   0x0004  // Bad command argument
-#define KS_STATUS_BADLEN   0x0005  // Bad message length
+#define KS_STATUS_FAIL     0x0081  // Generic failure
+#define KS_STATUS_CRC      0x0082  // CRC failure
+#define KS_STATUS_UNKCMD   0x0083  // Unknown command
+#define KS_STATUS_BADARG   0x0084  // Bad command argument
+#define KS_STATUS_BADLEN   0x0085  // Bad message length
 
 /* Command-specific options (upper byte of command) */
-#define KS_EEPROM_WE       0x0100  // Drive WE# to EEPROM (given with CMD)
-
-#define KS_ROMSEL_SAVE     0x0100  // Save setting in NVRAM (given with CMD)
-#define KS_ROMSEL_SET      0x0f00  // ROM select bits to force
-#define KS_ROMSEL_BITS     0xf000  // ROM select bit values (A19 is high bit)
-
 #define KS_BANK_SETCURRENT 0x0100  // Set current ROM bank (immediate change)
 #define KS_BANK_SETRESET   0x0200  // Set ROM bank in effect at next reset
 #define KS_BANK_SETPOWERON 0x0400  // Set ROM bank in effect at cold poweron

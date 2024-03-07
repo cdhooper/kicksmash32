@@ -17,7 +17,7 @@ You should first connect USB to the target and then enter:
 end
 
 printf "\nflash - connect, flash firmware, and exit.\n"
-printf "connect - attach with the GDB server.\n"
+printf "connect - attach to local GDB server (port 4242).\n"
 printf "load    - reload firmware.\n"
 printf ""
 printf "Note: st-util must already be started (make stlink).\n"

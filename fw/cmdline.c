@@ -890,7 +890,7 @@ cmdline(void)
 {
     char *line;
 
-    (void) get_new_input_line("KS> ", &line);
+    (void) get_new_input_line("CMD> ", &line);
     if (line != NULL) {
         HIST_ENTRY *hist_cur;
         char *sline = no_whitespace(line);
