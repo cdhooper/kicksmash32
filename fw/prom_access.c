@@ -566,9 +566,3 @@ prom_mode(uint mode)
         config_updated();
     }
 }
-
-void
-prom_snoop(uint mode)
-{
-    ee_snoop(mode);
-}

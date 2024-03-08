@@ -29,6 +29,7 @@
 #include "kbrst.h"
 #include "pin_tests.h"
 #include "config.h"
+#include "msg.h"
 #include "version.h"
 
 static void
@@ -65,6 +66,7 @@ main(void)
 
     adc_init();
     ee_init();
+    msg_init();
 
     if (board_is_standalone)
         printf("Standalone\n");
@@ -81,6 +83,7 @@ main(void)
         cmdline();
         kbrst_poll();
         config_poll();
+        msg_poll();
     }
 
     return (0);

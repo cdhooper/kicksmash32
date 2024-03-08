@@ -24,7 +24,6 @@ rc_t prom_status_clear(void);
 void prom_show_mode(void);
 void prom_mode(uint mode);
 int  prom_verify(int verbose);
-void prom_snoop(uint mode);
 
 #define ERASE_MODE_CHIP   0
 #define ERASE_MODE_SECTOR 1

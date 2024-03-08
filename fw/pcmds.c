@@ -29,6 +29,7 @@
 #include "irq.h"
 #include "kbrst.h"
 #include "m29f160xt.h"
+#include "msg.h"
 #include "config.h"
 
 #include <libopencm3/cm3/scb.h>
@@ -752,7 +753,7 @@ cmd_snoop(int argc, char * const *argv)
             return (RC_USER_HELP);
         }
     }
-    prom_snoop(mode);
+    bus_snoop(mode);
 
     return (RC_SUCCESS);
 }

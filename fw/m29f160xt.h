@@ -23,7 +23,6 @@ int      ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose);
 void     ee_status_clear(void);
 void     ee_cmd(uint32_t addr, uint32_t cmd);
 void     ee_poll(void);
-void     ee_snoop(uint mode);
 int      ee_verify(int verbose);
 void     ee_address_override(uint8_t bits, uint override);
 void     ee_set_mode(uint new_mode);
@@ -31,20 +30,24 @@ void     ee_set_bank(uint8_t bank);
 
 const char *ee_id_string(uint32_t id);
 const char *ee_vendor_string(uint32_t id);
-int      address_log_replay(uint max);
 void     ee_update_bank_at_poweron(void);
 void     ee_update_bank_at_reset(void);
 void     ee_update_bank_at_longreset(void);
 
 
-/* Internal functions for manipulating GPIOs */
+/* Bus functions for manipulating GPIOs */
+void     address_output_disable(void);
+uint32_t address_input(void);
+uint32_t data_input(void);
+void     data_output_disable(void);
+void     data_output(uint32_t data);
+void     data_output_enable(void);
 void     oe_output(uint value);
 void     oe_output_enable(void);
 void     oe_output_disable(void);
-void     data_output_disable(void);
-void     data_output(uint32_t data);
-uint32_t data_input(void);
-
+void     oewe_output(uint value);
+void     we_output(uint value);
+void     we_enable(uint value);
 
 #define MX_ERASE_MODE_CHIP   0
 #define MX_ERASE_MODE_SECTOR 1

@@ -17,5 +17,5 @@ cscope.out
 objs/
 rev*/
 photos
-fw/libopencm3/
-stutils/
+#fw/libopencm3/
+#fw/stutils/

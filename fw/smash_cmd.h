@@ -29,6 +29,7 @@
 #define KS_CMD_BANK_MERGE    0x12  // Merge or unmerge banks
 #define KS_CMD_BANK_COMMENT  0x13  // Set a bank comment
 #define KS_CMD_BANK_LRESET   0x14  // Set bank longreset sequence
+#define KS_CMD_REMOTE_MSG    0x20  // Send or receive a remote message
 
 /* Status codes returned by Kicksmash */
 #define KS_STATUS_OK       0x0000  // Success

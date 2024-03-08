@@ -1,12 +1,12 @@
 # Kicksmash Rev 1
 # Kicksmash Rev 2 replaces some address pins which have weak drive
 
-BOARD_REV ?= 3
+BOARD_REV ?= 4
 
 SRCS   := main.c clock.c gpio.c printf.c timer.c uart.c usb.c version.c \
 	  led.c irq.c mem_access.c readline.c cmdline.c cmds.c pcmds.c \
 	  prom_access.c m29f160xt.c utils.c crc32.c adc.c kbrst.c scanf.c \
-	  pin_tests.c stm32flash.c config.c
+	  pin_tests.c stm32flash.c config.c msg.c
 
 OBJDIR := objs
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)

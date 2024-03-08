@@ -1,7 +1,7 @@
 /*
  * crcit
  * -----
- * Simple program to compute and verify CRC used in message communitcation
+ * Simple program to compute and verify CRC used in message communication
  * between Amiga and Kicksmash.
  *
  * cc -o crcit crcit.c crc32.c
