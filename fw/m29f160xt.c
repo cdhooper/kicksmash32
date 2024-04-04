@@ -63,7 +63,6 @@ static uint32_t ee_status = EE_STATUS_NORMAL;  // Status from program/erase
 static uint32_t ticks_per_15_nsec;
 static uint32_t ticks_per_20_nsec;
 static uint32_t ticks_per_30_nsec;
-static uint32_t ticks_per_200_nsec;
 static uint64_t ee_last_access = 0;
 static bool     ee_enabled = false;
 
@@ -1379,7 +1378,6 @@ ee_init(void)
     ticks_per_15_nsec  = timer_nsec_to_tick(15);
     ticks_per_20_nsec  = timer_nsec_to_tick(20);
     ticks_per_30_nsec  = timer_nsec_to_tick(30);
-    ticks_per_200_nsec = timer_nsec_to_tick(200);
 
     /* XXX: These values for bank override should come from NVRAM */
     ee_address_override(0x7, 0);

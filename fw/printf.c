@@ -570,6 +570,7 @@ void warnx(const char *fmt, ...)
     va_end(args);
     putchar('\n');
 }
+void warn(const char *fmt, ...) __attribute__((alias("warnx")));
 
 /**
  * errx() is a stdio compatible function which operates on a format
@@ -598,6 +599,8 @@ void errx(int rc, const char *fmt, ...)
     while (1)
         ;
 }
+__attribute__((format(__printf__, 2, 3))) __attribute__((noreturn))
+void err(int rc, const char *fmt, ...) __attribute__((alias("errx")));
 
 #undef DO_PRINTF_TEST
 #ifdef DO_PRINTF_TEST

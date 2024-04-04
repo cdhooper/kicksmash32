@@ -48,7 +48,7 @@
 /* Inline speed-critical code */
 #define dma_get_number_of_data(x, y) DMA_CNDTR(x, y)
 
-static const uint16_t sm_magic[] = { 0x0117, 0x0119, 0x1017, 0x0204 };
+static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
 // static const uint16_t reset_magic_32[] = { 0x0000, 0x0001, 0x0034, 0x0035 };
 // static const uint16_t reset_magic_16[] = { 0x0002, 0x0003, 0x0068, 0x0069 };
 
@@ -60,6 +60,10 @@ static const uint16_t reboot_magic_16[] =
 static const uint16_t *reboot_magic;
 static uint16_t reboot_magic_end;
 
+static uint32_t ticks_per_200_nsec;
+static uint64_t ks_timeout_timer = 0;  // timer too frequent complaint message
+static uint     ks_timeout_count = 0;  // count of complaint messages
+
 static uint     consumer_spin;
 static uint8_t  capture_mode = CAPTURE_ADDR;
 static uint     consumer_wrap;
@@ -67,20 +71,30 @@ static uint     consumer_wrap_last_poll;
 static uint     rx_consumer = 0;
 static uint     message_count = 0;
 
+/* Message interface through Kicksmash between Amiga and USB host */
+static uint     prod_buf1;   // Producer for Amiga -> USB buffer
+static uint     cons_buf1;   // Consumer for Amiga -> USB buffer
+static uint     prod_buf2;   // Producer for USB buffer -> Amiga
+static uint     cons_buf2;   // Consumer for USB buffer -> Amiga
+
 /* Buffers for DMA from/to GPIOs and Timer event generation registers */
 #define ADDR_BUF_COUNT 1024
 #define ALIGN  __attribute__((aligned(16)))
 ALIGN volatile uint16_t buffer_rxa_lo[ADDR_BUF_COUNT];
 ALIGN volatile uint16_t buffer_rxd[ADDR_BUF_COUNT];
-ALIGN volatile uint16_t buffer_txd_lo[ADDR_BUF_COUNT * 2];
-ALIGN volatile uint16_t buffer_txd_hi[ADDR_BUF_COUNT];
+ALIGN volatile uint16_t          buffer_txd_lo[ADDR_BUF_COUNT * 2];
+ALIGN volatile uint16_t          buffer_txd_hi[ADDR_BUF_COUNT];
 
+/* The message buffers must be a power-of-2 in size */
+ALIGN uint8_t  msg_buf1[0x1000];  // Amiga -> USB buffer
+ALIGN uint8_t  msg_buf2[0x1000];  // USB -> Amiga buffer
 
 #ifdef CAPTURE_GPIOS
 ALIGN uint16_t buffer_a[ADDR_BUF_COUNT];
 ALIGN uint16_t buffer_b[ADDR_BUF_COUNT];
 ALIGN uint16_t buffer_c[ADDR_BUF_COUNT];
 ALIGN uint16_t buffer_d[ADDR_BUF_COUNT];
+
 
 static uint
 gpio_watch(void)
@@ -175,6 +189,111 @@ gpio_showbuf(uint count)
     }
 }
 #endif
+
+/*
+ * Compute buffer space available   Compute buffer space in use
+ * (S-1)-(P-C)&(S-1)                (P-C)&(S-1)
+ * 4 ops                            3 ops
+ *
+ * Producer / consumer scenarios
+ *  _ _ _ _ _ _ _ _    _ _ _ _ _ _ _ _    _ _ _ _ _ _ _ _
+ * |.|_|_|.|.|.|.|.|  |_|.|.|_|_|_|_|_|  |_|_|_|_|_|_|_|_|
+ *    P   C              C   P              C
+ *    r   o              o   r              o
+ *    o   n              n   o              P
+ *    d   s              s   d              R
+ *    =   =              =   =              =
+ *    1   3              1   3              1
+ *
+ * (1-3)&7            (3-1)&7            (1-1)&7
+ * (0xfe&7)=6 in use  2&7=2 in use       0&7=0 in use
+ * 1 available        5 available        7 available
+ *
+ * First scenario P-C will result in a negative, which is then masked
+ * against the total_size - 1. That will yield a positive which is the
+ * number of elements in use.
+ *
+ */
+#define MBUF1_SPACE_INUSE ((prod_buf1 - cons_buf1) & (sizeof (msg_buf1) - 1))
+#define MBUF2_SPACE_INUSE ((prod_buf2 - cons_buf2) & (sizeof (msg_buf2) - 1))
+#define MBUF1_SPACE_AVAIL (sizeof (msg_buf1) - 1 - MBUF1_SPACE_INUSE)
+#define MBUF2_SPACE_AVAIL (sizeof (msg_buf2) - 1 - MBUF2_SPACE_INUSE)
+
+static uint
+buf1_add(uint len, void *ptr)
+{
+    uint xlen;
+    uint8_t *sptr = ptr;
+    len = (len + 1) & ~1;  // Round up to 16-bit alignment
+    if (MBUF1_SPACE_AVAIL < len)
+        return (1);
+    xlen = sizeof (msg_buf1) - prod_buf1;
+    if (len <= xlen) {
+        memcpy(msg_buf1 + prod_buf1, sptr, len);
+    } else {
+        memcpy(msg_buf1 + prod_buf1, sptr, xlen);
+        memcpy(msg_buf1, sptr + xlen, len - xlen);
+    }
+    prod_buf1 = (prod_buf1 + len) & (sizeof (msg_buf1) - 1);
+    return (0);
+}
+
+static uint
+buf2_add(uint len, void *ptr)
+{
+    uint xlen;
+    uint8_t *sptr = ptr;
+    len = (len + 1) & ~1;  // Round up to 16-bit alignment
+    if (MBUF2_SPACE_AVAIL < len)
+        return (1);
+    xlen = sizeof (msg_buf2) - prod_buf2;
+    if (len <= xlen) {
+        memcpy(msg_buf2 + prod_buf2, sptr, len);
+    } else {
+        memcpy(msg_buf2 + prod_buf2, sptr, xlen);
+        memcpy(msg_buf2, sptr + xlen, len - xlen);
+    }
+    prod_buf2 = (prod_buf2 + len) & (sizeof (msg_buf2) - 1);
+    return (0);
+}
+
+static uint16_t
+buf1_next_msg_len(void)
+{
+    uint len;
+    uint len_pos;
+    uint inuse = MBUF1_SPACE_INUSE;
+    if (inuse < KS_HDR_AND_CRC_LEN)
+{
+// printf("li=%u %u\n", inuse, KS_HDR_AND_CRC_LEN);
+        return (inuse);
+}
+
+    len_pos = (cons_buf1 + 8) & (sizeof (msg_buf1) - 1);
+    len     = *(uint16_t *) (msg_buf1 + len_pos);
+// printf("lp=%x l=%u\n", len_pos, len);
+    len     = (len + 1) & ~1;  // Round up
+    return (len + KS_HDR_AND_CRC_LEN);
+}
+
+static uint16_t
+buf2_next_msg_len(void)
+{
+    uint len;
+    uint len_pos;
+    uint inuse = MBUF2_SPACE_INUSE;
+    if (inuse < KS_HDR_AND_CRC_LEN)
+{
+//printf("Li=%u\n", inuse);
+        return (inuse);
+}
+
+    len_pos = (cons_buf2 + 8) & (sizeof (msg_buf2) - 1);
+    len     = *(uint16_t *) (msg_buf2 + len_pos);
+//printf("L=%u\n", len);
+    len     = (len + 1) & ~1;  // Round up
+    return (len + KS_HDR_AND_CRC_LEN);
+}
 
 /*
  * oe_input
@@ -407,22 +526,47 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
          */
         uint32_t *rbp;
         if (flags & KS_REPLY_RAW) {
+            uint     rlen1_orig = rlen1;
+            uint16_t *txl = (uint16_t *)buffer_txd_lo;
+            uint16_t *txh = (uint16_t *)buffer_txd_hi;
+            uint32_t val;
+
+            /* 32-bit copy first chunk */
             rbp = (uint32_t *) rbuf1;
-            rlen1 /= 4;
-            for (count = 0; count < rlen1; count++, pos++) {
-                uint32_t val = *(rbp++);
-                buffer_txd_lo[pos] = val >> 16;
-                buffer_txd_hi[pos] = (uint16_t) val;
+            rlen1 = (rlen1 + 3) / 4;
+            for (count = rlen1; count != 0; count--) {
+                val = *(rbp++);
+                *(txh++) = (uint16_t) val;
+                *(txl++) = val >> 16;
             }
             if (rlen2 != 0) {
-                rbp = (uint32_t *) rbuf2;
-                rlen2 /= 4;
-                for (count = 0; count < rlen2; count++, pos++) {
-                    uint32_t val = *(rbp++);
-                    buffer_txd_lo[pos] = val >> 16;
-                    buffer_txd_hi[pos] = (uint16_t) val;
+                uint32_t *rbp2 = (uint32_t *) rbuf2;
+                uint      rlen2_orig = rlen2;
+
+                rlen2 = (rlen2 + 3) / 4;
+
+                if ((rlen1_orig & 3) != 0) {
+                    /* First chunk was not even multiple of 4 bytes */
+
+                    txl--;  // Fixup because first chunk overran
+
+                    for (count = rlen2; count != 0; count--) {
+                        val = *(rbp2++);
+                        *(txl++) = (uint16_t) val;
+                        *(txh++) = val >> 16;
+                    }
+                } else {
+                    /* First chunk was even multiple of 4 bytes */
+                    for (count = rlen2; count != 0; count--) {
+                        val = *(rbp2++);
+                        *(txh++) = (uint16_t) val;
+                        *(txl++) = val >> 16;
+                    }
                 }
+                if ((rlen2_orig & 3) != 0)
+                    txh--;
             }
+            pos = txh - buffer_txd_hi;
         } else {
             uint32_t crc;
             for (count = 0; count < ARRAY_SIZE(sm_magic); pos++) {
@@ -544,8 +688,6 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
         enable_irq();
     }
 
-//  enable_oe_capture_tx();
-
 #ifdef CAPTURE_GPIOS
     if (flags & KS_REPLY_RAW) {
         count = gpio_watch();
@@ -558,7 +700,16 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
         while (dma_last == dma_left) {
             for (count = 0; dma_last == dma_left; count++) {
                 if (count > 100000) {
-                    printf(" KS timeout 0: %u reads left\n", dma_left);
+                    if (flags & KS_REPLY_WE)
+                        oewe_output(0);
+
+                    data_output_disable();
+                    oe_output_disable();
+                    if (timer_tick_has_elapsed(ks_timeout_timer))
+                        ks_timeout_count = 0;
+                    ks_timeout_timer = timer_tick_plus_msec(1000);
+                    if (ks_timeout_count++ < 4)
+                        printf(" KS timeout 0: %u reads left\n", dma_left);
                     goto oe_reply_end;
                 }
                 __asm__ volatile("dmb");
@@ -567,27 +718,25 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
         }
         dma_last = dma_left;
     }
-//  timer_delay_ticks(ticks_per_200_nsec);
+    timer_delay_ticks(ticks_per_200_nsec);
 #ifdef CAPTURE_GPIOS
 }
 #endif
 
-oe_reply_end:
-    if (flags & KS_REPLY_WE) {
+    if (flags & KS_REPLY_WE)
         oewe_output(0);
-    }
 
     data_output_disable();
     oe_output_disable();
 
+oe_reply_end:
     configure_oe_capture_rx(false);
     timer_enable_irq(TIM5, TIM_DIER_CC1IE);
     data_output(0xffffffff);    // Return to pull-up of data pins
 
 #ifdef CAPTURE_GPIOS
-    if (flags & KS_REPLY_RAW) {
+    if (flags & KS_REPLY_RAW)
         gpio_showbuf(count);
-    }
 #endif
 }
 
@@ -643,13 +792,19 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint8_t *buf2;
             uint len1;
             uint len2;
+#ifdef NEW_MSG_INTERFACE
+            uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
+            cons_s = rx_consumer - (raw_len - 2 + 1) / 2;
+#else
             uint raw_len = cmd_len + 8 + 2 + 2 + 4;  // Magic + len + cmd + CRC
             cons_s = rx_consumer - (raw_len - 1) / 2;
+#endif
             if ((int) cons_s >= 0) {
                 /* Send data doesn't wrap */
                 len1 = raw_len;
                 buf1 = (uint8_t *) &buffer_rxa_lo[cons_s];
                 ks_reply(KS_REPLY_RAW, 0, len1, buf1, 0, NULL);
+// printf("e=%02x%02x\n", buf1[len1 - 2], buf1[len1 - 1]);
             } else {
                 /* Send data from end of buffer + beginning of buffer */
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
@@ -659,8 +814,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
 
                 len2 = raw_len - len1;
                 buf2 = (uint8_t *) buffer_rxa_lo;
-
                 ks_reply(KS_REPLY_RAW, 0, len1, buf1, len2, buf2);
+//   printf("c=%u l=%u+%u e1=%02x%02x e=%02x%02x\n", cons_s, len1, len2, buf1[len1 - 2], buf1[len1 - 1], buf2[len2 - 2], buf2[len2 - 1]);
             }
             break;
         }
@@ -939,9 +1094,121 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             config_updated();
             break;
         }
-        case KS_CMD_REMOTE_MSG:
-            ks_reply(0, KS_STATUS_FAIL, 0, NULL, 0, NULL);
+        case KS_CMD_MSG_INFO: {
+            smash_msg_info_t reply;
+            uint16_t         temp;
+            temp                 = MBUF1_SPACE_INUSE;
+            reply.smi_buf1_inuse = SWAP16(temp);
+            temp                 = MBUF1_SPACE_AVAIL;
+            reply.smi_buf1_avail = SWAP16(temp);
+            temp                 = MBUF2_SPACE_INUSE;
+            reply.smi_buf2_inuse = SWAP16(temp);
+            temp                 = MBUF2_SPACE_AVAIL;
+            reply.smi_buf2_avail = SWAP16(temp);
+            ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
             break;
+        }
+        case KS_CMD_MSG_SEND: {
+            uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
+            uint8_t *buf1;
+            uint8_t *buf2;
+            uint len1;
+            uint len2;
+            uint rc;
+            cons_s = rx_consumer - (raw_len - 1) / 2;
+//printf("[%u]", raw_len);
+            if ((int) cons_s >= 0) {
+                /* Receive data doesn't wrap */
+                len1 = raw_len;
+                buf1 = (uint8_t *) &buffer_rxa_lo[cons_s];
+                if (cmd & KS_REMOTE_ALTBUF) {
+                    rc = buf2_add(len1, buf1);
+                } else {
+                    rc = buf1_add(len1, buf1);
+//printf("pb1=%u\n", prod_buf1);
+                }
+            } else {
+                /* Send data from end of buffer + beginning of buffer */
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+
+                len1 = (ARRAY_SIZE(buffer_rxa_lo) - cons_s) * 2;
+                buf1 = (uint8_t *) &buffer_rxa_lo[cons_s];
+
+                len2 = raw_len - len1;
+                buf2 = (uint8_t *) buffer_rxa_lo;
+
+                if (cmd & KS_REMOTE_ALTBUF) {
+                    if (len1 + len2 > MBUF2_SPACE_AVAIL) {
+                        rc = 1;
+                    } else {
+                        rc = buf2_add(len1, buf1);
+                        if (rc == 0)
+                            rc = buf2_add(len2, buf2);
+                    }
+                } else {
+                    if (len1 + len2 > MBUF1_SPACE_AVAIL) {
+                        rc = 1;
+                    } else {
+                        rc = buf1_add(len1, buf1);
+//printf("Pb1=%u\n", prod_buf1);
+                        if (rc == 0)
+{
+                            rc = buf1_add(len2, buf2);
+//printf("PB1=%u\n", prod_buf1);
+}
+                    }
+                }
+            }
+            if (rc != 0)
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+            else
+                ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            break;
+        }
+        case KS_CMD_MSG_RECEIVE: {
+            uint     len;
+            uint     len1;
+            uint     len2;
+            uint8_t *buf1;
+            uint8_t *buf2;
+            if (cmd & KS_REMOTE_ALTBUF) {
+                len = buf1_next_msg_len();
+                len1 = sizeof (msg_buf1) - cons_buf1;
+                if (len1 > len) {
+                    /* Send data doesn't wrap */
+                    len1 = len;
+                    len2 = 0;
+                } else {
+                    /* Send data from end + beginning of circular buffer */
+                    len2 = len - len1;
+                }
+                buf1 = msg_buf1 + cons_buf1;
+                buf2 = msg_buf1;
+                cons_buf1 = (cons_buf1 + len) & (sizeof (msg_buf1) - 1);
+            } else {
+                len = buf2_next_msg_len();
+                len1 = sizeof (msg_buf2) - cons_buf2;
+                if (len1 > len) {
+                    /* Send data doesn't wrap */
+                    len1 = len;
+                    len2 = 0;
+                } else {
+                    /* Send data from end + beginning of circular buffer */
+                    len2 = len - len1;
+                }
+                buf1 = msg_buf2 + cons_buf2;
+                buf2 = msg_buf2;
+                cons_buf2 = (cons_buf2 + len) & (sizeof (msg_buf2) - 1);
+            }
+            if (len == 0) {
+                ks_reply(0, KS_STATUS_NODATA, 0, NULL, 0, NULL);
+printf("nd%s\n", (cmd & KS_REMOTE_ALTBUF) ? " alt" : "");
+            } else {
+                ks_reply(KS_REPLY_RAW, 0, len1, buf1, len2, buf2);
+//              printf("l=%u+%u cb1=%u pb1=%u %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x%s\n", len1, len2, cons_buf1, prod_buf1, buf1[0], buf1[1], buf1[2], buf1[3], buf1[4], buf1[5], buf1[6], buf1[7], buf1[9], buf1[9], buf1[10], buf1[11], (cmd & KS_REMOTE_ALTBUF) ? " alt" : "");
+            }
+            break;
+        }
         default:
             /* Unknown command */
             ks_reply(0, KS_STATUS_UNKCMD, 0, NULL, 0, NULL);
@@ -949,6 +1216,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             break;
     }
 }
+
+
 
 /*
  * process_addresses
@@ -973,10 +1242,12 @@ new_cmd:
     dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER, LOG_DMA_CHANNEL);
     prod     = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
 
+new_cmd_post:
     while (rx_consumer != prod) {
         switch (magic_pos) {
             case 0: {
                 uint16_t val = buffer_rxa_lo[rx_consumer];
+#if 0
                 /* Check for reboot sequence */
                 if (val == reboot_magic_end) {
                     int pos;
@@ -993,6 +1264,7 @@ new_cmd:
                     amiga_reboot_detect++;
                     break;
                 }
+#endif
                 /* Look for start of Magic sequence (needs to be fast) */
                 if (val != sm_magic[0])
                     break;
@@ -1014,6 +1286,9 @@ new_cmd:
                 message_count++;
                 len = cmd_len = buffer_rxa_lo[rx_consumer];
                 crc = crc32r(0, &len, sizeof (uint16_t));
+#if 1
+                cmd_len = (cmd_len + 1) & ~1;  // round up
+#endif
                 magic_pos++;
                 break;
             case ARRAY_SIZE(sm_magic) + 1:
@@ -1032,7 +1307,8 @@ new_cmd:
                     len--;
                 } else {
                     /* Special case -- odd byte at end */
-                    crc = crc32r(crc, (void *) &buffer_rxa_lo[rx_consumer], 1);
+                    uint8_t *ptr = (uint8_t *) &buffer_rxa_lo[rx_consumer];
+                    crc = crc32r(crc, ptr + 1, 1);
                 }
                 if (len == 0)
                     magic_pos++;
@@ -1049,7 +1325,7 @@ new_cmd:
                     uint16_t error[2];
                     error[0] = KS_STATUS_CRC;
                     error[1] = crc;
-#undef CRC_DEBUG
+#define CRC_DEBUG
 #ifdef CRC_DEBUG
                 {
                 // XXX: not fast enough to deal with log
@@ -1063,7 +1339,6 @@ new_cmd:
                     }
 #endif  // CRC_DEBUG
                     ks_reply(0, KS_STATUS_CRC, sizeof (error), &error, 0, NULL);
-                    magic_pos = 0;  // Reset magic sequencer
 
                     printf("cmd=%x l=%04x CRC %08lx != calc %08lx\n",
                            cmd, cmd_len, crc_rx, crc);
@@ -1078,7 +1353,7 @@ new_cmd:
                     }
 #endif  // CRC_DEBUG
                     magic_pos = 0;  // Restart magic detection
-                    break;
+                    goto new_cmd;
                 }
 
                 /* Execution phase */
@@ -1088,7 +1363,7 @@ new_cmd:
             default:
                 printf("?");
                 magic_pos = 0;  // Restart magic detection
-                goto new_cmd;
+                break;
         }
 
         if (++rx_consumer == ARRAY_SIZE(buffer_rxa_lo)) {
@@ -1108,7 +1383,7 @@ new_cmd:
     dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER, LOG_DMA_CHANNEL);
     prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
     if (rx_consumer != prod)
-        goto new_cmd;
+        goto new_cmd_post;
 }
 
 void
@@ -1145,7 +1420,7 @@ address_log_replay(uint max)
         printf("Invalid producer=%x left=%x\n", prod, dma_left);
         return (1);
     }
-    if (max >= 999) {
+    if (max == 0x999) {  // magic value
         printf("T2C1=%04x %08x\n"
                "T5C1=%04x %08x\n"
                "Wrap=%u\n"
@@ -1431,4 +1706,6 @@ msg_init(void)
 
     capture_mode = CAPTURE_ADDR;
     configure_oe_capture_rx(true);
+
+    ticks_per_200_nsec = timer_nsec_to_tick(200);
 }

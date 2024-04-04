@@ -73,7 +73,9 @@ const char cmd_prom_help[] =
 const char cmd_reset_help[] =
 "reset              - reset CPU\n"
 "reset amiga [hold] - reset Amiga using KBRST (hold leaves it in reset)\n"
+"reset amiga long   - reset Amiga with a long reset (change ROM image)\n"
 "reset dfu          - reset into DFU programming mode\n"
+"reset prom         - reset ROM flash memory (forces Amiga reset as well)\n"
 "reset usb          - reset and restart USB interface";
 
 const char cmd_snoop_help[] =
@@ -640,6 +642,12 @@ cmd_reset(int argc, char * const *argv)
         else
             printf("Resetting Amiga\n");
         return (RC_SUCCESS);
+    } else if (strcmp(argv[1], "prom") == 0) {
+        printf("Resetting Amiga and flash ROM\n");
+        kbrst_amiga(0, 0);
+        amiga_not_in_reset = 0;
+        ee_read_mode();
+        return (RC_SUCCESS);
     } else {
         printf("Unknown argument %s\n", argv[1]);
         return (RC_USER_HELP);
@@ -690,48 +698,82 @@ cmd_gpio(int argc, char * const *argv)
 {
     int arg;
     if (argc < 2) {
-        gpio_show(-1, -1);
+        gpio_show(-1, 0xffff);
         return (RC_SUCCESS);
     }
 
     for (arg = 1; arg < argc; arg++) {
         const char *ptr = argv[arg];
         int port = -1;
-        int pin = -1;
+        uint16_t pins[NUM_GPIO_BANKS];
         const char *assign = NULL;
-        if ((*ptr == 'p') || (*ptr == 'P'))
-            ptr++;
 
-        /* Find port, if specified */
-        if ((*ptr >= 'a') && (*ptr <= 'f'))
-            port = *(ptr++) - 'a';
-        else if ((*ptr >= 'A') && (*ptr <= 'F'))
-            port = *(ptr++) - 'A';
+        memset(pins, 0, sizeof (pins));
 
-        /* Find pin, if specified */
-        if ((*ptr >= '0') && (*ptr <= '9')) {
-            pin = *(ptr++) - '0';
-            if ((*ptr >= '0') && (*ptr <= '9'))
-                pin = pin * 10 + *(ptr++) - '0';
+        if (gpio_name_match(&ptr, pins) != 0) {
+            if ((*ptr == 'p') || (*ptr == 'P'))
+                ptr++;
+
+            /* Find port, if specified */
+            if ((*ptr >= 'a') && (*ptr <= 'f'))
+                port = *(ptr++) - 'a';
+            else if ((*ptr >= 'A') && (*ptr <= 'F'))
+                port = *(ptr++) - 'A';
+
+            /* Find pin, if specified */
+            if ((*ptr >= '0') && (*ptr <= '9')) {
+                uint pin = *(ptr++) - '0';
+                if ((*ptr >= '0') && (*ptr <= '9'))
+                    pin = pin * 10 + *(ptr++) - '0';
+                if (pin > 15) {
+                    printf("Invalid argument %s\n", argv[arg]);
+                    return (RC_BAD_PARAM);
+                }
+                pins[port] = BIT(pin);
+            } else if (*ptr == '*') {
+                ptr++;
+                pins[port] = 0xffff;
+            }
         }
 
         if (*ptr == '=') {
             assign = ptr + 1;
             ptr = "";
-            if ((port == -1) || (pin == -1)) {
-                printf("You must specify the GPIO to assign: %s\n", argv[arg]);
-                return (RC_BAD_PARAM);
+            if (port == -1) {
+                uint tport;
+                for (tport = 0; tport < NUM_GPIO_BANKS; tport++)
+                    if (pins[tport] != 0)
+                        break;
+                if (tport == NUM_GPIO_BANKS) {
+                    printf("You must specify the GPIO to assign: %s\n",
+                           argv[arg]);
+                    return (RC_BAD_PARAM);
+                }
             }
         }
-        if (((port == -1) && (pin == -1)) || (pin > 15) || (*ptr != '\0')) {
+        if (*ptr != '\0') {
             printf("Invalid argument %s\n", argv[arg]);
             return (RC_BAD_PARAM);
         }
 
-        if (assign != NULL)
-            gpio_assign(port, pin, assign);
-        else
-            gpio_show(port, pin);
+        if (assign != NULL) {
+            if (port == -1) {
+                for (port = 0; port < NUM_GPIO_BANKS; port++) {
+                    if (pins[port] != 0) {
+                        gpio_assign(port, pins[port], assign);
+                    }
+                }
+            } else {
+                gpio_assign(port, pins[port], assign);
+            }
+        } else {
+            if (port == -1) {
+                for (port = 0; port < NUM_GPIO_BANKS; port++)
+                    gpio_show(port, pins[port]);
+            } else {
+                gpio_show(port, pins[port]);
+            }
+        }
     }
 
     return (RC_SUCCESS);

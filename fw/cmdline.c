@@ -82,10 +82,15 @@ static const cmd_t cmd_list[] = {
     { cmd_test,    "test",    2, cmd_test_help,
                         "[bwlqoh] <addr> <len> <testtype>", "test memory" },
 #ifdef EMBEDDED_CMD
+#ifdef HAVE_SPACE_PROM
     { cmd_prom,    "prom",    1, cmd_prom_help, " [erase|id|read|write|...]",
                         "perform EEPROM operation" },
-    { cmd_reset,   "reset",   0, cmd_reset_help, " [dfu|amiga]", "reset CPU" },
+#endif
+    { cmd_reset,   "reset",   0, cmd_reset_help, " [dfu|amiga|prom]",
+                        "reset CPU" },
+#ifdef HAVE_SPACE_PROM
     { cmd_snoop,   "snoop",   0, cmd_snoop_help, "", "snoop ROM" },
+#endif
     { cmd_time,    "time",    0, cmd_time_help, " cmd|now|watch>",
                         "measure or show time" },
     { cmd_usb,     "usb",    0, cmd_usb_help, " disable|regs|reset",
@@ -96,6 +101,34 @@ static const cmd_t cmd_list[] = {
 #endif
     { cmd_version, "version", 1, NULL, "", "show version" },
 };
+
+static const char *do_not_eval_cmds[] = {
+#ifdef EMBEDDED_CMD
+    "pld",
+#endif
+};
+
+static uint
+check_for_do_not_eval(const char *str)
+{
+    const char *first = str;
+    const char *last = str;
+    uint  len;
+    uint  cur;
+    while ((*first == ' ') || (*first == '\t'))
+        first++;
+    for (last = first; *last != ' '; last++) {
+        if ((*last < 'A') || (*last > 'z') ||
+            ((*last > 'Z') && (*last < 'a'))) {
+            break;  // Not A-Z or a-z
+        }
+    }
+    len = last - first;
+    for (cur = 0; cur < ARRAY_SIZE(do_not_eval_cmds); cur++)
+        if (strncmp(first, do_not_eval_cmds[cur], len) == 0)
+            return (1);
+    return (0);
+}
 
 static rc_t
 cmd_help(int argc, char * const *argv)
@@ -811,6 +844,10 @@ eval_cmdline_expr(const char *str)
     char *ptr;
     char *buf = strdup(str);
     char *sptr = NULL;
+
+    /* Some commands should not have arguments evaluated / expanded */
+    if (check_for_do_not_eval(str))
+        return (buf);
 
     if (buf == NULL)
         errx(EXIT_FAILURE, "Unable to allocate memory");

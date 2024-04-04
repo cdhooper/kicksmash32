@@ -12,7 +12,7 @@
 
 #define ARRAY_SIZE(x) (int)((sizeof (x) / sizeof ((x)[0])))
 
-static const uint16_t sm_magic[] = { 0x0117, 0x0119, 0x1017, 0x0204 };
+static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
 
 typedef unsigned int uint;
 
@@ -66,7 +66,7 @@ main(int argc, char *argv[])
                     len--;
                 } else {
                     /* Special case -- odd byte at end */
-                    crc = crc32(crc, (void *) &v, 1);
+                    crc = crc32(crc, ((uint8_t *) &v) + 1, 1);
                 }
                 if (len == 0)
                     magic_pos++;

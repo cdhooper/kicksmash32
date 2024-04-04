@@ -13,7 +13,9 @@
 #ifdef EMBEDDED_CMD
 #include "main.h"
 #include "pcmds.h"
+#ifdef HAVE_SPACE_PROM
 #include "prom_access.h"
+#endif
 #include "stm32flash.h"
 #include <stdbool.h>
 #include "timer.h"
@@ -305,7 +307,7 @@ parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr)
     *space = SPACE_MEMORY;  /* Default */
 
 #ifdef HAVE_SPACE_PROM
-    if (strncmp(argp, "prom", 4) == 0) {
+    if (strcmp(argp, "prom") == 0) {
         *space = SPACE_PROM;
         if (strchr(argp, ':') != NULL) {
             argp += 6;
@@ -321,7 +323,7 @@ parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr)
     }
 #endif
 #ifdef HAVE_SPACE_FLASH
-    if (strncmp(argp, "flash", 5) == 0) {
+    if (strcmp(argp, "flash") == 0) {
         *space = SPACE_FLASH;
         if (strchr(argp, ':') != NULL) {
             argp += 6;
@@ -337,7 +339,7 @@ parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr)
     }
 #endif
 #ifdef HAVE_SPACE_FILE
-    if (strncmp(argp, "file", 4) == 0) {
+    if (strcmp(argp, "file") == 0) {
         int len;
         *space = SPACE_FILE;
         if (strchr(argp, ':') != NULL) {

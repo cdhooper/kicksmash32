@@ -246,8 +246,8 @@ CDC_Transmit_FS(uint8_t *buf, uint16_t len)
 #ifdef DEBUG_NO_USB
     return (USBD_OK);
 #endif
-    uint64_t timeout = timer_tick_plus_msec(10);
-    bool     first = true;
+    uint64_t timeout = 0;
+
     if (usb_console_active == false)
         return (-1);
     preparing_packet = true;
@@ -262,12 +262,11 @@ CDC_Transmit_FS(uint8_t *buf, uint16_t len)
         rc = usbd_ep_write_packet(usbd_gdev, 0x82, buf, tlen);
         usb_unmask_interrupts();
         if (rc == 0) {
-            if (first == true)
+            if (timeout == 0)
                 return (-1);
             if (timer_tick_has_elapsed(timeout))
                 return (-1);
         } else {
-            first = false;
             len -= tlen;
             buf += tlen;
             timeout = timer_tick_plus_msec(10);
@@ -595,7 +594,7 @@ usb_startup(void)
     usb_strings[2] = (char *)usb_serial_str;
 
 #ifdef STM32F4
-    /* GPIO9 should left as an INPUT */
+    /* GPIO9 should be left as an INPUT */
     gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO11 | GPIO12);
     gpio_set_af(GPIOA, GPIO_AF10, GPIO11 | GPIO12);
 

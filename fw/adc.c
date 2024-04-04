@@ -40,7 +40,6 @@
 #define V5_EXPECTED_MV     5000      // 5V expressed as millivolts
 #define V3P3_DIVIDER_SCALE 2 / 10000 // (1k / 1k)
 #define V5_DIVIDER_SCALE   2 / 10000 // (1k / 1k)
-#define V5CL_DIVIDER_SCALE 2 / 10000 // (1k / 1k)
 
 #include <libopencm3/stm32/adc.h>
 #include <libopencm3/stm32/dac.h>
@@ -54,6 +53,7 @@
 static const uint8_t channel_defs[] = {
     ADC_CHANNEL_VREF,  // 0: Vrefint (used to calibrate other readings
     ADC_CHANNEL_TEMP,  // 1: Vtemp Temperature sensor
+    8,                 // 2: PB0 - V5          (1k/1k divider)
 #if 0
     3,                 // 2: PA3 - EEPROM V10  (10k/1k divider)
     1,                 // 3: PA1 - V3P3        (1k/1k divider)
@@ -63,89 +63,35 @@ static const uint8_t channel_defs[] = {
 #endif
 };
 
+typedef struct {
+    uint32_t gpio_port;
+    uint16_t gpio_pin;
+} channel_gpio_t;
+static const channel_gpio_t channel_gpios[] = {
+    { GPIOB, GPIO0 },  // PB0 - V5
+};
 
 #define CHANNEL_COUNT ARRAY_SIZE(channel_defs)
 
 /* Buffer to store the results of the ADC conversion */
 volatile uint16_t adc_buffer[CHANNEL_COUNT];
 
+int v5_stable = false;
+
 void
 adc_init(void)
 {
     uint32_t adcbase = ADC1;
-#if 0
     size_t   p;
-#endif
 
-#ifdef STM32F4
-    uint32_t dma     = DMA2;
-    uint8_t  stream  = 4;  // STM32F4 UM Table: Summary of DMA2 requests...
-    uint32_t channel = 0;
-
-    for (p = 0; p < ARRAY_SIZE(channel_gpios); p++) {
-        gpio_mode_setup(channel_gpios[p].gpio_port, GPIO_MODE_ANALOG,
-                        GPIO_PUPD_NONE, channel_gpios[p].gpio_pin);
-    }
-
-    rcc_periph_clock_enable(RCC_ADC1);
-    rcc_periph_clock_enable(RCC_DMA2);
-    adc_power_off(adcbase); // Turn off ADC during configuration
-
-    dma_disable_stream(dma, stream);
-    dma_set_peripheral_address(dma, stream, (uintptr_t)&ADC_DR(adcbase));
-    dma_set_memory_address(dma, stream, (uintptr_t)adc_buffer);
-    dma_set_transfer_mode(dma, stream, DMA_SxCR_DIR_PERIPHERAL_TO_MEM);
-    dma_set_number_of_data(dma, stream, CHANNEL_COUNT);
-    dma_channel_select(dma, stream, channel);
-    dma_disable_peripheral_increment_mode(dma, stream);
-    dma_enable_memory_increment_mode(dma, stream);
-    dma_set_peripheral_size(dma, stream, DMA_SxCR_PSIZE_16BIT);
-    dma_set_memory_size(dma, stream, DMA_SxCR_MSIZE_16BIT);
-    dma_enable_circular_mode(dma, stream);
-    dma_set_priority(dma, stream, DMA_SxCR_PL_MEDIUM);
-    dma_enable_direct_mode(dma, stream);
-    dma_set_fifo_threshold(dma, stream, DMA_SxFCR_FTH_2_4_FULL);
-    dma_set_memory_burst(dma, stream, DMA_SxCR_MBURST_SINGLE);
-    dma_set_peripheral_burst(dma, stream, DMA_SxCR_PBURST_SINGLE);
-
-    dma_enable_stream(dma, stream);
-
-    adc_disable_dma(adcbase);
-
-    adc_set_clk_prescale(ADC_CCR_ADCPRE_BY8);
-    adc_set_multi_mode(ADC_CCR_MULTI_INDEPENDENT);
-
-    adc_enable_scan_mode(adcbase);
-    adc_set_continuous_conversion_mode(adcbase);
-    adc_disable_external_trigger_regular(adcbase);
-    adc_disable_external_trigger_injected(adcbase);
-    adc_set_right_aligned(adcbase);
-
-    adc_set_sample_time_on_all_channels(adcbase, ADC_SMPR_SMP_28CYC);
-    adc_set_resolution(adcbase, ADC_CR1_RES_12BIT);
-
-    /* Assign the channels to be monitored by this ADC */
-    adc_set_regular_sequence(adcbase, CHANNEL_COUNT, (uint8_t *)channel_defs);
-
-    adc_power_on(adcbase);
-    timer_delay_usec(3); // Wait for ADC start up (3 us)
-
-    /* Enable repeated DMA from ADC */
-    adc_set_dma_continue(adcbase);
-    adc_enable_dma(adcbase);
-    adc_enable_temperature_sensor();
-    adc_enable_vbat_sensor();
-#else
     /* STM32F1... */
     uint32_t dma = DMA1;  // STM32F1xx RM Table 78 Summary of DMA1 requests...
     uint32_t channel = DMA_CHANNEL1;
 
-#if 0
     for (p = 0; p < ARRAY_SIZE(channel_gpios); p++) {
         gpio_set_mode(channel_gpios[p].gpio_port, GPIO_MODE_INPUT,
                       GPIO_CNF_INPUT_ANALOG, channel_gpios[p].gpio_pin);
     }
-#endif
 
     rcc_periph_clock_enable(RCC_ADC1);
     rcc_periph_clock_enable(RCC_DMA1);
@@ -186,7 +132,6 @@ adc_init(void)
     adc_power_on(adcbase);
     adc_reset_calibration(adcbase);
     adc_calibrate(adcbase);
-#endif
 
     /* Start the ADC and triggered DMA */
     adc_start_conversion_regular(adcbase);
@@ -266,18 +211,23 @@ adc_show_sensors(void)
      *  2. Report Vbat:
      *          adc_buffer[1] * scale * 2
      */
-    memcpy(adc, (void *)adc_buffer, sizeof (adc));
+    memcpy(adc, (void *)adc_buffer, sizeof (adc_buffer));
     scale = adc_get_scale(adc[0]);
 
     uint calc_temp;
     uint calc_vref;
+    uint calc_v5;
     calc_temp = ((int)(TEMP_V25 * 10000 - adc[1] * scale)) / TEMP_AVGSLOPE +
                 TEMP_BASE;
     calc_vref = adc[0] * 3300 / 4096;
+    calc_v5   = adc[2] * scale * V5_DIVIDER_SCALE;
+
     printf("Vrefint=%04x scale=%-4u ", adc[0], scale);
     print_reading(calc_vref, "V\n");
     printf("  Vtemp=%04x %8u   ", adc[1], adc[1] * scale);
     print_reading(calc_temp, "C\n");
+    printf("     5V=%04x %8u   ", adc[2], adc[2] * scale);
+    print_reading(calc_v5, "V\n");
 }
 
 /*
@@ -287,13 +237,36 @@ adc_show_sensors(void)
 void
 adc_poll(int verbose, int force)
 {
-//  uint16_t        adc[CHANNEL_COUNT];
+    uint            calc_v5;
+    uint            diff;
+    uint            scale;
+    int             percent5;   // 0.1 percent voltage deviation for 5V
+    uint16_t        adc[CHANNEL_COUNT];
     static uint64_t next_check = 0;
 
     if ((timer_tick_has_elapsed(next_check) == false) && (force == false))
         return;
     next_check = timer_tick_plus_msec(1);  // Limit rate to prevent overshoot
 
-//  memcpy(adc, (void *)adc_buffer, sizeof (adc));
+    memcpy(adc, (void *)adc_buffer, sizeof (adc_buffer));
+    scale = adc_get_scale(adc[0]);
+    calc_v5   = adc[2] * scale * V5_DIVIDER_SCALE;
+
+    diff = V5_EXPECTED_MV - calc_v5;
+    percent5 = diff * 1000 / V5_EXPECTED_MV;
+    if ((percent5 > 100) || (percent5 < -100)) {
+        if ((v5_stable == true) && verbose) {
+            printf("Amiga V5 not stable at ");
+            print_reading(calc_v5, "V\n");
+        }
+        v5_stable = false;
+    } else {
+        if ((v5_stable == false) && verbose) {
+            printf("Amiga V5 stable at ");
+            print_reading(calc_v5, "V\n");
+        }
+        v5_stable = true;
+    }
+
 //  scale = adc_get_scale(adc[0]);
 }

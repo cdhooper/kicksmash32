@@ -59,6 +59,7 @@ main(void)
     identify_cpu();
     show_reset_reason();
     config_read();
+    usb_startup();
     check_board_standalone();
 
     rl_initialize();  // Enable command editing and history
@@ -73,7 +74,6 @@ main(void)
     else
         printf("in Amiga\n");
 
-    usb_startup();
     led_power(1);
 
     while (1) {

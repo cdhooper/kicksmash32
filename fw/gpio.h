@@ -27,8 +27,10 @@
 #define SOCKET_OE_PORT      GPIOA
 #define SOCKET_OE_PIN           GPIO0       // OE# Output Enable (Amiga)
 
+#if BOARD_REV <= 3
 #define FLASH_RB2_PORT      GPIOB
 #define FLASH_RB2_PIN           GPIO0       // RB# Ready / Busy
+#endif
 #define FLASH_RP_PORT       GPIOB
 #define FLASH_RP_PIN            GPIO1       // RP# Reset / Program
 #define KBRST_PORT          GPIOB
@@ -49,8 +51,8 @@
 #define FLASH_OE_PIN            GPIO13      // OE# Output Enable (Flash)
 #define FLASH_WE_PORT       GPIOB
 #define FLASH_WE_PIN            GPIO14      // WE# Write Enable
-#define FLASH_RB1_PORT      GPIOB
-#define FLASH_RB1_PIN           GPIO15      // RB# Ready / Busy
+#define FLASH_RB_PORT       GPIOB
+#define FLASH_RB_PIN            GPIO15      // RB# Ready / Busy
 
 #define FLASH_D0_PORT       GPIOD   // PD0-PD15
 #define FLASH_D16_PORT      GPIOE   // PE0-PE15
@@ -88,11 +90,14 @@
 #define GPIO_SETMODE_OUTPUT_AF_ODRAIN_50 0xf  // 50 MHz, Alt func. Open-Drain
 #endif
 
+#define NUM_GPIO_BANKS 6
+
 void gpio_setv(uint32_t GPIOx, uint16_t GPIO_Pins, int value);
 void gpio_setmode(uint32_t GPIOx, uint16_t GPIO_Pins, uint value);
 void gpio_init(void);
-void gpio_show(int whichport, int whichpin);
-void gpio_assign(int whichport, int whichpin, const char *assign);
+void gpio_show(int whichport, int pins);
+void gpio_assign(int whichport, int pins, const char *assign);
+uint gpio_name_match(const char **name, uint16_t pins[NUM_GPIO_BANKS]);
 char *gpio_to_str(uint32_t port, uint16_t pin);
 
 #endif /* _GPIO_H */

@@ -26,12 +26,6 @@
  *   TIM1 - bits 0-15 of tick timer, OVF trigger to TIM4
  *   TIM5 CH1 - ROM OE (PA0) trigger to DMA2 CH5 capture of address lo
  *   TIM2 CH1 - ROM OE (PA0) trigger to DMA1 CH5 capture of address hi
- *   TIM3 triggered slave of TIM2
- *
- *   TIM5 OVF? trigger to TIM7
- *      TIM7 trigger to DMA2 CH4
- *   TIM5 OVF? trigger to TIM4
- *      TIM4 - UP trigger to DMA2 CH2
  *
  * Potential uses
  *   TIM5 - CH1 ROM OE (PA0) trigger to DMA2 CH5 send bits 0-15
@@ -58,9 +52,6 @@
  *  TIM3 | TIM1 | TIM2 | TIM5 | TIM4
  *  TIM4 | TIM1 | TIM2 | TIM3 | TIM8
  *  TIM5 | TIM2 | TIM3 | TIM4 | TIM8
- *  TIM6                              (no ITR)
- *  TIM7                              (no ITR)
- *  TIM8 | TIM1 | TIM2 | TIM4 | TIM5  (not present in F105 and F107)
  *
  *  Timer Triggers in use:
  *      TIM1 -> TIM4 ITR0
@@ -75,7 +66,7 @@
  * STM32F1 does not have a 32-bit counter on any timer, but two timers can
  * be chained to form a 32-bit counter. Because of this capability, we can
  * still implement a 64-bit clock tick value, but the code is a bit more
- * complicated. For that reason, the the low level routines must be slightly
+ * complicated. For that reason, the low level routines must be slightly
  * different.
  */
 
@@ -114,6 +105,11 @@ tim4_isr(void)
 uint64_t
 timer_tick_get(void)
 {
+    /*
+     * TIM1       is high speed tick 72 MHz RCC_PLK2
+     * TIM4       is cascaded tick, 72 MHz / 65536 = ~1098.6 Hz
+     * timer_high is cascaded globak, 72 MHz / 2^32 = ~0.0168 Hz
+     */
     uint32_t high   = timer_high;
     uint32_t high16 = TIM_CNT(TIM4);
     uint32_t low16  = TIM_CNT(TIM1);

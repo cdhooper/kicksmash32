@@ -1,5 +1,7 @@
 # Kicksmash Rev 1
 # Kicksmash Rev 2 replaces some address pins which have weak drive
+# Kicksmash Rev 3 adds 74FCT2244 buffers for data lines
+# Kicksmash Rev 4 fixes OEWE circuit
 
 BOARD_REV ?= 4
 
@@ -82,6 +84,7 @@ TGT_CFLAGS	+= -Wredundant-decls -Wmissing-prototypes -Wstrict-prototypes
 TGT_CFLAGS	+= -fno-common -ffunction-sections -fdata-sections
 TGT_CFLAGS	+= -ffreestanding
 TGT_CFLAGS	+= -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
+TGT_CFLAGS	+= -Wa,-a > $(@:.o=.lst)
 
 # C++ flags
 TGT_CXXFLAGS	+= $(OPT) $(CXXSTD) $(DEBUG)
@@ -245,7 +248,6 @@ just-protect: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_protect.bin 0x1ffff800
 just-clobber: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_clobber.bin 0x1ffff800
-just-clobber2:
 
 dfu: all just-dfu
 flash: all just-flash

@@ -19,6 +19,7 @@
 #include "timer.h"
 #include "utils.h"
 #include "config.h"
+#include "usb.h"
 
 uint8_t  board_is_standalone = 0;
 uint8_t  kbrst_in_amiga = 0;
@@ -43,14 +44,13 @@ typedef struct {
 static const pin_config_t pin_config[] =
 {
     { "KBRST",      KBRST_PORT,      KBRST_PIN,      FS_PD, PIN_INPUT },
-    { "FLASH_RP",   FLASH_RP_PORT,   FLASH_RP_PIN,   FS_PU, PIN_INPUT },
-    { "FLASH_RB1",  FLASH_RB1_PORT,  FLASH_RB1_PIN,  FS_PU, PIN_INPUT },
-    { "FLASH_RB2",  FLASH_RB2_PORT,  FLASH_RB2_PIN,  FS_PU, PIN_INPUT },
+    { "FLASH_RP",   FLASH_RP_PORT,   FLASH_RP_PIN,   FS_PU, PIN_EXT_PULLUP },
+    { "FLASH_RB",   FLASH_RB_PORT,   FLASH_RB_PIN,   FS_PU, PIN_INPUT },
     { "FLASH_WE",   FLASH_WE_PORT,   FLASH_WE_PIN,   FS_PU, PIN_EXT_PULLUP },
     { "FLASH_OE",   FLASH_OE_PORT,   FLASH_OE_PIN,   FS_PU, PIN_INPUT },
     { "FLASH_A18",  FLASH_A18_PORT,  FLASH_A18_PIN,  FS_PD, PIN_INPUT },
     { "FLASH_A19",  FLASH_A19_PORT,  FLASH_A19_PIN,  FS_PD, PIN_INPUT },
-    { "SOCKET_D31", SOCKET_D31_PORT, SOCKET_D31_PIN, FS_PU, PIN_INPUT },
+    { "SOCKET_D31", SOCKET_D31_PORT, SOCKET_D31_PIN, FS_PU, PIN_EXT_PULLUP },
     { "SOCKET_OE",  SOCKET_OE_PORT,  SOCKET_OE_PIN,  FS_PU, PIN_INPUT },
     { "FLASH_OEWE", FLASH_OEWE_PORT, FLASH_OEWE_PIN, FS_PD, PIN_EXT_PULLDOWN },
     { "USB_CC1",    USB_CC1_PORT,    USB_CC1_PIN,    FS_IN, PIN_EXT_PULLDOWN },
@@ -174,6 +174,7 @@ check_board_standalone(void)
                  GPIO_SETMODE_INPUT_PULLUPDOWN);
     conn = 0;
 
+    usb_poll();
     for (pass = 0; pass <= 1; pass++) {
         gpio_setv(SOCKET_D31_PORT, SOCKET_D31_PIN, pass);
         saw = 0;
@@ -245,6 +246,7 @@ check_board_standalone(void)
     if (!kbrst_in_amiga)
         putchar('!');
     printf("KBRST");
+    usb_poll();
 
     /*
      * Detect which flash parts are installed (default bus mode)
@@ -380,7 +382,7 @@ in_amiga:
         for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {
             curname = pin_config_get(cur, &curport, &curpin, buf0);
             gpio_setmode(curport, curpin, GPIO_SETMODE_INPUT_PULLUPDOWN);
-#if 0
+#if 1
             if ((pass == 0) &&
                 (((curport == FLASH_OE_PORT) && (curpin == FLASH_OE_PIN)) ||
                  ((curport == SOCKET_OE_PORT) && (curpin == SOCKET_OE_PIN))))
@@ -388,6 +390,8 @@ in_amiga:
 #endif
             gpio_setv(curport, curpin, !pass);
         }
+
+        usb_poll();
 
         /* Verify pins made it to the expected state */
         for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {
@@ -415,6 +419,13 @@ in_amiga:
                     continue;
                 }
             }
+            if ((pass == 1) &&
+                (cur >= ARRAY_SIZE(pin_config)) &&
+                (cur < ARRAY_SIZE(pin_config) + 32)) {
+                /* Don't bother checking data pins when they are driven */
+                continue;
+            }
+
             if (state != !pass) {
                 if (fail++ == 0)
                     printf("FAIL pin short tests\n");
@@ -434,6 +445,8 @@ in_amiga:
                  */
                 timer_delay_usec(1);
             }
+
+            usb_poll();
 
             /* Set one pin the opposite of the others */
             gpio_setv(curport, curpin, pass);
@@ -459,12 +472,11 @@ in_amiga:
                     if ((pass == 0) &&
                         (curport == FLASH_RP_PORT) &&
                         (curpin == FLASH_RP_PIN) &&
-                        (checkport == FLASH_RB1_PORT) &&
-                        ((checkpin == FLASH_RB1_PIN) ||
-                         (checkpin == FLASH_RB2_PIN))) {
+                        (checkport == FLASH_RB_PORT) &&
+                        (checkpin == FLASH_RB_PIN)) {
                         /*
                          * Okay to ignore
-                         * FLASH_RP=0 causes FLASH_RB1=0 and FLASH_RB2=0
+                         * FLASH_RP=0 causes FLASH_RB=0
                          */
                         continue;
                     }
@@ -538,7 +550,10 @@ in_amiga:
                         (((curport = FLASH_OE_PORT) &&
                           (curpin == FLASH_OE_PIN)) ||
                          ((curport = SOCKET_OE_PORT) &&
-                          (curpin == SOCKET_OE_PIN))) &&
+                          (curpin == SOCKET_OE_PIN)) ||
+                         (curport = SOCKET_A0_PORT) ||
+                         ((curport = SOCKET_A16_PORT) &&
+                          (curpin >= 1) && (curpin <= 7))) &&
                         ((checkport == FLASH_D0_PORT) ||
                          (checkport == FLASH_D16_PORT) ||
                          ((checkport == SOCKET_D31_PORT) &&
@@ -549,13 +564,13 @@ in_amiga:
                          */
                         continue;
                     }
-                    if ((curport == FLASH_D16_PORT) &&
-                        (curpin == FLASH_D31_PIN) &&
-                        (checkport == SOCKET_D31_PORT) &&
-                        (checkpin == SOCKET_D31_PIN)) {
-                        /* FLASH_D31 can drive SOCKET_D31 when OE=0 */
+                    if ((pass == 1) &&
+                        ((checkport == FLASH_D0_PORT) ||
+                         (checkport == FLASH_D16_PORT)))
+                        /* FLASH_D* pins can be driven */ {
                         continue;
                     }
+
                     if (fail++ == 0)
                         printf("FAIL pin short tests\n");
                     printf("  %-4s %s=%u caused ",
@@ -572,6 +587,8 @@ in_amiga:
             gpio_setmode(curport, curpin, GPIO_SETMODE_INPUT_PULLUPDOWN);
         }
     }
+
+    usb_poll();
 
     /* Restore all pins to input pull-up/pull-down and final state */
     for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {

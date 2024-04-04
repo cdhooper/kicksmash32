@@ -14,30 +14,34 @@
 
 /* Command codes sent to Kicksmash */
 #define KS_CMD_NULL          0x00  // Do nothing
-#define KS_CMD_NOP           0x01  // Do nothing
-#define KS_CMD_ID            0x02  // Reply with software ID
+#define KS_CMD_NOP           0x01  // Do nothing but reply
+#define KS_CMD_ID            0x02  // Reply with KS ID and configuration
 #define KS_CMD_UPTIME        0x03  // Report KS uptime in microseconds
 #define KS_CMD_TESTPATT      0x04  // Reply with bit test pattern
 #define KS_CMD_LOOPBACK      0x05  // Reply with sent message
 #define KS_CMD_FLASH_READ    0x06  // Generate flash read mode sequence
 #define KS_CMD_FLASH_CMD     0x07  // Issue low level command to EEPROM
 #define KS_CMD_FLASH_ID      0x08  // Generate flash ID sequence
-#define KS_CMD_FLASH_WRITE   0x09  // Generate flash write sequence
-#define KS_CMD_FLASH_ERASE   0x0a  // Generate flash erase sequence
+#define KS_CMD_FLASH_ERASE   0x09  // Generate flash erase sequence
+#define KS_CMD_FLASH_WRITE   0x0a  // Generate flash write sequence
+#define KS_CMD_FLASH_MWRITE  0x0a  // Flash write multiple (not implemented)
 #define KS_CMD_BANK_INFO     0x10  // Get ROM bank information structure
 #define KS_CMD_BANK_SET      0x11  // Set bank (options in high bits)
 #define KS_CMD_BANK_MERGE    0x12  // Merge or unmerge banks
 #define KS_CMD_BANK_COMMENT  0x13  // Set a bank comment
 #define KS_CMD_BANK_LRESET   0x14  // Set bank longreset sequence
-#define KS_CMD_REMOTE_MSG    0x20  // Send or receive a remote message
+#define KS_CMD_MSG_INFO      0x20  // Query message queue sizes
+#define KS_CMD_MSG_SEND      0x21  // Send a remote message
+#define KS_CMD_MSG_RECEIVE   0x22  // Receive a remote message
 
 /* Status codes returned by Kicksmash */
 #define KS_STATUS_OK       0x0000  // Success
-#define KS_STATUS_FAIL     0x0081  // Generic failure
-#define KS_STATUS_CRC      0x0082  // CRC failure
-#define KS_STATUS_UNKCMD   0x0083  // Unknown command
-#define KS_STATUS_BADARG   0x0084  // Bad command argument
-#define KS_STATUS_BADLEN   0x0085  // Bad message length
+#define KS_STATUS_FAIL     0x0100  // Generic failure
+#define KS_STATUS_CRC      0x0200  // CRC failure
+#define KS_STATUS_UNKCMD   0x0300  // Unknown command
+#define KS_STATUS_BADARG   0x0400  // Bad command argument
+#define KS_STATUS_BADLEN   0x0500  // Bad message length
+#define KS_STATUS_NODATA   0x0600  // No data available
 
 /* Command-specific options (upper byte of command) */
 #define KS_BANK_SETCURRENT 0x0100  // Set current ROM bank (immediate change)
@@ -49,6 +53,9 @@
 
 #define KS_BANK_UNMERGE    0x0100  // Unmerge bank range (KS_BANK_MERGE)
 
+#define KS_REMOTE_ALTBUF   0x0100  // Perform operations on alternate buffer
+
+#define KS_HDR_AND_CRC_LEN (8 + 2 + 2 + 4)  // Magic+Len+Cmd+CRC = 16 bytes
 
 /*
  * All Kicksmash commands are encapsulated within a standard message body
@@ -115,8 +122,25 @@
  *   KS_CMD_FLASH_CMD
  *        A custom flash command sequence will be issued to the flash. The
  *        flash command sequence must be specified as the command option.
+ *        A single 32-bit or 16-bit value may be written at a time. This
+ *        value is presented as data to KS_CMD_FLASH_CMD. The reply data
+ *        are the unlock addresses which must be generated. The Amiga program
+ *        must generate reads of those specified addresses followed by a
+ *        read of the data address to write.
  *       *This command requires participation by code running under AmigaOS
  *        to generate the correct bus addresses to sequence the flash command.
+ *   KS_CMD_REMOTE_MSG
+ *        Any data sent, including Header and CRC, is sent to the USB host.
+ *        If there is data pending from the USB host, it will be returned to
+ *        the Amiga in the buffer, provided there is sufficient space available.
+ *   KS_CMD_REMOTE_INFO
+ *        A structure is returned with message buffer space in use and
+ *        space available for both the Amiga -> USB Host and
+ *        USB Host -> Amiga buffers.
+ *              uint16_t buf1_inuse;
+ *              uint16_t buf1_avail;
+ *              uint16_t buf2_inuse;
+ *              uint16_t buf2_avail;
  */
 
 #define ROM_BANKS 8
@@ -139,6 +163,14 @@ typedef struct {
     uint8_t  si_ks_time[4];              // Kicksmash build time (hh-mm-ss-00)
     uint32_t si_features;                // Available features
     uint8_t  si_unused[16];              // Unused space
+    // XXX: Add name, 16-bit or 32-bit mode
 } smash_id_t;
+
+typedef struct {
+    uint16_t smi_buf1_inuse;             // Amiga -> USB buffer bytes in use
+    uint16_t smi_buf1_avail;             // Amiga -> USB buffer bytes free
+    uint16_t smi_buf2_inuse;             // USB -> Amiga buffer bytes in use
+    uint16_t smi_buf2_avail;             // USB -> Amiga buffer bytes free
+} smash_msg_info_t;
 
 #endif /* _SMASH_H */
