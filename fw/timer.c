@@ -196,7 +196,7 @@ void
 timer_delay_ticks(uint32_t ticks)
 {
     uint32_t start = TIM_CNT(TIM1);
-    while (TIM_CNT(TIM1) - start < ticks) {
+    while ((uint16_t) (TIM_CNT(TIM1) - start) < ticks) {
         /* Empty */
     }
 }
@@ -276,7 +276,7 @@ void
 timer_delay_ticks(uint32_t ticks)
 {
     uint32_t start = TIM_CNT(TIM2);
-    while (TIM_CNT(TIM2) - start < ticks) {
+    while ((uint16_t) (TIM_CNT(TIM2) - start) < ticks) {
         /* Empty */
     }
 }

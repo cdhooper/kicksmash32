@@ -160,14 +160,14 @@ config_poll(void)
 }
 
 int
-config_set_bank_comment(uint bank, const char *comment)
+config_set_bank_name(uint bank, const char *name)
 {
-    uint len = strlen(comment);
-    if (len >= ARRAY_SIZE(config.bi.bi_desc[bank])) {
-        printf("Bank comment \"%s\" is too long.\n", comment);
+    uint len = strlen(name);
+    if (len >= ARRAY_SIZE(config.bi.bi_name[bank])) {
+        printf("Bank name \"%s\" is too long.\n", name);
         return (1);
     }
-    strcpy(config.bi.bi_desc[bank], comment);
+    strcpy(config.bi.bi_name[bank], name);
     config_updated();
     return (0);
 }
@@ -268,7 +268,7 @@ config_bank_show(void)
 {
     uint bank;
 
-    printf("Bank  Comment         Merge LongReset  PowerOn  Current  "
+    printf("Bank  Name            Merge LongReset  PowerOn  Current  "
            "NextReset\n");
 
     for (bank = 0; bank < ROM_BANKS; bank++) {
@@ -276,7 +276,7 @@ config_bank_show(void)
         uint pos;
         uint banks_add = config.bi.bi_merge[bank] >> 4;
         uint bank_sub  = config.bi.bi_merge[bank] & 0xf;
-        printf("%-5u %-15s ", bank, config.bi.bi_desc[bank]);
+        printf("%-5u %-15s ", bank, config.bi.bi_name[bank]);
 
         if (banks_add < 1)
             aspaces += 4;

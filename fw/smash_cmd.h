@@ -18,7 +18,7 @@
 #define KS_CMD_ID            0x02  // Reply with KS ID and configuration
 #define KS_CMD_UPTIME        0x03  // Report KS uptime in microseconds
 #define KS_CMD_TESTPATT      0x04  // Reply with bit test pattern
-#define KS_CMD_LOOPBACK      0x05  // Reply with sent message
+#define KS_CMD_LOOPBACK      0x05  // Reply with (exact) sent message
 #define KS_CMD_FLASH_READ    0x06  // Generate flash read mode sequence
 #define KS_CMD_FLASH_CMD     0x07  // Issue low level command to EEPROM
 #define KS_CMD_FLASH_ID      0x08  // Generate flash ID sequence
@@ -28,7 +28,7 @@
 #define KS_CMD_BANK_INFO     0x10  // Get ROM bank information structure
 #define KS_CMD_BANK_SET      0x11  // Set bank (options in high bits)
 #define KS_CMD_BANK_MERGE    0x12  // Merge or unmerge banks
-#define KS_CMD_BANK_COMMENT  0x13  // Set a bank comment
+#define KS_CMD_BANK_NAME     0x13  // Set a bank name
 #define KS_CMD_BANK_LRESET   0x14  // Set bank longreset sequence
 #define KS_CMD_MSG_INFO      0x20  // Query message queue sizes
 #define KS_CMD_MSG_SEND      0x21  // Send a remote message
@@ -151,8 +151,8 @@ typedef struct {
     uint8_t  bi_bank_poweron;             // bank at cold poweron
     uint8_t  bi_longreset_seq[ROM_BANKS]; // 0xff = end of list
     uint8_t  bi_merge[ROM_BANKS];         // bank is merged with next
-    char     bi_desc[ROM_BANKS][16];      // bank description string
-    uint8_t  bi_unused[12];                // Unused space
+    char     bi_name[ROM_BANKS][16];      // bank name (description) string
+    uint8_t  bi_unused[12];               // Unused space
 } bank_info_t;
 
 typedef struct {

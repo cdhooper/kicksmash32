@@ -1331,7 +1331,7 @@ ee_set_bank(uint8_t bank)
     config.bi.bi_bank_current = bank;
     config.bi.bi_bank_nextreset = 0xff;
     if (bank != oldbank)
-        printf("Bank select %u %s\n", bank, config.bi.bi_desc[bank]);
+        printf("Bank select %u %s\n", bank, config.bi.bi_name[bank]);
 }
 
 void
@@ -1339,7 +1339,7 @@ ee_update_bank_at_reset(void)
 {
     if ((config.bi.bi_bank_nextreset != 0xff) &&
         (config.bi.bi_bank_nextreset != config.bi.bi_bank_current)) {
-printf("nextreset bank %u\n", config.bi.bi_bank_nextreset);
+        printf("nextreset bank %u\n", config.bi.bi_bank_nextreset);
         ee_set_bank(config.bi.bi_bank_nextreset);
     } else {
         ee_set_bank(config.bi.bi_bank_current);
@@ -1365,7 +1365,7 @@ ee_update_bank_at_longreset(void)
                 (config.bi.bi_longreset_seq[nextbank] >= ROM_BANKS)) {
                 nextbank = 0;
             }
-printf("longreset bank %u\n", config.bi.bi_longreset_seq[nextbank]);
+            printf("longreset bank %u\n", config.bi.bi_longreset_seq[nextbank]);
             ee_set_bank(config.bi.bi_longreset_seq[nextbank]);
             break;
         }

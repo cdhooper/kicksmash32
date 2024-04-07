@@ -32,7 +32,7 @@ void config_updated(void);
 void config_poll(void);
 void config_read(void);
 
-int  config_set_bank_comment(uint bank, const char *comment);
+int  config_set_bank_name(uint bank, const char *comment);
 int  config_set_bank_longreset(uint8_t *banks);
 int  config_set_bank_merge(uint bank_start, uint bank_end, uint flag_unmerge);
 int  config_set_bank(uint bank, uint set_cur, uint set_poweron, uint set_reset);
@@ -42,5 +42,3 @@ void config_name(const char *name);
 #define STM32FLASH_FLAG_AUTOERASE 1
 
 #endif /* _CONFIG_H */
-
-

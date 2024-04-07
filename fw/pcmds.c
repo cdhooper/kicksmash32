@@ -282,13 +282,13 @@ cmd_prom_bank(int argc, char * const *argv)
     uint     flag_set_current_bank = 0;
     uint     flag_set_reset_bank   = 0;
     uint     flag_set_poweron_bank = 0;
-    uint     flag_set_bank_comment = 0;
+    uint     flag_set_bank_name    = 0;
     uint     bank;
     uint     rc;
 
     if (argc < 2) {
         printf("prom bank requires an argument\n");
-        printf("One of: ?, show, comment, current, longreset, nextreset, "
+        printf("One of: ?, show, name, current, longreset, nextreset, "
                "poweron, merge, unmerge\n");
         return (1);
     }
@@ -296,11 +296,11 @@ cmd_prom_bank(int argc, char * const *argv)
         printf("  show                       Display all ROM bank information\n"
                "  merge <start> <end>        Merge banks for larger ROMs\n"
                "  unmerge <start> <end>      Unmerge banks\n"
+               "  name <bank> <text>         Set bank name (description)\n"
                "  longreset <bank>[,<bank>]  Banks to sequence at long reset\n"
                "  poweron <bank>             Default bank at poweron\n"
                "  current <bank>             Force new bank immediately\n"
-               "  nextreset <bank>           Force new bank at next reset\n"
-               "  comment <bank> <text>      Add bank description comment\n");
+               "  nextreset <bank>           Force new bank at next reset\n");
     } else if (strcmp(argv[1], "show") == 0) {
         config_bank_show();
         return (0);
@@ -317,16 +317,16 @@ cmd_prom_bank(int argc, char * const *argv)
         flag_bank_merge++;
     } else if (strcmp(argv[1], "unmerge") == 0) {
         flag_bank_unmerge++;
-    } else if (strncmp(argv[1], "comment", 3) == 0) {
-        flag_set_bank_comment++;
+    } else if (strncmp(argv[1], "name", 3) == 0) {
+        flag_set_bank_name++;
     } else {
         printf("Unknown argument prom bank '%s'\n", argv[1]);
         return (1);
     }
-    if (flag_set_bank_comment) {
+    if (flag_set_bank_name) {
         if (argc != 4) {
             printf("prom bank %s requires a <bank> number and "
-                   "\"comment text\"\n", argv[1]);
+                   "\"name text\"\n", argv[1]);
             return (1);
         }
         bank = atoi(argv[2]);
@@ -335,7 +335,7 @@ cmd_prom_bank(int argc, char * const *argv)
                    bank, ROM_BANKS - 1);
             return (1);
         }
-        return (config_set_bank_comment(bank, argv[3]));
+        return (config_set_bank_name(bank, argv[3]));
     }
     if (flag_bank_longreset) {
         uint8_t     banks[ROM_BANKS];

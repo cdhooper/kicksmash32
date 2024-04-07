@@ -45,8 +45,26 @@
 #define CAPTURE_DATA_LO  2
 #define CAPTURE_DATA_HI  3
 
-/* Inline speed-critical code */
-#define dma_get_number_of_data(x, y) DMA_CNDTR(x, y)
+/* Inline speed-critical functions */
+#define dma_get_number_of_data(dma, channel)        DMA_CNDTR(dma, channel)
+#define dma_enable_channel(dma, channel) \
+                DMA_CCR(dma, channel) |= DMA_CCR_EN
+#define dma_disable_channel(dma, channel) \
+                DMA_CCR(dma, channel) &= ~DMA_CCR_EN
+#define dma_set_peripheral_address(dma, channel, address) \
+                DMA_CPAR(dma, channel) = (uint32_t) address
+#define dma_set_memory_address(dma, channel, address) \
+                DMA_CMAR(dma, channel) = (uint32_t) address
+#define dma_set_read_from_memory(dma, channel) \
+                DMA_CCR(dma, channel) |= DMA_CCR_DIR
+#define dma_set_number_of_data(dma, channel, number) \
+                DMA_CNDTR(dma, channel) = number
+#define dma_set_peripheral_size(dma, channel, size) \
+                DMA_CCR(dma, channel) = (DMA_CCR(dma, channel) & \
+                                         ~DMA_CCR_PSIZE_MASK) | size
+#define dma_set_memory_size(dma, channel, size) \
+                DMA_CCR(dma, channel) = (DMA_CCR(dma, channel) & \
+                                         ~DMA_CCR_MSIZE_MASK) | size
 
 static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
 // static const uint16_t reset_magic_32[] = { 0x0000, 0x0001, 0x0034, 0x0035 };
@@ -531,7 +549,7 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             uint16_t *txh = (uint16_t *)buffer_txd_hi;
             uint32_t val;
 
-            /* 32-bit copy first chunk */
+            /* Copy first chunk */
             rbp = (uint32_t *) rbuf1;
             rlen1 = (rlen1 + 3) / 4;
             for (count = rlen1; count != 0; count--) {
@@ -545,26 +563,25 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
 
                 rlen2 = (rlen2 + 3) / 4;
 
-                if ((rlen1_orig & 3) != 0) {
-                    /* First chunk was not even multiple of 4 bytes */
-
-                    txl--;  // Fixup because first chunk overran
-
-                    for (count = rlen2; count != 0; count--) {
-                        val = *(rbp2++);
-                        *(txl++) = (uint16_t) val;
-                        *(txh++) = val >> 16;
-                    }
-                } else {
+                if ((rlen1_orig & 3) == 0) {
                     /* First chunk was even multiple of 4 bytes */
                     for (count = rlen2; count != 0; count--) {
                         val = *(rbp2++);
                         *(txh++) = (uint16_t) val;
                         *(txl++) = val >> 16;
                     }
+                } else {
+                    /* First chunk was not even multiple of 4 bytes */
+                    txl--;   // Fixup first chunk overrun
+
+                    for (count = rlen2; count != 0; count--) {
+                        val = *(rbp2++);
+                        *(txl++) = (uint16_t) val;
+                        *(txh++) = val >> 16;
+                    }
+                    if ((rlen2_orig & 3) != 0)
+                        txh--;          // Odd first + odd second = even
                 }
-                if ((rlen2_orig & 3) != 0)
-                    txh--;
             }
             pos = txh - buffer_txd_hi;
         } else {
@@ -642,7 +659,7 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             if (rlen2 != 0) {
                 memcpy(((uint8_t *)buffer_txd_lo) + rlen1, rbuf2, rlen2);
             }
-            pos = rlen / 2;
+            pos = (rlen + 1) / 2;
         } else {
             uint32_t crc;
             memcpy((void *)buffer_txd_lo, sm_magic, sizeof (sm_magic));
@@ -718,7 +735,8 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
         }
         dma_last = dma_left;
     }
-    timer_delay_ticks(ticks_per_200_nsec);
+//  timer_delay_ticks(ticks_per_200_nsec);
+
 #ifdef CAPTURE_GPIOS
 }
 #endif
@@ -792,19 +810,14 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint8_t *buf2;
             uint len1;
             uint len2;
-#ifdef NEW_MSG_INTERFACE
             uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
             cons_s = rx_consumer - (raw_len - 2 + 1) / 2;
-#else
-            uint raw_len = cmd_len + 8 + 2 + 2 + 4;  // Magic + len + cmd + CRC
-            cons_s = rx_consumer - (raw_len - 1) / 2;
-#endif
             if ((int) cons_s >= 0) {
                 /* Send data doesn't wrap */
                 len1 = raw_len;
                 buf1 = (uint8_t *) &buffer_rxa_lo[cons_s];
                 ks_reply(KS_REPLY_RAW, 0, len1, buf1, 0, NULL);
-// printf("e=%02x%02x\n", buf1[len1 - 2], buf1[len1 - 1]);
+// printf("e=%02x%02x%02x%02x\n", buf1[len1 - 4], buf1[len1 - 3], buf1[len1 - 2], buf1[len1 - 1]);
             } else {
                 /* Send data from end of buffer + beginning of buffer */
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
@@ -815,7 +828,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 len2 = raw_len - len1;
                 buf2 = (uint8_t *) buffer_rxa_lo;
                 ks_reply(KS_REPLY_RAW, 0, len1, buf1, len2, buf2);
-//   printf("c=%u l=%u+%u e1=%02x%02x e=%02x%02x\n", cons_s, len1, len2, buf1[len1 - 2], buf1[len1 - 1], buf2[len2 - 2], buf2[len2 - 1]);
+// printf("c=%u l=%u+%u e1=%02x%02x e=%02x%02x%02x%02x\n", cons_s, len1, len2, buf1[len1 - 2], buf1[len1 - 1], buf2[len2 - 4], buf2[len2 - 3], buf2[len2 - 2], buf2[len2 - 1]);
             }
             break;
         }
@@ -1022,8 +1035,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             config_updated();
             break;
         }
-        case KS_CMD_BANK_COMMENT: {
-            /* Add comment (description) to the specified bank */
+        case KS_CMD_BANK_NAME: {
+            /* Set bank name (description) for the specified bank */
             uint16_t bank;
             uint     slen;
             uint     pos = 0;
@@ -1037,7 +1050,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
                 break;
             }
-            if (slen > sizeof (config.bi.bi_desc[0])) {
+            if (slen > sizeof (config.bi.bi_name[0])) {
                 ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                 break;
             }
@@ -1046,8 +1059,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 if (++cons_s >= ARRAY_SIZE(buffer_rxa_lo))
                     cons_s = 0;
                 ptr = (uint8_t *) &buffer_rxa_lo[cons_s];
-                config.bi.bi_desc[bank][pos++] = ptr[1];
-                config.bi.bi_desc[bank][pos++] = ptr[0];
+                config.bi.bi_name[bank][pos++] = ptr[1];
+                config.bi.bi_name[bank][pos++] = ptr[0];
 
                 if (slen == 1)
                     slen = 0;

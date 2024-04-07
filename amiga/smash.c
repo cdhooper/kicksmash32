@@ -132,11 +132,12 @@ struct Device   *TimerBase;
 #define CIAA_TBHI        ADDR8(0x00bfe701)
 #define CIAA_PRA_OVERLAY BIT(0)
 #define CIAA_PRA_LED     BIT(1)
-#define CIA_USEC(x)      (x##U * 715909 / 1000000)
+#define CIA_USEC(x)      (x * 715909 / 1000000)
+#define CIA_USEC_LONG(x) (x * 7159 / 10000)
 
 #define VALUE_UNASSIGNED 0xffffffff
 
-#define TEST_LOOPBACK_MAX 16
+#define TEST_LOOPBACK_MAX 64
 #define MEM_LOOPS         1000000
 #define ROM_WINDOW_SIZE   (512 << 10)  // 512 KB
 #define MAX_CHUNK         (16 << 10)   // 16 KB
@@ -201,7 +202,7 @@ BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
 uint irq_disabled = 0;
 uint flag_debug = 0;
 uint flag_quiet = 0;
-uint32_t *test_loopback_buf = NULL;
+uint8_t *test_loopback_buf = NULL;
 static uint cpu_type = 0;
 
 /*
@@ -616,6 +617,7 @@ cia_spin(uint ticks)
         ticks -= diff;
         start = now;
         __asm__ __volatile__("nop");
+        __asm__ __volatile__("nop");
     }
 }
 
@@ -705,9 +707,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     uint16_t *argbuf = arg;
     uint16_t  val;
     uint32_t  val32 = 0;
-#ifdef HANDLE_ODD_BYTES
     uint      replyround;
-#endif
 
     for (pos = 0; pos < ARRAY_SIZE(sm_magic); pos++)
         (void) *ADDR32(ROM_BASE + (sm_magic[pos] << smash_cmd_shift));
@@ -734,13 +734,13 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      * Delay to prevent reads before Kicksmash has set up DMA hardware
      * with the data to send. This is necessary so that the two DMA
      * engines on 32-bit Amigas are started in a synchronized manner.
-     * Might need more spin iterations on a faster CPU, or maybe
-     * a real timer delay here.
+     * Might need more delay on a faster CPU.
      *
-     * A3000 68030-25:  ? spins minimum
-     * A3000 A3660 50M: 4 spins minimum
+     * A3000 68030-25:  10 spins minimum
+     * A3000 A3660 50M: 30 spins minimum
      */
-    cia_spin(CIA_USEC(20));
+    cia_spin((arglen >> 3) + 30);
+//  cia_spin(100);  // XXX Debug delay for brief KS output
 
     /*
      * Find reply magic, length, and status.
@@ -752,7 +752,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      * Example 1: 0x1017   0x0204   0x0117   0x0119   len      status
      * Example 2: ?        0x0119   0x0117   0x0204   0x1017   len
      */
-#define WAIT_FOR_MAGIC_LOOPS 32
+#define WAIT_FOR_MAGIC_LOOPS 128
     for (word = 0; word < WAIT_FOR_MAGIC_LOOPS; word++) {
         // XXX: This code might need to change for 16-bit Amigas
         if (word & 1) {
@@ -769,7 +769,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         if (magic < ARRAY_SIZE(sm_magic)) {
             if (val != sm_magic[magic]) {
                 magic = 0;
-                cia_spin(CIA_USEC(3));
+                cia_spin(2);
                 continue;
             }
         } else if (magic < ARRAY_SIZE(sm_magic) + 1) {
@@ -785,6 +785,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     }
 
     if (word >= WAIT_FOR_MAGIC_LOOPS) {
+        /* Did not see reply magic */
         replystatus = MSG_STATUS_NO_REPLY;
         if (replyalen != NULL) {
             *replyalen = word * 2;
@@ -794,52 +795,44 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         /* Ensure Kicksmash firmware has returned ROM to normal state */
         for (pos = 0; pos < 1000; pos++)
             (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        cia_spin(CIA_USEC(250000));
+        cia_spin(CIA_USEC_LONG(100000));        // 100 msec
         goto scc_cleanup;
     }
 
     if (replyalen != NULL)
         *replyalen = replylen;
 
-#ifdef HANDLE_ODD_BYTES
     replyround = (replylen + 1) & ~1;  // Round up reply length to word
-#else
-    replylen = (replylen + 1) & ~1;  // Round up reply length to word
-#endif
 
-#ifdef HANDLE_ODD_BYTES
     if (replyround > replymax) {
-#else
-    if (replylen > replymax) {
-#endif
-        if (replystatus == 0)
-            replystatus = MSG_STATUS_BAD_LENGTH;
+        replystatus = MSG_STATUS_BAD_LENGTH;
         if (replyalen != NULL) {
-            *replyalen = word * 2;
+            *replyalen = replylen;
             if (*replyalen > replymax)
                 *replyalen = replymax;
         }
         goto scc_cleanup;
     }
 
-#ifndef HANDLE_ODD_BYTES
-    replylen /= 2;  // Round up to 16-bit word count
-#endif
-
-    /* Response is valid so far. Read data */
-#ifdef HANDLE_ODD_BYTES
-    for (pos = 0; pos < replylen; pos += 2, word++) {
-#else
-    for (pos = 0; pos < replylen; pos++, word++) {
-#endif
-        if (word & 1) {
-            val = (uint16_t) val32;
-        } else {
-            val32 = *ADDR32(ROM_BASE);
-            val = val32 >> 16;
-        }
-        if (replybuf != NULL)
+    /* Response is valid so far; read data */
+    if (replybuf == NULL) {
+        pos = 0;
+    } else {
+        uint replymin = (replymax < replylen) ? replymax : replylen;
+        for (pos = 0; pos < replymin; pos += 2, word++) {
+            if (word & 1) {
+                val = (uint16_t) val32;
+            } else {
+                val32 = *ADDR32(ROM_BASE);
+                val = val32 >> 16;
+            }
             *(replybuf++) = val;
+        }
+    }
+    if (pos < replylen) {
+        /* Discard data that doesn't fit */
+        for (; pos < replylen; pos += 4)
+            val32 = *ADDR32(ROM_BASE);
     }
 
     /* Read CRC */
@@ -850,21 +843,26 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     }
 
 scc_cleanup:
+#if 0
+    /* Debug cleanup */
+    for (pos = 0; pos < 4; pos++)
+        *ADDR32(0x7770010 + pos * 4) = *ADDR32(ROM_BASE);
+#endif
+
     if ((replystatus & 0xffffff00) != 0) {
         /* Ensure Kicksmash firmware has returned ROM to normal state */
+        cia_spin(CIA_USEC(30));
         for (pos = 0; pos < 100; pos++)
             (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        cia_spin(CIA_USEC(4000));
-        cia_spin(CIA_USEC(250000));  // Kicksmash might emit debug output
+        cia_spin(CIA_USEC(4000U));
     }
-    if ((replystatus & 0xffff) && (replystatus != KS_STATUS_CRC)) {
-#ifdef HANDLE_ODD_BYTES
+    if (((replystatus & 0xffff0000) == 0) && (replystatus != KS_STATUS_CRC)) {
         crc = crc32(crc, reply, replylen);
-#else
-        crc = crc32(crc, reply, replylen * 2);
-#endif
-        if (crc != replycrc)
+        if (crc != replycrc) {
+//          *ADDR32(0x7770000) = crc;
+//          *ADDR32(0x7770004) = replycrc;
             return (MSG_STATUS_BAD_CRC);
+        }
     }
 
     return (replystatus);
@@ -1031,12 +1029,15 @@ fail:
 static int
 smash_test_loopback(void)
 {
-    uint32_t *tx_buf;
-    uint32_t *rx_buf;
-    uint      cur;
-    uint      rc;
-    uint      rlen = 0;
-    uint      nums = (rand32() % (TEST_LOOPBACK_MAX - 1)) + 1;
+    uint8_t   *tx_buf;
+    uint8_t   *rx_buf;
+    uint       cur;
+    uint       rc;
+    uint       count;
+    uint       rlen = 0;
+    uint       nums = (rand32() % (TEST_LOOPBACK_MAX - 1)) + 1;
+    uint64_t   time_start;
+    uint64_t   time_end;
 
     show_test_state("Test loopback", -1);
 
@@ -1044,43 +1045,73 @@ smash_test_loopback(void)
     rx_buf = &test_loopback_buf[TEST_LOOPBACK_MAX];
     memset(rx_buf, 0, TEST_LOOPBACK_MAX * 4);
     for (cur = 0; cur < nums; cur++)
-        tx_buf[cur] = rand32();
+        tx_buf[cur] = (uint8_t) (rand32() >> 8);
 
-    rc = send_cmd(KS_CMD_LOOPBACK, tx_buf, nums * 4,
-                  rx_buf, TEST_LOOPBACK_MAX * 4, &rlen);
+    /* Measure IOPS */
+    INTERRUPTS_DISABLE();
+    time_start = smash_time();
+    for (count = 0; count < 10; count++) {
+        rc = send_cmd(KS_CMD_LOOPBACK, tx_buf, 4,
+                      rx_buf, TEST_LOOPBACK_MAX, &rlen);
+        if ((rc != KS_CMD_LOOPBACK))
+            break;
+    }
+    time_end = smash_time();
+    INTERRUPTS_ENABLE();
+
+    if (rc == KS_CMD_LOOPBACK) {
+        /* Test loopback accuracy */
+        rc = send_cmd(KS_CMD_LOOPBACK, tx_buf, nums,
+                      rx_buf, TEST_LOOPBACK_MAX, &rlen);
+    }
     if (rc == KS_CMD_LOOPBACK) {
         rc = 0;
     } else {
         printf("FAIL: %d (%s)\n", rc, smash_err(rc));
+fail_handle_debug:
         if (flag_debug) {
             uint pos;
             uint8_t *txp = (uint8_t *)tx_buf;
             uint8_t *rxp = (uint8_t *)rx_buf;
-            for (pos = 0; pos < nums * 4; pos++)
+            for (pos = 0; pos < nums; pos++)
                 if (rxp[pos] != txp[pos])
                     break;
-            dump_memory(tx_buf, nums * 4, VALUE_UNASSIGNED);
-            printf("--- Tx above  Rx below --- ");
-            if (pos < nums * 4)
-                printf("first diff at %x\n", pos);
-            else
-                printf("no diff (CRC?)\n");
-            dump_memory(rx_buf, rlen, VALUE_UNASSIGNED);
+            dump_memory(tx_buf, nums, VALUE_UNASSIGNED);
+            if (pos < nums) {
+                printf("--- Tx above  Rx below --- ");
+                printf("First diff at 0x%x of 0x%x\n", pos, nums);
+                dump_memory(rx_buf, rlen, VALUE_UNASSIGNED);
+            } else {
+                printf("Tx and Rx buffers (len=0x%x) match\n", nums);
+            }
         }
-        return (rc);
+        goto fail_loopback;
+    }
+    if (rlen != nums) {
+        printf("FAIL: rlen=%u != sent %u\n", rlen, nums);
+        rc = MSG_STATUS_BAD_LENGTH;
+        goto fail_handle_debug;
     }
     for (cur = 0; cur < nums; cur++) {
         if (rx_buf[cur] != tx_buf[cur]) {
             if (rc++ == 0)
                 printf("\nLoopback data miscompare\n");
             if (rc < 5) {
-                printf("    [%02x] %08x != expected %08x\n",
+                printf("    [%02x] %02x != expected %02x\n",
                        cur, rx_buf[cur], tx_buf[cur]);
             }
         }
     }
     if (rc >= 4)
         printf("%u miscompares\n", rc);
+    if ((rc == 0) && (flag_quiet == 0)) {
+        uint diff = (uint) (time_end - time_start);
+        if (diff == 0)
+            diff = 1;
+        printf("PASS  %u IOPS\n", 1000000 * count / diff);
+        return (0);
+    }
+fail_loopback:
     show_test_state("Test loopback", rc);
     return (rc);
 }
@@ -1088,7 +1119,7 @@ smash_test_loopback(void)
 static int
 smash_test_loopback_perf(void)
 {
-    const uint lb_size  = 800;
+    const uint lb_size  = 1000;
     const uint xfers    = 100;
     const uint lb_alloc = lb_size + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
     uint32_t  *buf;
@@ -1126,7 +1157,7 @@ smash_test_loopback_perf(void)
 
     if (flag_quiet == 0) {
         time_end = smash_time();
-        diff = (uint32_t) (time_end - time_start);
+        diff = (uint) (time_end - time_start);
         if (diff == 0)
             diff = 1;
         total = xfers * (lb_size + KS_HDR_AND_CRC_LEN);
@@ -1405,11 +1436,9 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
      */
     num_addr /= 4;
 
-    *CIAA_PRA |= CIAA_PRA_OVERLAY;
-    cia_spin(CIA_USEC(100));
+    cia_spin(CIA_USEC(5));
     for (pos = 0; pos < num_addr; pos++) {
-//      uint32_t addr = ROM_BASE + ((addrs[pos] << smash_cmd_shift) & 0x7ffff);
-        uint32_t addr = ((addrs[pos] << smash_cmd_shift) & 0x7ffff);
+        uint32_t addr = ROM_BASE + ((addrs[pos] << smash_cmd_shift) & 0x7ffff);
 #if 1
         (void) *ADDR32(addr);  // Generate address on the bus
 #else
@@ -1432,9 +1461,6 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 #endif
     }
 
-    *CIAA_PRA &= ~CIAA_PRA_OVERLAY;
-    cia_spin(CIA_USEC(100));
-
 #if 0
     // below is for debug, to ensure all Kicksmash DMA is drained.
     for (pos = 0; pos < 10000; pos++) {
@@ -1454,7 +1480,7 @@ flash_cmd_cleanup:
         for (pos = 0; pos < 1000; pos++) {
             (void) *ADDR32(ROM_BASE);
         }
-        cia_spin(CIA_USEC(25000));
+        cia_spin(CIA_USEC_LONG(25000));
     }
     return (rc);
 }
@@ -1646,14 +1672,14 @@ rom_bank_show(void)
         printf("Failed to get bank information: %d %s\n", rc, smash_err(rc));
         return;
     }
-    printf("Bank  Comment         Merge LongReset  PowerOn  Current  "
+    printf("Bank  Name            Merge LongReset  PowerOn  Current  "
            "NextReset\n");
     for (bank = 0; bank < ROM_BANKS; bank++) {
         uint aspaces = 2;
         uint pos;
         uint banks_add = info.bi_merge[bank] >> 4;
         uint bank_sub  = info.bi_merge[bank] & 0xf;
-        printf("%-5u %-15s ", bank, info.bi_desc[bank]);
+        printf("%-5u %-15s ", bank, info.bi_name[bank]);
 
         if (banks_add < 1)
             aspaces += 4;
@@ -1714,7 +1740,7 @@ cmd_bank(int argc, char *argv[])
     uint     flag_set_current_bank = 0;
     uint     flag_set_reset_bank   = 0;
     uint     flag_set_poweron_bank = 0;
-    uint     flag_set_bank_comment = 0;
+    uint     flag_set_bank_name    = 0;
     uint     bank;
     uint     rc;
     uint     opt = 0;
@@ -1722,7 +1748,7 @@ cmd_bank(int argc, char *argv[])
 
     if (argc < 2) {
         printf("-b requires an argument\n");
-        printf("One of: ?, show, comment, longreset, nextreset, "
+        printf("One of: ?, show, name, longreset, nextreset, "
                "poweron, merge, unmerge\n");
         return (1);
     }
@@ -1730,11 +1756,11 @@ cmd_bank(int argc, char *argv[])
         printf("  show                       Display all ROM bank information\n"
                "  merge <start> <end>        Merge banks for larger ROMs\n"
                "  unmerge <start> <end>      Unmerge banks\n"
+               "  name <bank> <text>         Set bank name (description)\n"
                "  longreset <bank>[,<bank>]  Banks to sequence at long reset\n"
                "  poweron <bank> [reboot]    Default bank at poweron\n"
                "  current <bank> [reboot]    Force new bank immediately\n"
-               "  nextreset <bank> [reboot]  Force new bank at next reset\n"
-               "  comment <bank> <text>      Add bank description comment\n");
+               "  nextreset <bank> [reboot]  Force new bank at next reset\n");
     } else if (strcmp(argv[1], "show") == 0) {
         rom_bank_show();
         return (0);
@@ -1755,16 +1781,16 @@ cmd_bank(int argc, char *argv[])
     } else if (strcmp(argv[1], "unmerge") == 0) {
         flag_bank_unmerge++;
         opt = KS_BANK_UNMERGE;
-    } else if (strcmp(argv[1], "comment") == 0) {
-        flag_set_bank_comment++;
+    } else if (strcmp(argv[1], "name") == 0) {
+        flag_set_bank_name++;
     } else {
         printf("Unknown argument -b '%s'\n", argv[1]);
         return (1);
     }
-    if (flag_set_bank_comment) {
+    if (flag_set_bank_name) {
         char argbuf[64];
         if (argc != 4) {
-            printf("-b %s requires a <bank> number and \"comment text\"\n",
+            printf("-b %s requires a <bank> number and \"name text\"\n",
                    argv[1]);
             return (1);
         }
@@ -1778,10 +1804,10 @@ cmd_bank(int argc, char *argv[])
         memcpy(argbuf, &arg, 2);
         strncpy(argbuf + 2, argv[3], sizeof (argbuf) - 3);
         argbuf[sizeof (argbuf) - 1] = '\0';
-        rc = send_cmd(KS_CMD_BANK_COMMENT, argbuf,
+        rc = send_cmd(KS_CMD_BANK_NAME, argbuf,
                       strlen(argbuf + 2) + 3, NULL, 0, NULL);
         if (rc != 0)
-            printf("Bank comment set failed: %d %s\n", rc, smash_err(rc));
+            printf("Bank name set failed: %d %s\n", rc, smash_err(rc));
         return (rc);
     }
     if (flag_bank_longreset) {
@@ -3018,7 +3044,6 @@ int
 main(int argc, char *argv[])
 {
     int      arg;
-    char    *arg1;
     uint     loop;
     uint     loops = 1;
     uint     flag_inquiry = 0;
@@ -3027,7 +3052,8 @@ main(int argc, char *argv[])
     uint     flag_x_spin = 0;
     uint     flag_y_spin = 0;
     int      pos;
-    uint     rc = 0;
+    uint     errs = 0;
+    uint     do_multiple = 0;
     uint32_t addr;
 
 #ifndef _DCC
@@ -3119,8 +3145,6 @@ main(int argc, char *argv[])
                         exit(1);
                 }
             }
-        } else if (arg1 == NULL) {
-            arg1 = ptr;
         } else {
             printf("Error: unknown argument %s\n", ptr);
             usage();
@@ -3137,8 +3161,14 @@ main(int argc, char *argv[])
         flag_test_mask = ~BIT(3);
     if (flag_test) {
         srand32(time(NULL));
-        test_loopback_buf = AllocMem(TEST_LOOPBACK_MAX * 8, MEMF_PUBLIC);
+        test_loopback_buf = AllocMem(TEST_LOOPBACK_MAX * 2, MEMF_PUBLIC);
+        if (flag_test_mask & (flag_test_mask - 1))
+            do_multiple = 1;
     }
+    if (flag_inquiry & (flag_inquiry - 1))
+        do_multiple = 1;
+    if (!!flag_test + !!flag_inquiry + !!flag_x_spin + !!flag_y_spin > 1)
+        do_multiple = 1;
 
     for (loop = 0; loop < loops; loop++) {
         if (loops > 1) {
@@ -3149,6 +3179,8 @@ main(int argc, char *argv[])
                 }
             } else {
                 printf("Pass %-4u ", loop + 1);
+                if (do_multiple)
+                    printf("\n");
             }
         }
         if (flag_x_spin) {
@@ -3160,18 +3192,18 @@ main(int argc, char *argv[])
         if (flag_inquiry) {
             if ((flag_inquiry & 1) &&
                 smash_identify() && ((loops == 1) || (loop > 1))) {
-                rc++;
+                errs++;
                 break;
             }
             if ((flag_inquiry & 2) &&
                 flash_show_id() && ((loops == 1) || (loop > 1))) {
-                rc++;
+                errs++;
                 break;
             }
         }
         if (flag_test) {
             if (smash_test(flag_test_mask) && ((loops == 1) || (loop > 1))) {
-                rc++;
+                errs++;
                 break;
             }
         }
@@ -3185,14 +3217,14 @@ main(int argc, char *argv[])
 end_now:
         if (loops > 1)
             printf(" at pass %u", loop + 1);
-        if (rc != 0)
-            printf(" due to error %d (%s)", (int) rc, smash_err(rc));
+        if (errs != 0)
+            printf(" (%u errors)", errs);
         printf("\n");
-    } else if (flag_quiet && (rc == 0)) {
+    } else if (flag_quiet && (errs == 0)) {
         printf("Pass %u done\n", loop);
     }
     if (test_loopback_buf != NULL)
-        FreeMem(test_loopback_buf, TEST_LOOPBACK_MAX * 8);
+        FreeMem(test_loopback_buf, TEST_LOOPBACK_MAX * 2);
 
-    exit(rc);
+    exit(errs ? EXIT_FAILURE : EXIT_SUCCESS);
 }
