@@ -33,6 +33,7 @@
 #define KS_CMD_MSG_INFO      0x20  // Query message queue sizes
 #define KS_CMD_MSG_SEND      0x21  // Send a remote message
 #define KS_CMD_MSG_RECEIVE   0x22  // Receive a remote message
+#define KS_CMD_MSG_LOCK      0x23  // Lock or unlock message buffers
 
 /* Status codes returned by Kicksmash */
 #define KS_STATUS_OK       0x0000  // Success
@@ -42,6 +43,7 @@
 #define KS_STATUS_BADARG   0x0400  // Bad command argument
 #define KS_STATUS_BADLEN   0x0500  // Bad message length
 #define KS_STATUS_NODATA   0x0600  // No data available
+#define KS_STATUS_LOCKED   0x0700  // Resource locked
 
 /* Command-specific options (upper byte of command) */
 #define KS_BANK_SETCURRENT 0x0100  // Set current ROM bank (immediate change)
@@ -53,7 +55,9 @@
 
 #define KS_BANK_UNMERGE    0x0100  // Unmerge bank range (KS_BANK_MERGE)
 
-#define KS_REMOTE_ALTBUF   0x0100  // Perform operations on alternate buffer
+#define KS_MSG_ALTBUF      0x0100  // Perform operations on alternate buffer
+
+#define KS_MSG_UNLOCK      0x0100  // Unlock instead of lock
 
 #define KS_HDR_AND_CRC_LEN (8 + 2 + 2 + 4)  // Magic+Len+Cmd+CRC = 16 bytes
 
@@ -129,18 +133,27 @@
  *        read of the data address to write.
  *       *This command requires participation by code running under AmigaOS
  *        to generate the correct bus addresses to sequence the flash command.
- *   KS_CMD_REMOTE_MSG
- *        Any data sent, including Header and CRC, is sent to the USB host.
+ *   KS_CMD_MSG_SEND
+ *        Any data provided, including Header and CRC, is sent to the USB host.
+ *   KS_CMD_MSG_RECV
  *        If there is data pending from the USB host, it will be returned to
- *        the Amiga in the buffer, provided there is sufficient space available.
- *   KS_CMD_REMOTE_INFO
+ *        the Amiga in the buffer, given there is sufficient space available.
+ *   KS_CMD_MSG_INFO
  *        A structure is returned with message buffer space in use and
- *        space available for both the Amiga -> USB Host and
- *        USB Host -> Amiga buffers.
- *              uint16_t buf1_inuse;
- *              uint16_t buf1_avail;
- *              uint16_t buf2_inuse;
- *              uint16_t buf2_avail;
+ *        space available for both the Amiga -> USB Host (atou)
+ *        and USB Host -> Amiga (utoa) buffers.
+ *              uint16_t atou_inuse;
+ *              uint16_t atou_avail;
+ *              uint16_t utoa_inuse;
+ *              uint16_t utoa_avail;
+ *   KS_MSG_LOCK
+ *        A single value is specified, which are the lock bits:
+ *              bit 0 = lock buffer 1 from Amiga access
+ *              bit 1 = lock buffer 2 from Amiga access
+ *              bit 2 = lock buffer 1 from USB access
+ *              bit 3 = lock buffer 2 from USB access
+ *        If the command code includes KS_MSG_UNLOCK, then the specified
+ *        lock bits will be unlocked.
  */
 
 #define ROM_BANKS 8
@@ -167,10 +180,10 @@ typedef struct {
 } smash_id_t;
 
 typedef struct {
-    uint16_t smi_buf1_inuse;             // Amiga -> USB buffer bytes in use
-    uint16_t smi_buf1_avail;             // Amiga -> USB buffer bytes free
-    uint16_t smi_buf2_inuse;             // USB -> Amiga buffer bytes in use
-    uint16_t smi_buf2_avail;             // USB -> Amiga buffer bytes free
+    uint16_t smi_atou_inuse;             // Amiga -> USB buffer bytes in use
+    uint16_t smi_atou_avail;             // Amiga -> USB buffer bytes free
+    uint16_t smi_utoa_inuse;             // USB -> Amiga buffer bytes in use
+    uint16_t smi_utoa_avail;             // USB -> Amiga buffer bytes free
 } smash_msg_info_t;
 
 #endif /* _SMASH_H */

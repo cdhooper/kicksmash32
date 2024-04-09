@@ -65,6 +65,11 @@
 #define dma_set_memory_size(dma, channel, size) \
                 DMA_CCR(dma, channel) = (DMA_CCR(dma, channel) & \
                                          ~DMA_CCR_MSIZE_MASK) | size
+#define timer_enable_irq(timer, irq)          TIM_DIER(timer) |= (irq)
+#define timer_disable_irq(timer, irq)         TIM_DIER(timer) &= ~(irq)
+#define timer_set_dma_on_compare_event(timer) TIM_CR2(timer) &= ~TIM_CR2_CCDS
+#define timer_set_ti1_ch1(timer)              TIM_CR2(timer) &= ~TIM_CR2_TI1S
+
 
 static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
 // static const uint16_t reset_magic_32[] = { 0x0000, 0x0001, 0x0034, 0x0035 };
@@ -90,10 +95,11 @@ static uint     rx_consumer = 0;
 static uint     message_count = 0;
 
 /* Message interface through Kicksmash between Amiga and USB host */
-static uint     prod_buf1;   // Producer for Amiga -> USB buffer
-static uint     cons_buf1;   // Consumer for Amiga -> USB buffer
-static uint     prod_buf2;   // Producer for USB buffer -> Amiga
-static uint     cons_buf2;   // Consumer for USB buffer -> Amiga
+static uint     prod_atou;   // Producer for Amiga -> USB buffer
+static uint     cons_atou;   // Consumer for Amiga -> USB buffer
+static uint     prod_utoa;   // Producer for USB buffer -> Amiga
+static uint     cons_utoa;   // Consumer for USB buffer -> Amiga
+static uint8_t  msg_lock;    // Bits !USB 0=atou 1=utoa, !Amiga 2=atou 3=utoa
 
 /* Buffers for DMA from/to GPIOs and Timer event generation registers */
 #define ADDR_BUF_COUNT 1024
@@ -104,8 +110,8 @@ ALIGN volatile uint16_t          buffer_txd_lo[ADDR_BUF_COUNT * 2];
 ALIGN volatile uint16_t          buffer_txd_hi[ADDR_BUF_COUNT];
 
 /* The message buffers must be a power-of-2 in size */
-ALIGN uint8_t  msg_buf1[0x1000];  // Amiga -> USB buffer
-ALIGN uint8_t  msg_buf2[0x1000];  // USB -> Amiga buffer
+ALIGN uint8_t  msg_atou[0x1000];  // Amiga -> USB buffer
+ALIGN uint8_t  msg_utoa[0x1000];  // USB -> Amiga buffer
 
 #ifdef CAPTURE_GPIOS
 ALIGN uint16_t buffer_a[ADDR_BUF_COUNT];
@@ -232,83 +238,105 @@ gpio_showbuf(uint count)
  * number of elements in use.
  *
  */
-#define MBUF1_SPACE_INUSE ((prod_buf1 - cons_buf1) & (sizeof (msg_buf1) - 1))
-#define MBUF2_SPACE_INUSE ((prod_buf2 - cons_buf2) & (sizeof (msg_buf2) - 1))
-#define MBUF1_SPACE_AVAIL (sizeof (msg_buf1) - 1 - MBUF1_SPACE_INUSE)
-#define MBUF2_SPACE_AVAIL (sizeof (msg_buf2) - 1 - MBUF2_SPACE_INUSE)
+#define MBUF1_SPACE_INUSE ((prod_atou - cons_atou) & (sizeof (msg_atou) - 1))
+#define MBUF2_SPACE_INUSE ((prod_utoa - cons_utoa) & (sizeof (msg_utoa) - 1))
+#define MBUF1_SPACE_AVAIL (sizeof (msg_atou) - 2 - MBUF1_SPACE_INUSE)
+#define MBUF2_SPACE_AVAIL (sizeof (msg_utoa) - 2 - MBUF2_SPACE_INUSE)
 
 static uint
-buf1_add(uint len, void *ptr)
+atou_add(uint len, void *ptr)
 {
     uint xlen;
     uint8_t *sptr = ptr;
     len = (len + 1) & ~1;  // Round up to 16-bit alignment
     if (MBUF1_SPACE_AVAIL < len)
         return (1);
-    xlen = sizeof (msg_buf1) - prod_buf1;
+    xlen = sizeof (msg_atou) - prod_atou;
     if (len <= xlen) {
-        memcpy(msg_buf1 + prod_buf1, sptr, len);
+        memcpy(msg_atou + prod_atou, sptr, len);
     } else {
-        memcpy(msg_buf1 + prod_buf1, sptr, xlen);
-        memcpy(msg_buf1, sptr + xlen, len - xlen);
+        memcpy(msg_atou + prod_atou, sptr, xlen);
+        memcpy(msg_atou, sptr + xlen, len - xlen);
     }
-    prod_buf1 = (prod_buf1 + len) & (sizeof (msg_buf1) - 1);
+    prod_atou = (prod_atou + len) & (sizeof (msg_atou) - 1);
     return (0);
 }
 
 static uint
-buf2_add(uint len, void *ptr)
+utoa_add(uint len, void *ptr)
 {
     uint xlen;
     uint8_t *sptr = ptr;
     len = (len + 1) & ~1;  // Round up to 16-bit alignment
     if (MBUF2_SPACE_AVAIL < len)
         return (1);
-    xlen = sizeof (msg_buf2) - prod_buf2;
+    xlen = sizeof (msg_utoa) - prod_utoa;
     if (len <= xlen) {
-        memcpy(msg_buf2 + prod_buf2, sptr, len);
+        memcpy(msg_utoa + prod_utoa, sptr, len);
     } else {
-        memcpy(msg_buf2 + prod_buf2, sptr, xlen);
-        memcpy(msg_buf2, sptr + xlen, len - xlen);
+        memcpy(msg_utoa + prod_utoa, sptr, xlen);
+        memcpy(msg_utoa, sptr + xlen, len - xlen);
     }
-    prod_buf2 = (prod_buf2 + len) & (sizeof (msg_buf2) - 1);
+    prod_utoa = (prod_utoa + len) & (sizeof (msg_utoa) - 1);
     return (0);
 }
 
 static uint16_t
-buf1_next_msg_len(void)
+atou_next_msg_len(void)
 {
-    uint len;
-    uint len_pos;
-    uint inuse = MBUF1_SPACE_INUSE;
-    if (inuse < KS_HDR_AND_CRC_LEN)
-{
-// printf("li=%u %u\n", inuse, KS_HDR_AND_CRC_LEN);
-        return (inuse);
-}
+    uint     len;
+    uint     pos;
+    uint     inuse = MBUF1_SPACE_INUSE;
+    uint     count;
+    uint16_t magic;
 
-    len_pos = (cons_buf1 + 8) & (sizeof (msg_buf1) - 1);
-    len     = *(uint16_t *) (msg_buf1 + len_pos);
-// printf("lp=%x l=%u\n", len_pos, len);
+    if (inuse < KS_HDR_AND_CRC_LEN) {
+        /* Invalid */
+        cons_atou = prod_atou;
+        return (0);
+    }
+
+    /* Check magic */
+    for (pos = cons_atou, count = 0; count < ARRAY_SIZE(sm_magic); count++) {
+        magic = *(uint16_t *) (msg_atou + pos);
+        if (magic != sm_magic[count]) {
+            printf("Bad msg %u %04x != %04x\n", count, magic, sm_magic[count]);
+            cons_atou = prod_atou;
+            return (0);
+        }
+        pos = (pos + 2) & (sizeof (msg_atou) - 1);
+    }
+
+    len     = *(uint16_t *) (msg_atou + pos);
     len     = (len + 1) & ~1;  // Round up
     return (len + KS_HDR_AND_CRC_LEN);
 }
 
 static uint16_t
-buf2_next_msg_len(void)
+utoa_next_msg_len(void)
 {
-    uint len;
-    uint len_pos;
-    uint inuse = MBUF2_SPACE_INUSE;
-    if (inuse < KS_HDR_AND_CRC_LEN)
-{
-//printf("Li=%u\n", inuse);
-        return (inuse);
-}
+    uint     len;
+    uint     pos;
+    uint     inuse = MBUF2_SPACE_INUSE;
+    uint     count;
+    uint16_t magic;
 
-    len_pos = (cons_buf2 + 8) & (sizeof (msg_buf2) - 1);
-    len     = *(uint16_t *) (msg_buf2 + len_pos);
-//printf("L=%u\n", len);
+    if (inuse < KS_HDR_AND_CRC_LEN) {
+        cons_utoa = prod_utoa;
+        return (0);
+    }
+    /* Check magic */
+    for (pos = cons_utoa, count = 0; count < ARRAY_SIZE(sm_magic); count++) {
+        magic = *(uint16_t *) (msg_utoa + pos);
+        if (magic != sm_magic[count]) {
+            printf("bad msg %u %04x != %04x\n", count, magic, sm_magic[count]);
+            cons_utoa = prod_utoa;
+            return (0);
+        }
+        pos = (pos + 2) & (sizeof (msg_utoa) - 1);
+    }
+
+    len     = *(uint16_t *) (msg_utoa + pos);
     len     = (len + 1) & ~1;  // Round up
     return (len + KS_HDR_AND_CRC_LEN);
 }
@@ -618,9 +646,6 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             pos++;  // Include CRC
         }
 
-        TIM5_SMCR = TIM_SMCR_ETP      | // falling edge detection
-                    TIM_SMCR_ECE;       // external clock mode 2 (ETR input)
-
         /* TIM5 DMA drives low 16 bits */
         dma_disable_channel(DMA2, DMA_CHANNEL5);  // TIM5
         dma_set_peripheral_address(DMA2, DMA_CHANNEL5,
@@ -680,9 +705,6 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             buffer_txd_lo[pos++] = crc >> 16;
             buffer_txd_lo[pos++] = (uint16_t) crc;
         }
-
-        TIM5_SMCR = TIM_SMCR_ETP      | // falling edge detection
-                    TIM_SMCR_ECE;       // external clock mode 2 (ETR input)
 
         /* TIM5 DMA drives low 16 bits */
         dma_disable_channel(DMA2, DMA_CHANNEL5);  // TIM5
@@ -1110,14 +1132,26 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
         case KS_CMD_MSG_INFO: {
             smash_msg_info_t reply;
             uint16_t         temp;
+            uint16_t         avail1;
+            uint16_t         avail2;
+
+            avail1 = MBUF1_SPACE_AVAIL;
+            avail2 = MBUF2_SPACE_AVAIL;
+            if (avail1 >= KS_HDR_AND_CRC_LEN)
+                avail1 -= KS_HDR_AND_CRC_LEN;
+            else
+                avail1 = 0;
+            if (avail2 >= KS_HDR_AND_CRC_LEN)
+                avail2 -= KS_HDR_AND_CRC_LEN;
+            else
+                avail2 = 0;
+
             temp                 = MBUF1_SPACE_INUSE;
-            reply.smi_buf1_inuse = SWAP16(temp);
-            temp                 = MBUF1_SPACE_AVAIL;
-            reply.smi_buf1_avail = SWAP16(temp);
+            reply.smi_atou_inuse = SWAP16(temp);
+            reply.smi_atou_avail = SWAP16(avail1);
             temp                 = MBUF2_SPACE_INUSE;
-            reply.smi_buf2_inuse = SWAP16(temp);
-            temp                 = MBUF2_SPACE_AVAIL;
-            reply.smi_buf2_avail = SWAP16(temp);
+            reply.smi_utoa_inuse = SWAP16(temp);
+            reply.smi_utoa_avail = SWAP16(avail2);
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
             break;
         }
@@ -1134,11 +1168,11 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 /* Receive data doesn't wrap */
                 len1 = raw_len;
                 buf1 = (uint8_t *) &buffer_rxa_lo[cons_s];
-                if (cmd & KS_REMOTE_ALTBUF) {
-                    rc = buf2_add(len1, buf1);
+                if (cmd & KS_MSG_ALTBUF) {
+                    rc = utoa_add(len1, buf1);
                 } else {
-                    rc = buf1_add(len1, buf1);
-//printf("pb1=%u\n", prod_buf1);
+                    rc = atou_add(len1, buf1);
+//printf("pb1=%u\n", prod_atou);
                 }
             } else {
                 /* Send data from end of buffer + beginning of buffer */
@@ -1150,24 +1184,24 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 len2 = raw_len - len1;
                 buf2 = (uint8_t *) buffer_rxa_lo;
 
-                if (cmd & KS_REMOTE_ALTBUF) {
+                if (cmd & KS_MSG_ALTBUF) {
                     if (len1 + len2 > MBUF2_SPACE_AVAIL) {
                         rc = 1;
                     } else {
-                        rc = buf2_add(len1, buf1);
+                        rc = utoa_add(len1, buf1);
                         if (rc == 0)
-                            rc = buf2_add(len2, buf2);
+                            rc = utoa_add(len2, buf2);
                     }
                 } else {
                     if (len1 + len2 > MBUF1_SPACE_AVAIL) {
                         rc = 1;
                     } else {
-                        rc = buf1_add(len1, buf1);
-//printf("Pb1=%u\n", prod_buf1);
+                        rc = atou_add(len1, buf1);
+//printf("Pb1=%u\n", prod_atou);
                         if (rc == 0)
 {
-                            rc = buf1_add(len2, buf2);
-//printf("PB1=%u\n", prod_buf1);
+                            rc = atou_add(len2, buf2);
+//printf("PB1=%u\n", prod_atou);
 }
                     }
                 }
@@ -1184,9 +1218,13 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint     len2;
             uint8_t *buf1;
             uint8_t *buf2;
-            if (cmd & KS_REMOTE_ALTBUF) {
-                len = buf1_next_msg_len();
-                len1 = sizeof (msg_buf1) - cons_buf1;
+            if (cmd & KS_MSG_ALTBUF) {
+                if (msg_lock & BIT(2)) {
+                    ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                    break;
+                }
+                len = atou_next_msg_len();
+                len1 = sizeof (msg_atou) - cons_atou;
                 if (len1 > len) {
                     /* Send data doesn't wrap */
                     len1 = len;
@@ -1195,12 +1233,16 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     /* Send data from end + beginning of circular buffer */
                     len2 = len - len1;
                 }
-                buf1 = msg_buf1 + cons_buf1;
-                buf2 = msg_buf1;
-                cons_buf1 = (cons_buf1 + len) & (sizeof (msg_buf1) - 1);
+                buf1 = msg_atou + cons_atou;
+                buf2 = msg_atou;
+                cons_atou = (cons_atou + len) & (sizeof (msg_atou) - 1);
             } else {
-                len = buf2_next_msg_len();
-                len1 = sizeof (msg_buf2) - cons_buf2;
+                if (msg_lock & BIT(3)) {
+                    ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                    break;
+                }
+                len = utoa_next_msg_len();
+                len1 = sizeof (msg_utoa) - cons_utoa;
                 if (len1 > len) {
                     /* Send data doesn't wrap */
                     len1 = len;
@@ -1209,17 +1251,38 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     /* Send data from end + beginning of circular buffer */
                     len2 = len - len1;
                 }
-                buf1 = msg_buf2 + cons_buf2;
-                buf2 = msg_buf2;
-                cons_buf2 = (cons_buf2 + len) & (sizeof (msg_buf2) - 1);
+                buf1 = msg_utoa + cons_utoa;
+                buf2 = msg_utoa;
+                cons_utoa = (cons_utoa + len) & (sizeof (msg_utoa) - 1);
             }
             if (len == 0) {
                 ks_reply(0, KS_STATUS_NODATA, 0, NULL, 0, NULL);
-printf("nd%s\n", (cmd & KS_REMOTE_ALTBUF) ? " alt" : "");
+printf("nd%s\n", (cmd & KS_MSG_ALTBUF) ? " alt" : "");
             } else {
                 ks_reply(KS_REPLY_RAW, 0, len1, buf1, len2, buf2);
-//              printf("l=%u+%u cb1=%u pb1=%u %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x%s\n", len1, len2, cons_buf1, prod_buf1, buf1[0], buf1[1], buf1[2], buf1[3], buf1[4], buf1[5], buf1[6], buf1[7], buf1[9], buf1[9], buf1[10], buf1[11], (cmd & KS_REMOTE_ALTBUF) ? " alt" : "");
+//              printf("l=%u+%u cb1=%u pb1=%u %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x%s\n", len1, len2, cons_atou, prod_atou, buf1[0], buf1[1], buf1[2], buf1[3], buf1[4], buf1[5], buf1[6], buf1[7], buf1[9], buf1[9], buf1[10], buf1[11], (cmd & KS_MSG_ALTBUF) ? " alt" : "");
             }
+            break;
+        }
+        case KS_CMD_MSG_LOCK: {
+            uint lockbits;
+            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            lockbits = buffer_rxa_lo[cons_s];
+
+            if (cmd & KS_MSG_UNLOCK) {
+                msg_lock &= ~lockbits;
+            } else {
+                if (((lockbits & BIT(0)) && (msg_lock & BIT(2))) ||
+                    ((lockbits & BIT(1)) && (msg_lock & BIT(3)))) {
+                    /* Attempted to lock resource owned by the other side */
+                    ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                    break;
+                }
+                msg_lock |= lockbits;
+            }
+            ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             break;
         }
         default:
@@ -1299,9 +1362,7 @@ new_cmd_post:
                 message_count++;
                 len = cmd_len = buffer_rxa_lo[rx_consumer];
                 crc = crc32r(0, &len, sizeof (uint16_t));
-#if 1
                 cmd_len = (cmd_len + 1) & ~1;  // round up
-#endif
                 magic_pos++;
                 break;
             case ARRAY_SIZE(sm_magic) + 1:
