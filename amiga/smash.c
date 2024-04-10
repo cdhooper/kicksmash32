@@ -65,6 +65,7 @@ typedef struct { unsigned long hi; unsigned long lo;} uint64_t;
 struct ExecBase *SysBase;
 struct ExecBase *DOSBase;
 struct Device   *TimerBase;
+static struct    timerequest TimeRequest;
 #endif
 
 /*
@@ -144,53 +145,141 @@ struct Device   *TimerBase;
 
 static const char cmd_options[] =
     "usage: smash <options>\n"
-    "   -b <opt>     ROM bank operations (?, show, ...)\n"
-    "   -d           show debug output\n"
-    "   -e <opt>     erase flash (?, bank, ...)\n"
-    "   -i[ii]       identify Kicksmash and Flash parts\n"
-    "   -r <opt>     read from flash (?, bank, file, ...)\n"
-    "   -w <opt>     write to flash (?, bank, file, ...)\n"
-    "   -x <addr>    spin loop reading addr\n"
-    "   -y <addr>    spin loop reading addr with ROM OVL set\n"
-    "   -t           do pattern test\n";
+    "   bank <opt>   ROM bank operations (-b ?, show, ...)\n"
+    "   clock <opt>  save / restore Amiga clock with KS (-c)\n"
+    "   debug        show debug output (-d)\n"
+    "   erase <opt>  erase flash (-e ?, bank, ...)\n"
+    "   identify     identify Kicksmash and Flash parts (-i[ii])\n"
+    "   read <opt>   read from flash (-r ?, bank, file, ...)\n"
+    "   verify <opt> verify flash matches file (-v ?, bank, file, ...)\n"
+    "   write <opt>  write to flash (-w ?, bank, file, ...)\n"
+    "   sr <addr>    spin loop reading address (-x)\n"
+    "   srr <addr>   spin loop reading address with ROM OVL set (-y)\n"
+    "   test[0123]   do interface test (-t)\n";
+
+static const char cmd_bank_options[] =
+    "  show                       Display all ROM bank information (-s)\n"
+    "  merge <start> <end>        Merge banks for larger ROMs (-m)\n"
+    "  unmerge <start> <end>      Unmerge banks (-u)\n"
+    "  name <bank> <text>         Set bank name / description (-n)\n"
+    "  longreset <bank>[,<bank>]  Banks to sequence at long reset (-l)\n"
+    "  poweron <bank> [reboot]    Default bank at poweron (-p)\n"
+    "  current <bank> [reboot]    Force new bank immediately (-c)\n"
+    "  nextreset <bank> [reboot]  Force new bank at next reset (-N)\n";
+
+static const char cmd_clock_options[] =
+    "   load         load Amiga time from KS clock (-l)\n"
+    "   loadifset    load Amiga time from KS clock if it is known (-k)\n"
+    "   save         save Amiga time to KS clock (-s)\n"
+    "   saveifnotset save Amiga time to KS clock if not already saved (-n)\n"
+    "   show         show current KS clock (-S)\n";
 
 static const char cmd_read_options[] =
     "smash -r options\n"
-    "   addr <hex>  - starting address (-a)\n"
-    "   bank <num>  - flash bank on which to operate (-b)\n"
-    "   dump        - save hex/ASCII instead of binary (-d)\n"
-    "   file <name> - file where to save content (-f)\n"
-    "   len <hex>   - length to read in bytes (-l)\n"
-    "   swap <mode> - byte swap mode (1032, 2301, 3210) (-s)\n"
-    "   yes         - skip prompt (-y)\n";
+    "   addr <hex>   starting address (-a)\n"
+    "   bank <num>   flash bank on which to operate (-b)\n"
+    "   dump         save hex/ASCII instead of binary (-d)\n"
+    "   file <name>  file where to save content (-f)\n"
+    "   len <hex>    length to read in bytes (-l)\n"
+    "   swap <mode>  byte swap mode (1032, 2301, 3210) (-s)\n"
+    "   yes          skip prompt (-y)\n";
 
 static const char cmd_write_options[] =
     "smash -w options\n"
-    "   addr <hex>  - starting address (-a)\n"
-    "   bank <num>  - flash bank on which to operate (-b)\n"
-//  "   dump        - save hex/ASCII instead of binary (-d)\n"
-    "   file <name> - file from which to read (-f)\n"
-    "   len <hex>   - length to program in bytes (-l)\n"
-    "   swap <mode> - byte swap mode (1032, 2301, 3210) (-s)\n"
-    "   yes         - skip prompt (-y)\n";
+    "   addr <hex>   starting address (-a)\n"
+    "   bank <num>   flash bank on which to operate (-b)\n"
+//  "   dump         save hex/ASCII instead of binary (-d)\n"
+    "   file <name>  file from which to read (-f)\n"
+    "   len <hex>    length to program in bytes (-l)\n"
+    "   swap <mode>  byte swap mode (1032, 2301, 3210) (-s)\n"
+    "   yes          skip prompt (-y)\n";
 
 static const char cmd_verify_options[] =
     "smash -v options\n"
-    "   addr <hex>  - starting address (-a)\n"
-    "   bank <num>  - flash bank on which to operate (-b)\n"
-//  "   dump        - save hex/ASCII instead of binary (-d)\n"
-    "   file <name> - file to verify against (-f)\n"
-    "   len <hex>   - length to read in bytes (-l)\n"
-    "   swap <mode> - byte swap mode (1032, 2301, 3210) (-s)\n"
-    "   yes         - skip prompt (-y)\n";
-
+    "   addr <hex>   starting address (-a)\n"
+    "   bank <num>   flash bank on which to operate (-b)\n"
+//  "   dump         save hex/ASCII instead of binary (-d)\n"
+    "   file <name>  file to verify against (-f)\n"
+    "   len <hex>    length to read in bytes (-l)\n"
+    "   swap <mode>  byte swap mode (1032, 2301, 3210) (-s)\n"
+    "   yes          skip prompt (-y)\n";
 
 static const char cmd_erase_options[] =
     "smash -e options\n"
-    "   addr <hex>  - starting address (-a)\n"
-    "   bank <num>  - flash bank on which to operate (-b)\n"
-    "   len <hex>   - length to erase in bytes (-l)\n"
-    "   yes         - skip prompt (-y)\n";
+    "   addr <hex>   starting address (-a)\n"
+    "   bank <num>   flash bank on which to operate (-b)\n"
+    "   len <hex>    length to erase in bytes (-l)\n"
+    "   yes          skip prompt (-y)\n";
+
+typedef struct {
+    const char *const short_name;
+    const char *const long_name;
+} long_to_short_t;
+long_to_short_t long_to_short_main[] = {
+    { "-b", "bank" },
+    { "-c", "clock" },
+    { "-d", "debug" },
+    { "-e", "erase" },
+    { "-i", "inquiry" },
+    { "-i", "identify" },
+    { "-i", "id" },
+    { "-l", "loop" },
+    { "-q", "quiet" },
+    { "-r", "read" },
+    { "-s", "spin" },
+    { "-t", "test" },
+    { "-v", "verify" },
+    { "-w", "write" },
+    { "-x", "sr" },   // spinread
+    { "-y", "srr" },  // spinreadrom
+};
+
+long_to_short_t long_to_short_bank[] = {
+    { "-c", "current" },
+    { "-h", "?" },
+    { "-h", "help" },
+    { "-l", "longreset" },
+    { "-m", "merge" },
+    { "-n", "name" },
+    { "-N", "nextreset" },
+    { "-p", "poweron" },
+    { "-s", "show" },
+    { "-u", "unmerge" },
+};
+
+long_to_short_t long_to_short_clock[] = {
+    { "-k", "loadifset" },
+    { "-l", "load" },
+    { "-s", "save" },
+    { "-n", "saveifnotset" },
+    { "-S", "show" },
+};
+
+long_to_short_t long_to_short_erase[] = {
+    { "-a", "addr" },
+    { "-b", "bank" },
+    { "-d", "debug" },
+    { "-h", "?" },
+    { "-h", "help" },
+    { "-l", "len" },
+    { "-l", "length" },
+    { "-y", "yes" },
+};
+
+long_to_short_t long_to_short_readwrite[] = {
+    { "-a", "addr" },
+    { "-b", "bank" },
+    { "-D", "debug" },
+    { "-d", "dump" },
+    { "-f", "file" },
+    { "-h", "?" },
+    { "-h", "help" },
+    { "-l", "len" },
+    { "-l", "length" },
+    { "-s", "swap" },
+    { "-v", "verify" },
+    { "-y", "yes" },
+};
 
 uint32_t mmu_get_type(void);
 uint32_t mmu_get_tc_030(void);
@@ -222,6 +311,17 @@ static void
 usage(void)
 {
     printf("%s\n\n%s", version + 7, cmd_options);
+}
+
+const char *
+long_to_short(const char *ptr, long_to_short_t *ltos, uint ltos_count)
+{
+    uint cur;
+
+    for (cur = 0; cur < ltos_count; cur++)
+        if (strcmp(ptr, ltos[cur].long_name) == 0)
+            return (ltos[cur].short_name);
+    return (ptr);
 }
 
 static char
@@ -1418,7 +1518,6 @@ smash_test_msg_loopback(void)
             if ((rlen != len) && (count != scount[pass])) {
                 printf("Receive length %u != expected %u at %u of %s %u\n",
                        rlen, len, count, pass ? "utoa" : "atou", scount[pass]);
-printf("pass=%u [%u %u]\n", pass, scount[0], scount[1]);
                 rc = MSG_STATUS_BAD_LENGTH;
                 goto fail;
             }
@@ -1869,19 +1968,16 @@ rom_bank_show(void)
 static int
 cmd_bank(int argc, char *argv[])
 {
+    const char *ptr;
     uint8_t  bank_start = 0;
     uint8_t  bank_end   = 0;
     uint     flag_bank_merge       = 0;
     uint     flag_bank_unmerge     = 0;
-    uint     flag_bank_longreset   = 0;
-    uint     flag_set_current_bank = 0;
-    uint     flag_set_reset_bank   = 0;
-    uint     flag_set_poweron_bank = 0;
-    uint     flag_set_bank_name    = 0;
     uint     bank;
     uint     rc;
     uint     opt = 0;
-    uint16_t arg;
+    int      arg;
+    uint16_t argval;
 
     if (argc < 2) {
         printf("-b requires an argument\n");
@@ -1889,202 +1985,226 @@ cmd_bank(int argc, char *argv[])
                "poweron, merge, unmerge\n");
         return (1);
     }
-    if (strcmp(argv[1], "?") == 0) {
-        printf("  show                       Display all ROM bank information\n"
-               "  merge <start> <end>        Merge banks for larger ROMs\n"
-               "  unmerge <start> <end>      Unmerge banks\n"
-               "  name <bank> <text>         Set bank name (description)\n"
-               "  longreset <bank>[,<bank>]  Banks to sequence at long reset\n"
-               "  poweron <bank> [reboot]    Default bank at poweron\n"
-               "  current <bank> [reboot]    Force new bank immediately\n"
-               "  nextreset <bank> [reboot]  Force new bank at next reset\n");
-    } else if (strcmp(argv[1], "show") == 0) {
-        rom_bank_show();
-        return (0);
-    } else if (strcmp(argv[1], "current") == 0) {
-        flag_set_current_bank++;
-        opt = KS_BANK_SETCURRENT;
-    } else if (strcmp(argv[1], "poweron") == 0) {
-        flag_set_poweron_bank++;
-        opt = KS_BANK_SETPOWERON;
-    } else if (strcmp(argv[1], "longreset") == 0) {
-        flag_bank_longreset++;
-        opt = KS_CMD_BANK_LRESET;
-    } else if (strcmp(argv[1], "nextreset") == 0) {
-        flag_set_reset_bank++;
-        opt = KS_BANK_SETRESET;
-    } else if (strcmp(argv[1], "merge") == 0) {
-        flag_bank_merge++;
-    } else if (strcmp(argv[1], "unmerge") == 0) {
-        flag_bank_unmerge++;
-        opt = KS_BANK_UNMERGE;
-    } else if (strcmp(argv[1], "name") == 0) {
-        flag_set_bank_name++;
-    } else {
-        printf("Unknown argument -b '%s'\n", argv[1]);
-        return (1);
-    }
-    if (flag_set_bank_name) {
-        char argbuf[64];
-        if (argc != 4) {
-            printf("-b %s requires a <bank> number and \"name text\"\n",
-                   argv[1]);
-            return (1);
-        }
-        bank = atoi(argv[2]);
-        if (bank >= ROM_BANKS) {
-            printf("Bank %u is invalid (maximum bank is %u)\n",
-                   bank, ROM_BANKS - 1);
-            return (1);
-        }
-        arg = bank;
-        memcpy(argbuf, &arg, 2);
-        strncpy(argbuf + 2, argv[3], sizeof (argbuf) - 3);
-        argbuf[sizeof (argbuf) - 1] = '\0';
-        rc = send_cmd(KS_CMD_BANK_NAME, argbuf,
-                      strlen(argbuf + 2) + 3, NULL, 0, NULL);
-        if (rc != 0)
-            printf("Bank name set failed: %d %s\n", rc, smash_err(rc));
-        return (rc);
-    }
-    if (flag_bank_longreset) {
-        bank_info_t info;
-        uint8_t     banks[ROM_BANKS];
-        uint        cur;
-        uint        rlen;
+    for (arg = 1; arg < argc; arg++) {
+        ptr = long_to_short(argv[arg], long_to_short_bank,
+                            ARRAY_SIZE(long_to_short_bank));
+        if (*ptr == '-') {
+            for (++ptr; *ptr != '\0'; ptr++) {
+                switch (*ptr) {
+                    case 'c':  // current
+                        opt = KS_BANK_SETCURRENT;
+set_current_poweron_reset_bank:
+                        if (++arg >= argc) {
+                            printf("-b -%s requires a <bank> number to set\n",
+                                    ptr);
+                            return (1);
+                        }
+                        bank = atoi(argv[arg]);
+                        if (bank >= ROM_BANKS) {
+                            printf("Bank %u is invalid (maximum bank is %u)\n",
+                                   bank, ROM_BANKS - 1);
+                            return (1);
+                        }
 
-        rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, &info, sizeof (info), &rlen);
-        if (rc != 0) {
-            printf("Failed to get bank information: %d %s\n",
-                   rc, smash_err(rc));
-            return (rc);
-        }
+                        if (++arg < argc) {
+                            if (strcmp(argv[arg], "reboot") == 0) {
+                                opt |= KS_BANK_REBOOT;
+                            } else {
+                                printf("-b -%s only accepts \"reboot\" as an "
+                                       "option after bank number\n", ptr);
+                                return (1);
+                            }
+                        }
 
-        rc = 0;
-        for (cur = 0; cur < ROM_BANKS; cur++) {
-            if (cur + 2 < (uint) argc) {
-                uint sub;
-                bank = atoi(argv[cur + 2]);
-                if (bank >= ROM_BANKS) {
-                    printf("Bank %u is invalid (maximum bank is %u)\n",
-                           bank, ROM_BANKS - 1);
-                    rc++;
-                    continue;
+                        argval = bank;
+                        rc = send_cmd(KS_CMD_BANK_SET | opt, &argval,
+                                      sizeof (argval), NULL, 0, NULL);
+                        if (rc != 0) {
+                            printf("Bank set failed: %d %s\n",
+                                   rc, smash_err(rc));
+                        }
+                        return (rc);
+                    case 'h':  // help
+                        rc = 0;
+usage:
+                        printf("%s", cmd_bank_options);
+                        return (rc);
+                    case 'l': {  // longreset
+                        bank_info_t info;
+                        uint8_t     banks[ROM_BANKS];
+                        uint        cur;
+                        uint        rlen;
+
+                        rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, &info,
+                                      sizeof (info), &rlen);
+                        if (rc != 0) {
+                            printf("Failed to get bank information: %d %s\n",
+                                   rc, smash_err(rc));
+                            return (rc);
+                        }
+
+                        rc = 0;
+                        for (cur = 0; cur < ROM_BANKS; cur++) {
+                            if (++arg < argc) {
+                                uint sub;
+                                bank = atoi(argv[arg]);
+                                if (bank >= ROM_BANKS) {
+                                    printf("Bank %u is invalid (maximum bank "
+                                           "is %u)\n", bank, ROM_BANKS - 1);
+                                    rc++;
+                                    continue;
+                                }
+                                sub = info.bi_merge[bank] & 0x0f;
+                                if (sub != 0) {
+                                    printf("Bank %u is part of a merged bank, "
+                                           "but is not the first (use %u)\n",
+                                           bank, bank - sub);
+                                    rc++;
+                                }
+                                banks[cur] = bank;
+                            } else {
+                                banks[cur] = 0xff;
+                            }
+                        }
+                        if (rc != 0)
+                            return (rc);
+
+                        rc = send_cmd(KS_CMD_BANK_LRESET, &banks,
+                                      sizeof (banks), NULL, 0, NULL);
+                        if (rc != 0) {
+                            printf("Bank longreset failed: %d %s\n",
+                                   rc, smash_err(rc));
+                        }
+                        return (rc);
+                    }
+                    case 'm': {  // merge
+                        bank_info_t info;
+                        uint        count;
+                        uint        rlen;
+                        flag_bank_merge++;
+bank_merge_unmerge:
+                        if (++arg != argc - 2) {
+                            printf("-b -%s requires <start> and <end> bank "
+                                   "numbers (range)\n", ptr);
+                            return (1);
+                        }
+                        bank_start = atoi(argv[arg++]);
+                        bank_end   = atoi(argv[arg]);
+                        count = bank_end - bank_start + 1;
+                        if (bank_start > bank_end) {
+                            printf("bank %u is not less than end %u\n",
+                                   bank_start, bank_end);
+                            return (1);
+                        }
+                        if (bank_end >= ROM_BANKS) {
+                            printf("Bank %u is invalid (maximum bank is %u)\n",
+                                   bank_end, ROM_BANKS - 1);
+                            return (1);
+                        }
+                        if ((count != 1) && (count != 2) && (count != 4) &&
+                            (count != 8)) {
+                            printf("Bank sizes must be a power of 2 "
+                                   "(1, 2, 4, or 8 banks)\n");
+                            return (1);
+                        }
+                        if ((count == 2) && (bank_start & 1)) {
+                            printf("Two-bank ranges must start with an "
+                                   "even bank number (0, 2, 4, or 6)\n");
+                            return (1);
+                        }
+                        if ((count == 4) &&
+                            (bank_start != 0) && (bank_start != 4)) {
+                            printf("Four-bank ranges must start with either "
+                                   "bank 0 or bank 4\n");
+                            return (1);
+                        }
+                        if ((count == 8) && (bank_start != 0)) {
+                            printf("Eight-bank ranges must start with "
+                                   "bank 0\n");
+                            return (1);
+                        }
+
+                        rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0,
+                                      &info, sizeof (info), &rlen);
+                        if (rc != 0) {
+                            printf("Failed to get bank information: %d %s\n",
+                                   rc, smash_err(rc));
+                            return (rc);
+                        }
+                        for (bank = bank_start; bank <= bank_end; bank++) {
+                            if (flag_bank_merge && (info.bi_merge[bank] != 0)) {
+                                uint banks = (info.bi_merge[bank] >> 4) + 1;
+                                printf("Bank %u is already part of a%s %u "
+                                       "bank range\n",
+                                       bank, (banks == 8) ? "n" : "", banks);
+                                return (1);
+                            }
+                            if (flag_bank_unmerge &&
+                                (info.bi_merge[bank] == 0)) {
+                                printf("Bank %u is not part of a bank range\n",
+                                       bank);
+                                return (1);
+                            }
+                        }
+
+                        argval = bank_start | (bank_end << 8);
+                        rc = send_cmd(KS_CMD_BANK_MERGE | opt, &argval,
+                                      sizeof (argval), NULL, 0, NULL);
+                        if (rc != 0) {
+                            printf("Bank %smerge failed: %d %s\n",
+                                   (opt != 0) ? "un" : "", rc, smash_err(rc));
+                            return (rc);
+                        }
+                        break;
+                    }
+                    case 'n': {  // name
+                        char argbuf[64];
+                        if (++arg != argc - 2) {
+                            printf("-b %s requires a <bank> number and "
+                                   "\"name text\"\n", argv[1]);
+                            return (1);
+                        }
+                        bank = atoi(argv[arg]);
+                        if (bank >= ROM_BANKS) {
+                            printf("Bank %u is invalid (maximum bank is %u)\n",
+                                   bank, ROM_BANKS - 1);
+                            return (1);
+                        }
+                        argval = bank;
+                        memcpy(argbuf, &argval, 2);
+                        strncpy(argbuf + 2, argv[++arg], sizeof (argbuf) - 3);
+                        argbuf[sizeof (argbuf) - 1] = '\0';
+                        rc = send_cmd(KS_CMD_BANK_NAME, argbuf,
+                                      strlen(argbuf + 2) + 3, NULL, 0, NULL);
+                        if (rc != 0) {
+                            printf("Bank name set failed: %d %s\n",
+                                   rc, smash_err(rc));
+                        }
+                        return (rc);
+                    }
+                    case 'N':  // nextreset
+                        opt = KS_BANK_SETRESET;
+                        goto set_current_poweron_reset_bank;
+                    case 'p':  // poweron
+                        opt = KS_BANK_SETPOWERON;
+                        goto set_current_poweron_reset_bank;
+                    case 's':  // show
+                        rom_bank_show();
+                        return (0);
+                    case 'u':  // unmerge
+                        flag_bank_unmerge++;
+                        opt = KS_BANK_UNMERGE;
+                        goto bank_merge_unmerge;
+                    default:
+                        printf("Unknown argument %s \"-%s\"\n",
+                               argv[0], ptr);
+                        goto usage;
                 }
-                sub = info.bi_merge[bank] & 0x0f;
-                if (sub != 0) {
-                    printf("Bank %u is part of a merged bank, but is not the "
-                           "first (use %u)\n", bank, bank - sub);
-                    rc++;
-                }
-                banks[cur] = bank;
-            } else {
-                banks[cur] = 0xff;
             }
-        }
-        if (rc != 0)
-            return (rc);
-
-        rc = send_cmd(KS_CMD_BANK_LRESET, &banks, sizeof (banks),
-                      NULL, 0, NULL);
-        if (rc != 0)
-            printf("Bank longreset failed: %d %s\n", rc, smash_err(rc));
-        return (rc);
-    }
-    if (flag_set_current_bank || flag_set_poweron_bank || flag_set_reset_bank) {
-        if ((argc != 3) && (argc != 4)) {
-            printf("-b %s requires a <bank> number to set\n", argv[1]);
-            return (1);
-        }
-        if (argc == 4) {
-            if (strcmp(argv[3], "reboot") == 0) {
-                opt |= KS_BANK_REBOOT;
-            } else {
-                printf("-b %s only accepts \"reboot\" as an option "
-                       "after bank number\n", argv[1]);
-                return (1);
-            }
-        }
-
-        bank = atoi(argv[2]);
-        if (bank >= ROM_BANKS) {
-            printf("Bank %u is invalid (maximum bank is %u)\n",
-                   bank, ROM_BANKS - 1);
-            return (1);
-        }
-
-        arg = bank;
-        rc = send_cmd(KS_CMD_BANK_SET | opt, &arg, sizeof (arg), NULL, 0, NULL);
-        if (rc != 0)
-            printf("Bank set failed: %d %s\n", rc, smash_err(rc));
-        return (rc);
-    }
-    if (flag_bank_merge || flag_bank_unmerge) {
-        bank_info_t info;
-        uint        count;
-        uint        rlen;
-        if (argc != 4) {
-            printf("-b %s requires <start> and <end> bank numbers (range)\n",
-                   argv[1]);
-            return (1);
-        }
-        bank_start = atoi(argv[2]);
-        bank_end   = atoi(argv[3]);
-        count = bank_end - bank_start + 1;
-        if (bank_start > bank_end) {
-            printf("bank %u is not less than end %u\n", bank_start, bank_end);
-            return (1);
-        }
-        if (bank_end >= ROM_BANKS) {
-            printf("Bank %u is invalid (maximum bank is %u)\n",
-                   bank_end, ROM_BANKS - 1);
-            return (1);
-        }
-        if ((count != 1) && (count != 2) && (count != 4) && (count != 8)) {
-            printf("Bank sizes must be a power of 2 (1, 2, 4, or 8 banks)\n");
-            return (1);
-        }
-        if ((count == 2) && (bank_start & 1)) {
-            printf("Two-bank ranges must start with an even bank number "
-                   "(0, 2, 4, or 6)\n");
-            return (1);
-        }
-        if ((count == 4) && (bank_start != 0) && (bank_start != 4)) {
-            printf("Four-bank ranges must start with either bank 0 or "
-                   "bank 4\n");
-            return (1);
-        }
-        if ((count == 8) && (bank_start != 0)) {
-            printf("Eight-bank ranges must start with bank 0\n");
-            return (1);
-        }
-
-        rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, &info, sizeof (info), &rlen);
-        if (rc != 0) {
-            printf("Failed to get bank information: %d %s\n",
-                   rc, smash_err(rc));
-            return (rc);
-        }
-        for (bank = bank_start; bank <= bank_end; bank++) {
-            if (flag_bank_merge && (info.bi_merge[bank] != 0)) {
-                uint banks = (info.bi_merge[bank] >> 4) + 1;
-                printf("Bank %u is already part of a%s %u bank range\n",
-                       bank, (banks == 8) ? "n" : "", banks);
-                return (1);
-            }
-            if (flag_bank_unmerge && (info.bi_merge[bank] == 0)) {
-                printf("Bank %u is not part of a bank range\n", bank);
-                return (1);
-            }
-        }
-
-        arg = bank_start | (bank_end << 8);
-        rc = send_cmd(KS_CMD_BANK_MERGE | opt, &arg, sizeof (arg),
-                      NULL, 0, NULL);
-        if (rc != 0) {
-            printf("Bank %smerge failed: %d %s\n",
-                   (opt != 0) ? "un" : "", rc, smash_err(rc));
-            return (rc);
+        } else {
+            printf("Unknown argument %s \"%s\"\n",
+                   argv[0], ptr);
+            goto usage;
         }
     }
     return (0);
@@ -2493,105 +2613,126 @@ cmd_readwrite(int argc, char *argv[])
     else
         readmode = 1;
 
-    for (arg = 1; arg < argc; ) {
-        ptr = argv[arg++];
-        if ((strcmp(ptr, "?") == 0) || (strcmp(ptr, "help") == 0)) {
-            rc = 0;
+    for (arg = 1; arg < argc; arg++) {
+        ptr = long_to_short(argv[arg], long_to_short_readwrite,
+                            ARRAY_SIZE(long_to_short_readwrite));
+        if (*ptr == '-') {
+            for (++ptr; *ptr != '\0'; ptr++) {
+                switch (*ptr) {
+                    case 'a':  // addr
+                        if (++arg > argc) {
+                            printf("smash %s %s requires an option\n",
+                                   argv[0], ptr);
+                            goto usage;
+                        }
+                        pos = 0;
+                        if ((sscanf(argv[arg], "%x%n", &addr, &pos) != 1) ||
+                            (pos == 0) || (argv[arg][pos] != '\0')) {
+                            printf("Invalid argument \"%s\" for %s %s\n",
+                                   argv[arg], argv[0], ptr);
+                            goto usage;
+                        }
+                        break;
+                    case 'b':  // bank
+                        if (++arg > argc) {
+                            printf("smash %s %s requires an option\n",
+                                   argv[0], ptr);
+                            goto usage;
+                        }
+                        pos = 0;
+                        if ((sscanf(argv[arg], "%x%n", &bank, &pos) != 1) ||
+                            (pos == 0) || (argv[arg][pos] != '\0') ||
+                            (bank >= ROM_BANKS)) {
+                            printf("Invalid argument \"%s\" for %s %s\n",
+                                   argv[arg], argv[0], ptr);
+                            goto usage;
+                        }
+                        break;
+                    case 'D':  // debug
+                        flag_debug++;
+                        break;
+                    case 'd':  // dump
+                        flag_dump++;
+                        break;
+                    case 'f':  // file
+                        if (++arg > argc) {
+                            printf("smash %s %s requires an option\n",
+                                   argv[0], ptr);
+                            goto usage;
+                        }
+                        filename = argv[arg];
+                        if (strcmp(filename, "-") == 0)
+                            file_is_stdio++;
+                        break;
+                    case 'h':  // help
+                        rc = 0;
 usage:
-            if (writemode)
-                printf("%s", cmd_write_options);
-            else if (readmode)
-                printf("%s", cmd_read_options);
-            else
-                printf("%s", cmd_verify_options);
-            return (rc);
-        } else if ((strncmp(ptr, "addr", 4) == 0) || (strcmp(ptr, "-a") == 0)) {
-            if (arg + 1 > argc) {
-                printf("smash %s %s requires an option\n", argv[0], ptr);
-                goto usage;
+                        if (writemode)
+                            printf("%s", cmd_write_options);
+                        else if (readmode)
+                            printf("%s", cmd_read_options);
+                        else
+                            printf("%s", cmd_verify_options);
+                        return (rc);
+                    case 'l':  // length
+                        if (++arg > argc) {
+                            printf("smash %s %s requires an option\n",
+                                   argv[0], ptr);
+                            goto usage;
+                        }
+                        pos = 0;
+                        if ((sscanf(argv[arg], "%x%n", &len, &pos) != 1) ||
+                            (pos == 0) || (argv[arg][pos] != '\0')) {
+                            printf("Invalid argument \"%s\" for %s %s\n",
+                                   argv[arg], argv[0], ptr);
+                            goto usage;
+                        }
+                        break;
+                    case 's':  // swap
+                        if (++arg > argc) {
+                            printf("smash %s %s requires an option\n",
+                                   argv[0], ptr);
+                            goto usage;
+                        }
+                        if ((strcasecmp(argv[arg], "a3000") == 0) ||
+                            (strcasecmp(argv[arg], "a4000") == 0) ||
+                            (strcasecmp(argv[arg], "a3000t") == 0) ||
+                            (strcasecmp(argv[arg], "a4000t") == 0) ||
+                            (strcasecmp(argv[arg], "a1200") == 0)) {
+                            swapmode = SWAPMODE_A3000;
+                            break;
+                        }
+                        if ((strcasecmp(argv[arg], "a500") == 0) ||
+                            (strcasecmp(argv[arg], "a600") == 0) ||
+                            (strcasecmp(argv[arg], "a1000") == 0) ||
+                            (strcasecmp(argv[arg], "a2000") == 0) ||
+                            (strcasecmp(argv[arg], "cdtv") == 0)) {
+                            swapmode = SWAPMODE_A500;
+                            break;
+                        }
+                        pos = 0;
+                        if ((sscanf(argv[arg], "%u%n", &swapmode, &pos) != 1) ||
+                            (pos == 0) || (argv[arg][pos] != '\0') ||
+                            ((swapmode != 0123) && (swapmode != 1032) &&
+                             (swapmode != 2301) && (swapmode != 3210))) {
+                            printf("Invalid argument \"%s\" for %s %s\n",
+                                   argv[arg], argv[0], ptr);
+                            printf("Use 1032, 2301, or 3210\n");
+                            return (1);
+                        }
+                        break;
+                    case 'v':  // verify
+                        verifymode++;
+                        break;
+                    case 'y':  // yes
+                        flag_yes++;
+                        break;
+                    default:
+                        printf("Unknown argument %s \"-%s\"\n",
+                               argv[0], ptr);
+                        goto usage;
+                }
             }
-            pos = 0;
-            if ((sscanf(argv[arg], "%x%n", &addr, &pos) != 1) || (pos == 0)) {
-                printf("Invalid argument \"%s\" for %s %s\n",
-                       argv[arg], argv[0], ptr);
-                goto usage;
-            }
-            arg++;
-        } else if ((strcmp(ptr, "bank") == 0) || (strcmp(ptr, "-b") == 0)) {
-            if (arg + 1 > argc) {
-                printf("smash %s %s requires an option\n", argv[0], ptr);
-                goto usage;
-            }
-            pos = 0;
-            if ((sscanf(argv[arg], "%x%n", &bank, &pos) != 1) || (pos == 0) ||
-                (bank >= ROM_BANKS)) {
-                printf("Invalid argument \"%s\" for %s %s\n",
-                       argv[arg], argv[0], ptr);
-                goto usage;
-            }
-            arg++;
-        } else if ((strncmp(ptr, "deb", 3) == 0) || (strcmp(ptr, "-D") == 0)) {
-            flag_debug++;
-        } else if ((strcmp(ptr, "dump") == 0) || (strcmp(ptr, "-d") == 0)) {
-            flag_dump++;
-        } else if ((strcmp(ptr, "file") == 0) || (strcmp(ptr, "-f") == 0)) {
-            if (arg + 1 > argc) {
-                printf("smash %s %s requires an option\n", argv[0], ptr);
-                goto usage;
-            }
-            filename = argv[arg];
-            if (strcmp(filename, "-") == 0)
-                file_is_stdio++;
-            arg++;
-        } else if ((strncmp(ptr, "len", 3) == 0) || (strcmp(ptr, "-l") == 0)) {
-            if (arg + 1 > argc) {
-                printf("smash %s %s requires an option\n", argv[0], ptr);
-                goto usage;
-            }
-            pos = 0;
-            if ((sscanf(argv[arg], "%x%n", &len, &pos) != 1) ||
-                (pos == 0) || (argv[arg][pos] != '\0')) {
-                printf("Invalid argument \"%s\" for %s %s\n",
-                       argv[arg], argv[0], ptr);
-                goto usage;
-            }
-            arg++;
-        } else if ((strncmp(ptr, "swap", 3) == 0) || (strcmp(ptr, "-s") == 0)) {
-            if (arg + 1 > argc) {
-                printf("smash %s %s requires an option\n", argv[0], ptr);
-                goto usage;
-            }
-            pos = 0;
-            if ((strcasecmp(argv[arg], "a3000") == 0) ||
-                (strcasecmp(argv[arg], "a4000") == 0) ||
-                (strcasecmp(argv[arg], "a3000t") == 0) ||
-                (strcasecmp(argv[arg], "a4000t") == 0) ||
-                (strcasecmp(argv[arg], "a1200") == 0)) {
-                swapmode = SWAPMODE_A3000;
-                break;
-            }
-            if ((strcasecmp(argv[arg], "a500") == 0) ||
-                (strcasecmp(argv[arg], "a600") == 0) ||
-                (strcasecmp(argv[arg], "a1000") == 0) ||
-                (strcasecmp(argv[arg], "a2000") == 0) ||
-                (strcasecmp(argv[arg], "cdtv") == 0)) {
-                swapmode = SWAPMODE_A500;
-                break;
-            }
-            if ((sscanf(argv[arg], "%u%n", &swapmode, &pos) != 1) ||
-                (pos == 0) || (argv[arg][pos] != '\0') ||
-                ((swapmode != 0123) && (swapmode != 1032) &&
-                 (swapmode != 2301) && (swapmode != 3210))) {
-                printf("Invalid argument \"%s\" for %s %s\n",
-                       argv[arg], argv[0], ptr);
-                printf("Use 1032, 2301, or 3210\n");
-                return (1);
-            }
-            arg++;
-        } else if ((strcmp(ptr, "verify") == 0) || (strcmp(ptr, "-v") == 0)) {
-            verifymode = 1;
-        } else if ((strncmp(ptr, "yes", 3) == 0) || (strcmp(ptr, "-y") == 0)) {
-            flag_yes++;
         } else {
             printf("Unknown argument %s \"%s\"\n",
                    argv[0], ptr);
@@ -2980,55 +3121,71 @@ cmd_erase(int argc, char *argv[])
     int         arg;
     int         pos;
 
-    for (arg = 1; arg < argc; ) {
-        ptr = argv[arg++];
-        if ((strcmp(ptr, "?") == 0) || (strcmp(ptr, "help") == 0)) {
-            rc = 0;
+    for (arg = 1; arg < argc; arg++) {
+        ptr = long_to_short(argv[arg], long_to_short_erase,
+                            ARRAY_SIZE(long_to_short_erase));
+        if (*ptr == '-') {
+            for (++ptr; *ptr != '\0'; ptr++) {
+                switch (*ptr) {
+                    case 'a':  // addr
+                        if (++arg > argc) {
+                            printf("smash %s %s requires an option\n",
+                                   argv[0], ptr);
+                            goto usage;
+                        }
+                        pos = 0;
+                        if ((sscanf(argv[arg], "%x%n", &addr, &pos) != 1) ||
+                            (pos == 0) || (argv[arg][pos] != '\0')) {
+                            printf("Invalid argument \"%s\" for %s %s\n",
+                                   argv[arg], argv[0], ptr);
+                            goto usage;
+                        }
+                        break;
+                    case 'b':  // bank
+                        if (++arg > argc) {
+                            printf("smash %s %s requires an option\n",
+                                   argv[0], ptr);
+                            goto usage;
+                        }
+                        pos = 0;
+                        if ((sscanf(argv[arg], "%x%n", &bank, &pos) != 1) ||
+                            (pos == 0) || (argv[arg][pos] != '\0') ||
+                            (bank >= ROM_BANKS)) {
+                            printf("Invalid argument \"%s\" for %s %s\n",
+                                   argv[arg], argv[0], ptr);
+                            goto usage;
+                        }
+                        break;
+                    case 'd':  // debug
+                        flag_debug++;
+                        break;
+                    case 'h':  // help
+                        rc = 0;
 usage:
-            printf("%s", cmd_erase_options);
-            return (rc);
-        } else if ((strncmp(ptr, "addr", 4) == 0) || (strcmp(ptr, "-a") == 0)) {
-            if (arg + 1 > argc) {
-                printf("smash %s %s requires an option\n", argv[0], ptr);
-                goto usage;
+                        printf("%s", cmd_erase_options);
+                        return (rc);
+                    case 'l':  // length
+                        if (++arg > argc) {
+                            printf("smash %s %s requires an option\n",
+                                   argv[0], ptr);
+                        }
+                        pos = 0;
+                        if ((sscanf(argv[arg], "%x%n", &len, &pos) != 1) ||
+                            (pos == 0) || (argv[arg][pos] != '\0')) {
+                            printf("Invalid argument \"%s\" for %s %s\n",
+                                   argv[arg], argv[0], ptr);
+                            goto usage;
+                        }
+                        break;
+                    case 'y':  // yes
+                        flag_yes++;
+                        break;
+                    default:
+                        printf("Unknown argument %s \"-%s\"\n",
+                               argv[0], ptr);
+                        goto usage;
+                }
             }
-            pos = 0;
-            if ((sscanf(argv[arg], "%x%n", &addr, &pos) != 1) || (pos == 0)) {
-                printf("Invalid argument \"%s\" for %s %s\n",
-                       argv[arg], argv[0], ptr);
-                goto usage;
-            }
-            arg++;
-        } else if ((strcmp(ptr, "bank") == 0) || (strcmp(ptr, "-b") == 0)) {
-            if (arg + 1 > argc) {
-                printf("smash %s %s requires an option\n", argv[0], ptr);
-                goto usage;
-            }
-            pos = 0;
-            if ((sscanf(argv[arg], "%x%n", &bank, &pos) != 1) || (pos == 0) ||
-                (bank >= ROM_BANKS)) {
-                printf("Invalid argument \"%s\" for %s %s\n",
-                       argv[arg], argv[0], ptr);
-                goto usage;
-            }
-            arg++;
-        } else if ((strncmp(ptr, "deb", 3) == 0) || (strcmp(ptr, "-d") == 0)) {
-            flag_debug++;
-        } else if ((strncmp(ptr, "len", 3) == 0) || (strcmp(ptr, "-l") == 0)) {
-            if (arg + 1 > argc) {
-                printf("smash %s %s requires an option\n", argv[0], ptr);
-                goto usage;
-            }
-            pos = 0;
-            if ((sscanf(argv[arg], "%x%n", &len, &pos) != 1) ||
-                (pos == 0) || (argv[arg][pos] != '\0')) {
-                printf("Invalid argument \"%s\" for %s %s\n",
-                       argv[arg], argv[0], ptr);
-                goto usage;
-            }
-            arg++;
-        } else if ((strncmp(ptr, "yes", 3) == 0) || (strcmp(ptr, "-y") == 0)) {
-            flag_yes++;
         } else {
             printf("Unknown argument %s \"%s\"\n",
                    argv[0], ptr);
@@ -3177,6 +3334,203 @@ usage:
     return (rc);
 }
 
+static int
+OpenTimer(void)
+{
+    int rc;
+
+    rc = OpenDevice((STRPTR)TIMERNAME, UNIT_MICROHZ,
+                    (struct IORequest *) &TimeRequest, 0L);
+    if (rc != 0) {
+        printf("Timer open failed\n");
+        return (rc);
+    }
+
+    TimerBase = (struct Device *) TimeRequest.tr_node.io_Device;
+    return (0);
+}
+
+static void
+CloseTimer(void)
+{
+    CloseDevice((struct IORequest *) &TimeRequest);
+    TimerBase = NULL;
+}
+
+static void
+setsystime(uint sec, uint usec)
+{
+    TimeRequest.tr_node.io_Command = TR_SETSYSTIME;
+    TimeRequest.tr_time.tv_secs = sec;
+    TimeRequest.tr_time.tv_micro = usec;
+    DoIO((struct IORequest *) &TimeRequest);
+}
+
+static uint
+getsystime(uint *usec)
+{
+    TimeRequest.tr_node.io_Command = TR_GETSYSTIME;
+    DoIO((struct IORequest *) &TimeRequest);
+    *usec = TimeRequest.tr_time.tv_micro;
+    return (TimeRequest.tr_time.tv_secs);
+}
+
+static void
+showdatestamp(struct DateStamp *ds, uint usec)
+{
+    struct DateTime  dtime;
+    char             datebuf[32];
+    char             timebuf[32];
+
+    dtime.dat_Stamp.ds_Days   = ds->ds_Days;
+    dtime.dat_Stamp.ds_Minute = ds->ds_Minute;
+    dtime.dat_Stamp.ds_Tick   = ds->ds_Tick;
+    dtime.dat_Format          = FORMAT_DOS;
+    dtime.dat_Flags           = 0x0;
+    dtime.dat_StrDay          = NULL;
+    dtime.dat_StrDate         = datebuf;
+    dtime.dat_StrTime         = timebuf;
+    DateToStr(&dtime);
+    printf("%s %s.%06u\n", datebuf, timebuf, usec);
+}
+
+static void
+showsystime(uint sec, uint usec)
+{
+    struct DateStamp ds;
+    uint min  = sec / 60;
+    uint day  = min / (24 * 60);
+
+    ds.ds_Days   = day;
+    ds.ds_Minute = min % (24 * 60);
+    ds.ds_Tick   = (sec % 60) * TICKS_PER_SECOND;
+    showdatestamp(&ds, usec);
+}
+
+uint
+get_ks_clock(uint *sec, uint *usec)
+{
+    uint ks_clock[2];
+    uint rc;
+    uint rlen;
+
+    rc = send_cmd(KS_CMD_CLOCK, NULL, 0, &ks_clock, sizeof (ks_clock), &rlen);
+    if (rc != 0) {
+        printf("Get clock failed: %d (%s)\n", rc, smash_err(rc));
+        if (flag_debug)
+            dump_memory(clock, sizeof (clock), VALUE_UNASSIGNED);
+        *sec = 0;
+        *usec = 0;
+    } else {
+        *sec  = ks_clock[0];
+        *usec = ks_clock[1];
+    }
+    return (rc);
+}
+
+uint
+set_ks_clock(uint sec, uint usec, uint flags)
+{
+    uint cmd = KS_CMD_CLOCK | (flags ? KS_CLOCK_SET_IFNOT : KS_CLOCK_SET);
+    uint ks_clock[2];
+    uint rc;
+
+    ks_clock[0] = sec;
+    ks_clock[1] = usec;
+
+    rc = send_cmd(cmd, ks_clock, sizeof (ks_clock), NULL, 0, NULL);
+    if (rc != 0)
+        printf("Set clock failed: %d (%s)\n", rc, smash_err(rc));
+    return (rc);
+}
+
+static int
+cmd_clock(int argc, char *argv[])
+{
+    int         arg;
+    uint        rc = 1;
+    uint        flag_load = 0;
+    uint        flag_load_if_set = 0;
+    uint        flag_save = 0;
+    uint        flag_save_if_not_set = 0;
+    uint        flag_show = 0;
+    uint        sec;
+    uint        usec;
+    const char *ptr;
+    for (arg = 1; arg < argc; ) {
+        ptr = long_to_short(argv[arg++], long_to_short_clock,
+                            ARRAY_SIZE(long_to_short_clock));
+        if (*ptr == '-') {
+            for (++ptr; *ptr != '\0'; ptr++) {
+                switch (*ptr) {
+                    case 'l':  // load
+                        flag_load++;
+                        break;
+                    case 'L':  // load if set
+                        flag_load_if_set++;
+                        break;
+                    case 'n':  // save if not set
+                        flag_save_if_not_set++;
+                        break;
+                    case 's':  // save
+                        flag_save++;
+                        break;
+                    case 'S':  // show
+                        flag_show++;
+                        break;
+                    default:
+                        printf("Unknown argument %s \"-%s\"\n",
+                               argv[0], ptr);
+                        goto usage;
+                }
+            }
+        } else {
+            printf("Unknown argument %s \"%s\"\n",
+                   argv[0], ptr);
+usage:
+            printf("%s", cmd_clock_options);
+            return (rc);
+        }
+    }
+    if ((flag_load == 0) && (flag_save == 0) && (flag_save_if_not_set == 0))
+        flag_show++;
+
+    if (flag_load || flag_load_if_set) {
+        if ((rc = get_ks_clock(&sec, &usec)) != 0)
+            return (rc);
+        if ((sec == 0) && (usec == 0)) {
+            if (flag_load_if_set)
+                return (0);
+            printf("KS does not know the current time\n");
+            return (1);
+        }
+        showsystime(sec, usec);
+        if (OpenTimer())
+            return (1);
+        setsystime(sec, usec);
+        CloseTimer();
+    }
+    if (flag_save || flag_save_if_not_set) {
+        if (OpenTimer())
+            return (1);
+        sec = getsystime(&usec);
+        CloseTimer();
+        showsystime(sec, usec);
+        if ((rc = set_ks_clock(sec, usec, flag_save_if_not_set)) != 0)
+            return (rc);
+    }
+    if (flag_show) {
+        if ((rc = get_ks_clock(&sec, &usec)) != 0)
+            return (rc);
+        if ((sec == 0) && (usec == 0)) {
+            printf("KS does not know the current time\n");
+            return (1);
+        }
+        showsystime(sec, usec);
+    }
+    return (0);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -3199,12 +3553,16 @@ main(int argc, char *argv[])
     cpu_type = get_cpu();
 
     for (arg = 1; arg < argc; arg++) {
-        char *ptr = argv[arg];
+        const char *ptr;
+        ptr = long_to_short(argv[arg], long_to_short_main,
+                            ARRAY_SIZE(long_to_short_main));
         if (*ptr == '-') {
             for (++ptr; *ptr != '\0'; ptr++) {
                 switch (*ptr) {
                     case 'b':  // bank
                         exit(cmd_bank(argc - arg, argv + arg));
+                    case 'c':  // clock
+                        exit(cmd_clock(argc - arg, argv + arg));
                     case 'd':  // debug
                         flag_debug++;
                         break;

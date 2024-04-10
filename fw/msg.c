@@ -93,6 +93,7 @@ static uint     consumer_wrap;
 static uint     consumer_wrap_last_poll;
 static uint     rx_consumer = 0;
 static uint     message_count = 0;
+static uint64_t amiga_time = 0;     // Seconds and microseconds
 
 /* Message interface through Kicksmash between Amiga and USB host */
 static uint     prod_atou;   // Producer for Amiga -> USB buffer
@@ -1115,7 +1116,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     cons_s = 0;
             }
             for (bank = 0; bank < ROM_BANKS; bank++) {
-                if ((banks[bank] >= ROM_BANKS) && (banks[bank] != 0xff))
+                if (banks[bank] == 0xff)
+                    continue;
+                if (banks[bank] >= ROM_BANKS)
                     break;  // Invalid position
                 if ((config.bi.bi_merge[banks[bank]] & 0x0f) != 0)
                     break;  // Not start of bank
@@ -1283,6 +1286,50 @@ printf("nd%s\n", (cmd & KS_MSG_ALTBUF) ? " alt" : "");
                 msg_lock |= lockbits;
             }
             ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            break;
+        }
+        case KS_CMD_CLOCK: {
+            uint64_t  now  = timer_tick_get();
+            uint64_t  usec = timer_tick_to_usec(now);
+
+            if (cmd & (KS_CLOCK_SET | KS_CLOCK_SET_IFNOT)) {
+                uint     pos;
+                uint16_t adata[4];
+                uint32_t t_usec;
+                uint32_t t_sec;
+
+                if (cmd_len != 8) {
+                    ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                    break;
+                }
+
+                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+                if ((int) cons_s < 0)
+                    cons_s += ARRAY_SIZE(buffer_rxa_lo);
+                for (pos = 0; pos < 4; pos++) {
+                    adata[pos] = buffer_rxa_lo[cons_s];
+                    if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
+                        cons_s = 0;
+                }
+                t_sec  = (adata[0] << 16) | adata[1];
+                t_usec = (adata[2] << 16) | adata[3];
+                if (((cmd & KS_CLOCK_SET_IFNOT) == 0) || (amiga_time == 0))
+                    amiga_time = t_sec * 1000000ULL + t_usec - usec;
+                ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            } else {
+                uint am_time[2];
+                if (amiga_time == 0) {
+                    am_time[0] = 0;
+                    am_time[1] = 0;
+                } else {
+                    uint64_t both   = usec + amiga_time;
+                    uint32_t t_usec = both % 1000000;
+                    uint32_t t_sec  = both / 1000000;
+                    am_time[0] = SWAP32(t_sec);
+                    am_time[1] = SWAP32(t_usec);
+                }
+                ks_reply(0, KS_STATUS_OK, sizeof (am_time), &am_time, 0, NULL);
+            }
             break;
         }
         default:
