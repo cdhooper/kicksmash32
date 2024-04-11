@@ -580,7 +580,7 @@ usb_enable_interrupts(void)
 #endif /* USING_USB_INTERRUPT */
 
 __attribute__((aligned(4)))
-static uint8_t usb_serial_str[32];
+uint8_t usb_serial_str[32];
 usbd_device   *usbd_gdev = NULL;
 
 void

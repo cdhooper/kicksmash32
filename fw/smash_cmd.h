@@ -31,6 +31,7 @@
 #define KS_CMD_BANK_NAME     0x13  // Set a bank name
 #define KS_CMD_BANK_LRESET   0x14  // Set bank longreset sequence
 #define KS_CMD_CLOCK         0x18  // Get or set Amiga format time (sec + usec)
+#define KS_CMD_APP_STATE     0x19  // Application state
 #define KS_CMD_MSG_INFO      0x20  // Query message queue sizes
 #define KS_CMD_MSG_SEND      0x21  // Send a remote message
 #define KS_CMD_MSG_RECEIVE   0x22  // Receive a remote message
@@ -63,6 +64,8 @@
 #define KS_CLOCK_SET       0x0100  // Set Amiga-relative clock
 #define KS_CLOCK_SET_IFNOT 0x0200  // Set Amiga-relative clock only if not set
 
+#define KS_APP_STATE_SET   0x0100  // Update Amiga-side app state
+
 #define KS_HDR_AND_CRC_LEN (8 + 2 + 2 + 4)  // Magic+Len+Cmd+CRC = 16 bytes
 
 /*
@@ -94,7 +97,7 @@
  *        No operation but response indicating success is given
  *   KS_CMD_ID
  *        Provides identification information of Kicksmash, including
- *        firwmare version and compile options.
+ *        firwmare version and compile options. See smash_id_t.
  *   KS_CMD_TESTPATT
  *        Kicksmash will send a test pattern which includes 28x 32-bit
  *        values which test all bit values and many combinations.
@@ -180,14 +183,31 @@
  *        unless a set has been performed since the last powercycle or
  *        Kicksmash reset (KS_CLOCK_SET option). Use KS_CLOCK_SET_IFNOT to
  *        optionall set if it's not already set.
+ *   KS_CMD_APP_STATE
+ *        Get application state information which is shared between Amiga
+ *        and USB. Each is a 16-bit value:
+ *              uint16_t app_state_amiga;
+ *              uint16_t app_state_usb;
+ *        A given side's values will be automatically reset to zero if not
+ *        updated by that side within 10 seconds (no bits need to change on
+ *        the update).
+ *        Add KS_APP_STATE_SET flag to instead update Amiga application state
+ *        (provide a value of bits to affect, the new value, and optional
+ *        expiration):
+ *              uint16_t amiga_bits_to_affect;
+ *              uint16_t amiga_new_bits;
+ *              uint16_t expire_msec;  // Time until expiration <= 65 seconds
+ *        If expiration is not provided, it will default to 10 seconds.
  *   KS_CMD_MSG_INFO
  *        A structure is returned with message buffer space in use and
  *        space available for both the Amiga -> USB Host (atou)
  *        and USB Host -> Amiga (utoa) buffers.
- *              uint16_t atou_inuse;
- *              uint16_t atou_avail;
- *              uint16_t utoa_inuse;
- *              uint16_t utoa_avail;
+ *              uint16_t smi_atou_inuse;
+ *              uint16_t smi_atou_avail;
+ *              uint16_t smi_utoa_inuse;
+ *              uint16_t smi_utoa_avail;
+ *              uint16_t smi_app_state_amiga;
+ *              uint16_t smi_app_state_usb;
  *   KS_CMD_MSG_SEND
  *        Any data provided, including Header and CRC, is sent to the USB host.
  *   KS_CMD_MSG_RECV
@@ -216,14 +236,16 @@ typedef struct {
 } bank_info_t;
 
 typedef struct {
-    uint32_t si_rev;                     // Protocol revision (xxxx 00.01)
-    uint32_t si_usbid;                   // USB id (0x12091610)
-    uint32_t si_ks_version;              // Kicksmash version
+    uint16_t si_ks_version[2];           // Kicksmash version    (major-minor)
     uint8_t  si_ks_date[4];              // Kicksmash build date (cc-yy-mm-dd)
     uint8_t  si_ks_time[4];              // Kicksmash build time (hh-mm-ss-00)
-    uint32_t si_features;                // Available features
-    uint8_t  si_unused[16];              // Unused space
-    // XXX: Add name, 16-bit or 32-bit mode
+    char     si_serial[24];              // Kicksmash serial number
+    uint16_t si_features;                // Available features
+    uint16_t si_rev;                     // Protocol revision (00.01)
+    uint32_t si_usbid;                   // USB id (0x12091610)
+    char     si_name[16];                // Unique name for this board
+    uint8_t  si_mode;                    // ROM mode (0=32-bit, 1=16-bit)
+    uint8_t  si_unused[27];              // Unused space
 } smash_id_t;
 
 typedef struct {
@@ -231,6 +253,9 @@ typedef struct {
     uint16_t smi_atou_avail;             // Amiga -> USB buffer bytes free
     uint16_t smi_utoa_inuse;             // USB -> Amiga buffer bytes in use
     uint16_t smi_utoa_avail;             // USB -> Amiga buffer bytes free
+    uint16_t smi_state_amiga;            // Amiga connection state
+    uint16_t smi_state_usb;              // USB host connection state
+    uint8_t  smi_unused[16];             // Unused space
 } smash_msg_info_t;
 
 #endif /* _SMASH_H */

@@ -1026,34 +1026,44 @@ smash_time(void)
 static uint
 smash_identify(void)
 {
-    uint64_t usecs;
-    uint     sec;
-    uint     usec;
-    uint32_t reply_buf[30];
-    uint rlen;
-    uint rc;
+    uint64_t   usecs;
+    uint       sec;
+    uint       usec;
+    smash_id_t id;
+    uint       rlen;
+    uint       rc;
+
+    memset(&id, 0, sizeof (id));
+    rc = send_cmd(KS_CMD_ID, NULL, 0, &id, sizeof (id), &rlen);
+
+    if (rc != 0) {
+        printf("Reply message failure: %d (%s)\n", (int) rc, smash_err(rc));
+        if (flag_debug)
+            dump_memory(&id, rlen, VALUE_UNASSIGNED);
+        return (rc);
+    }
+    if (flag_quiet == 0) {
+        printf("ID\n");
+        printf("  Kicksmash %u.%u built %02u%02u-%02u-%02u %02u:%02u:%02u\n",
+               id.si_ks_version[0], id.si_ks_version[1],
+               id.si_ks_date[0], id.si_ks_date[1],
+               id.si_ks_date[2], id.si_ks_date[3],
+               id.si_ks_time[0], id.si_ks_time[1], id.si_ks_time[2]);
+        printf("  USB %08x  Serial \"%s\"  Name \"%s\"\n",
+               id.si_usbid, id.si_serial, id.si_name);
+        printf("  Mode: %s\n",
+               (id.si_mode == 0) ? "32-bit" :
+               (id.si_mode == 1) ? "16-bit" :
+               (id.si_mode == 2) ? "16-bit high" : "unknown");
+    }
 
     usecs = smash_time();
     if (flag_quiet == 0) {
         if (usecs != 0) {
             sec  = usecs / 1000000;
             usec = usecs % 1000000;
-            printf("  Kicksmash uptime: %u.%06u sec\n", sec, usec);
+            printf("  Uptime: %u.%06u sec\n", sec, usec);
         }
-    }
-
-    memset(reply_buf, 0, sizeof (reply_buf));
-    rc = send_cmd(KS_CMD_ID, NULL, 0, reply_buf, sizeof (reply_buf), &rlen);
-
-    if (rc != 0) {
-        printf("Reply message failure: %d (%s)\n", (int) rc, smash_err(rc));
-        if (flag_debug)
-            dump_memory(reply_buf, rlen, VALUE_UNASSIGNED);
-        return (rc);
-    }
-    if (flag_quiet == 0) {
-        printf("ID\n");
-        dump_memory(reply_buf, rlen, VALUE_UNASSIGNED);
     }
 
     return (0);
@@ -1870,27 +1880,17 @@ flash_show_id(void)
     if (flag_quiet)
         return (rc);
 
+    printf("Flash ID\n");
     if (mode == 16) {
-        printf("    %08x %s", flash_dev1, id1);
+        printf("  %08x %s", flash_dev1, id1);
     } else {
-        printf("    %08x %08x %s %s", flash_dev1, flash_dev2, id1, id2);
+        printf("  %08x %08x %s %s", flash_dev1, flash_dev2, id1, id2);
     }
     printf(" (%u-bit mode)\n", mode);
     if ((mode == 32) && (flash_dev1 != flash_dev2)) {
-        printf("    Warning: flash device ids differ\n");
+        printf("  Warning: flash device ids differ\n");
         rc = MSG_STATUS_NO_REPLY;
     }
-
-#if 0
-    if (flag_debug > 1) {
-        uint pos;
-        uint32_t *addrs = (uint32_t *)0x7780000;
-        uint32_t *data = (uint32_t *)0x7780010;
-        printf("Flash sequence\n");
-        for (pos = 0; pos < 3; pos++)
-            printf("    %08x = %08x\n", addrs[pos], data[pos]);
-    }
-#endif
 
     return (rc);
 }

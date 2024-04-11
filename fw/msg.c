@@ -23,6 +23,7 @@
 #include "timer.h"
 #include "utils.h"
 #include "gpio.h"
+#include "version.h"
 #include <libopencm3/stm32/dma.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/timer.h>
@@ -70,6 +71,7 @@
 #define timer_set_dma_on_compare_event(timer) TIM_CR2(timer) &= ~TIM_CR2_CCDS
 #define timer_set_ti1_ch1(timer)              TIM_CR2(timer) &= ~TIM_CR2_TI1S
 
+extern uint8_t usb_serial_str[32];
 
 static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
 // static const uint16_t reset_magic_32[] = { 0x0000, 0x0001, 0x0034, 0x0035 };
@@ -93,7 +95,11 @@ static uint     consumer_wrap;
 static uint     consumer_wrap_last_poll;
 static uint     rx_consumer = 0;
 static uint     message_count = 0;
-static uint64_t amiga_time = 0;     // Seconds and microseconds
+static uint64_t amiga_time = 0;           // Seconds and microseconds
+static uint64_t expire_update_amiga_app;  // Expiration time for last Amiga app
+static uint64_t expire_update_usb_app;    // Expiration time for last USB app
+static uint16_t state_amiga_app;          // Amiga app state
+static uint16_t state_usb_app;            // USB app state
 
 /* Message interface through Kicksmash between Amiga and USB host */
 static uint     prod_atou;   // Producer for Amiga -> USB buffer
@@ -796,13 +802,37 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             break;  // End processing
         case KS_CMD_ID: {
             /* Send Kickflash identification and configuration */
-            static const uint32_t reply[] = {
-                0x12091610,  // Matches USB ID
-                0x00000001,  // Protocol version 0.1
-                0x00000001,  // Features
-                0x00000000,  // Unused
-                0x00000000,  // Unused
-            };
+            smash_id_t reply;
+            uint temp[3];
+            uint pos = 0;
+            memset(&reply, 0, sizeof (reply));
+            sscanf(version_str + 8, "%u.%u%n", &temp[0], &temp[1], &pos);
+            reply.si_ks_version[0] = SWAP16(temp[0]);
+            reply.si_ks_version[1] = SWAP16(temp[1]);
+            if (pos == 0)
+                pos = 18;
+            else
+                pos += 8 + 7;
+            sscanf(version_str + pos, "%04u-%02u-%02u",
+                   &temp[0], &temp[1], &temp[2]);
+            reply.si_ks_date[0] = temp[0] / 100;
+            reply.si_ks_date[1] = temp[0] % 100;
+            reply.si_ks_date[2] = temp[1];
+            reply.si_ks_date[3] = temp[2];
+            pos += 11;
+            sscanf(version_str + pos, "%02u:%02u:%02u",
+                   &temp[0], &temp[1], &temp[2]);
+            reply.si_ks_time[0] = temp[0];
+            reply.si_ks_time[1] = temp[1];
+            reply.si_ks_time[2] = temp[2];
+            reply.si_ks_time[3] = 0;
+            strcpy(reply.si_serial, (const char *)usb_serial_str);
+            reply.si_rev      = SWAP16(0x01);       // Protocol version 0.1
+            reply.si_features = SWAP16(0x0001);     // Features
+            reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
+            reply.si_mode     = ee_mode;
+            strcpy(reply.si_name, config.name);
+            memset(reply.si_unused, 0, sizeof (reply.si_unused));
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
             break;
         }
@@ -1132,6 +1162,37 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             config_updated();
             break;
         }
+        case KS_CMD_APP_STATE: {
+            uint16_t reply[2];
+            if (cmd & KS_APP_STATE_SET) {
+                uint16_t mask;
+                uint16_t state;
+                uint16_t expire = 10000;  // 10 seconds
+                if ((cmd_len != 4) && (cmd_len != 6)) {
+                    ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                    break;
+                }
+                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+                if ((int) cons_s < 0)
+                    cons_s += ARRAY_SIZE(buffer_rxa_lo);
+                mask = buffer_rxa_lo[cons_s];
+                if (++cons_s >= ARRAY_SIZE(buffer_rxa_lo))
+                    cons_s = 0;
+                state = buffer_rxa_lo[cons_s];
+                if (cmd_len == 6) {
+                    if (++cons_s >= ARRAY_SIZE(buffer_rxa_lo))
+                        cons_s = 0;
+                    expire = buffer_rxa_lo[cons_s];
+                }
+                state_amiga_app = (state_amiga_app & ~mask) | (state & mask);
+                expire_update_amiga_app = timer_tick_plus_msec(expire);
+printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
+            }
+            reply[0] = SWAP16(state_amiga_app);
+            reply[1] = SWAP16(state_usb_app);
+            ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
+            break;
+        }
         case KS_CMD_MSG_INFO: {
             smash_msg_info_t reply;
             uint16_t         temp;
@@ -1149,12 +1210,19 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             else
                 avail2 = 0;
 
-            temp                 = MBUF1_SPACE_INUSE;
-            reply.smi_atou_inuse = SWAP16(temp);
-            reply.smi_atou_avail = SWAP16(avail1);
-            temp                 = MBUF2_SPACE_INUSE;
-            reply.smi_utoa_inuse = SWAP16(temp);
-            reply.smi_utoa_avail = SWAP16(avail2);
+            if (timer_tick_has_elapsed(expire_update_amiga_app))
+                state_amiga_app = 0;
+            if (timer_tick_has_elapsed(expire_update_usb_app))
+                state_usb_app = 0;
+
+            temp                  = MBUF1_SPACE_INUSE;
+            reply.smi_atou_inuse  = SWAP16(temp);
+            reply.smi_atou_avail  = SWAP16(avail1);
+            temp                  = MBUF2_SPACE_INUSE;
+            reply.smi_utoa_inuse  = SWAP16(temp);
+            reply.smi_utoa_avail  = SWAP16(avail2);
+            reply.smi_state_amiga = SWAP16(state_amiga_app);
+            reply.smi_state_usb   = SWAP16(state_usb_app);
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
             break;
         }
