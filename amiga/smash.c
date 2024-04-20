@@ -13,7 +13,6 @@
  * DISCLAIMER: THE SOFTWARE IS PROVIDED "AS-IS", WITHOUT ANY WARRANTY.
  * THE AUTHOR ASSUMES NO LIABILITY FOR ANY DAMAGE ARISING OUT OF THE USE
  * OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
-
  */
 const char *version = "\0$VER: smash 0.1 ("__DATE__") © Chris Hooper";
 
@@ -21,25 +20,14 @@ const char *version = "\0$VER: smash 0.1 ("__DATE__") © Chris Hooper";
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
-#include <exec/types.h>
-#include <devices/trackdisk.h>
-#include <devices/scsidisk.h>
-#include <libraries/dos.h>
-#include <dos/dosextens.h>
-#include <dos/filehandler.h>
-#include <clib/exec_protos.h>
-#include <clib/alib_protos.h>
 #include <clib/dos_protos.h>
-#include <exec/io.h>
-#include <exec/errors.h>
 #include <fcntl.h>
-#include <sys/stat.h>
-#include <exec/memory.h>
 #include <exec/execbase.h>
 #include <exec/memory.h>
-#include <libraries/configregs.h>
 #include "smash_cmd.h"
 #include "crc32.h"
+#include "msg.h"
+#include "cpu_control.h"
 
 /*
  * gcc clib2 headers are bad (for example, no stdint definitions) and are
@@ -57,12 +45,6 @@ typedef unsigned long  uint32_t;
 typedef struct { unsigned long hi; unsigned long lo;} uint64_t;
 #define __packed
 #else
-#include <devices/cd.h>
-#include <inline/timer.h>
-#include <inline/exec.h>
-#include <inline/dos.h>
-#include <inttypes.h>
-struct ExecBase *SysBase;
 struct ExecBase *DOSBase;
 struct Device   *TimerBase;
 static struct    timerequest TimeRequest;
@@ -84,57 +66,13 @@ static struct    timerequest TimeRequest;
 #define BIT(x) (1U << (x))
 #define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
 
-#define ADDR8(x)    ((volatile uint8_t *)  ((uintptr_t)(x)))
-#define ADDR16(x)   ((volatile uint16_t *) ((uintptr_t)(x)))
-#define ADDR32(x)   ((volatile uint32_t *) ((uintptr_t)(x)))
-
-#define SUPERVISOR_STATE_ENTER()    { \
-                                      APTR old_stack = SuperState()
-#define SUPERVISOR_STATE_EXIT()       UserState(old_stack); \
-                                    }
-#define CACHE_DISABLE_DATA() \
-        { \
-            uint32_t oldcachestate = \
-            CacheControl(0L, CACRF_EnableD) & (CACRF_EnableD | CACRF_DBE)
-#define CACHE_RESTORE_STATE() \
-            CacheControl(oldcachestate, CACRF_EnableD | CACRF_DBE); \
-        }
-
-/* MMU_DISABLE() and MMU_RESTORE() must be called from Supervisor state */
-#define MMU_DISABLE() \
-        { \
-            uint32_t oldmmustate = 0; \
-            if (cpu_type == 68030) { \
-                oldmmustate = mmu_get_tc_030(); \
-                mmu_set_tc_030(oldmmustate & ~BIT(31)); \
-            } else if ((cpu_type == 68040) || (cpu_type == 68060)) { \
-                oldmmustate = mmu_get_tc_040(); \
-                mmu_set_tc_040(oldmmustate & ~BIT(15)); \
-            }
-#define MMU_RESTORE() \
-            if (cpu_type == 68030) { \
-                mmu_set_tc_030(oldmmustate); \
-            } else if ((cpu_type == 68040) || (cpu_type == 68060)) { \
-                mmu_set_tc_040(oldmmustate); \
-            } \
-        }
-
-#define INTERRUPTS_DISABLE() if (irq_disabled++ == 0) \
-                                 Disable()  /* Disable interrupts */
-#define INTERRUPTS_ENABLE()  if (--irq_disabled == 0) \
-                                 Enable()   /* Enable Interrupts */
-
 #define ROM_BASE         0x00f80000  /* Base address of Kickstart ROM */
 #define AMIGA_PPORT_DIR  0x00bfe301  /* Amiga parallel port dir register */
 #define AMIGA_PPORT_DATA 0x00bfe101  /* Amiga parallel port data reg. */
 
 #define CIAA_PRA         ADDR8(0x00bfe001)
-#define CIAA_TBLO        ADDR8(0x00bfe601)
-#define CIAA_TBHI        ADDR8(0x00bfe701)
 #define CIAA_PRA_OVERLAY BIT(0)
 #define CIAA_PRA_LED     BIT(1)
-#define CIA_USEC(x)      (x * 715909 / 1000000)
-#define CIA_USEC_LONG(x) (x * 7159 / 10000)
 
 #define VALUE_UNASSIGNED 0xffffffff
 
@@ -282,18 +220,10 @@ long_to_short_t long_to_short_readwrite[] = {
     { "-y", "yes" },
 };
 
-uint32_t mmu_get_type(void);
-uint32_t mmu_get_tc_030(void);
-uint32_t mmu_get_tc_040(void);
-// void     mmu_set_tc_030(uint32_t tc);
-// void     mmu_set_tc_040(uint32_t tc);
-
 BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
-uint irq_disabled = 0;
 uint flag_debug = 0;
 uint flag_quiet = 0;
 uint8_t *test_loopback_buf = NULL;
-static uint cpu_type = 0;
 
 /*
  * is_user_abort
@@ -393,91 +323,6 @@ srand32(uint32_t seed)
     rand_seed = seed;
 }
 
-uint
-get_cpu(void)
-{
-    UWORD attnflags = SysBase->AttnFlags;
-
-    if (attnflags & 0x80)
-        return (68060);
-    if (attnflags & AFF_68040)
-        return (68040);
-    if (attnflags & AFF_68030)
-        return (68030);
-    if (attnflags & AFF_68020)
-        return (68020);
-    if (attnflags & AFF_68010)
-        return (68010);
-    return (68000);
-}
-
-/*
- * mmu_get_tc_030
- * --------------
- * This function only works on the 68030.
- * 68040 and 68060 have different MMU instructions.
- */
-
-__attribute__ ((noinline)) uint32_t
-mmu_get_tc_030(void)
-{
-    register uint32_t result;
-    __asm__ __volatile__("subq.l #4,sp \n\t"
-                         ".long 0xf0174200 \n\t"  // pmove tc,(sp)
-                         "move.l (sp)+,d0"
-                         : "=d" (result));
-    return (result);
-}
-
-/*
- * mmu_set_tc_030
- * --------------
- * This function only works on the 68030.
- */
-__attribute__ ((noinline)) void
-mmu_set_tc_030(register uint32_t tc asm("%d0"))
-{
-#if 0
-    __asm__ __volatile__("adda.l #4,sp \n\t"
-                         ".long 0xf0174000 \n\t"  // pmove.l (sp),tc
-                         "suba.l #4,sp"
-                         : "=d" (tc));
-#elif 1
-    __asm__ __volatile__("move.l %0,-(sp) \n\t"
-                         ".long 0xf0174000 \n\t"  // pmove.l (sp),tc
-                         "adda.l #4,sp \n\t"
-                         : "=d" (tc));
-#endif
-}
-
-/*
- * mmu_get_tc_040
- * --------------
- * This function only works on 68040 and 68060.
- */
-__attribute__ ((noinline)) uint32_t
-mmu_get_tc_040(void)
-{
-    register uint32_t result;
-    __asm__ __volatile__(".long 0x4e7a0003 \n\t"  // movec.l tc,d0
-                         "rts \n\t"
-                         : "=d" (result));
-    return (result);
-}
-
-/*
- * mmu_set_tc_040
- * --------------
- * This function only works on 68040 and 68060.
- */
-__attribute__ ((noinline)) void
-mmu_set_tc_040(register uint32_t tc asm("%d0"))
-{
-    __asm__ __volatile__(".long 0x4e7b0003 \n\t"  // movec.l d0,tc
-                         "rts \n\t"
-                         : "=d" (tc));
-}
-
 void
 local_memcpy(void *dst, void *src, size_t len)
 {
@@ -520,16 +365,6 @@ print_us_diff(uint64_t start, uint64_t end)
     printf("%u.%02u %s\n", diff2 / 100, diff2 % 100, scale);
 }
 
-
-/* Status codes from local message handling */
-#define MSG_STATUS_SUCCESS    0           // No error
-#define MSG_STATUS_FAILURE    1           // Generic failure
-#define MSG_STATUS_NO_REPLY   0xfffffff9  // Did not get reply from Kicksmash
-#define MSG_STATUS_BAD_LENGTH 0xfffffff8  // Bad length detected
-#define MSG_STATUS_BAD_CRC    0xfffffff7  // CRC failure detected
-#define MSG_STATUS_BAD_DATA   0xfffffff6  // Invalid data
-#define MSG_STATUS_PRG_TMOUT  0xfffffff5  // Programming timeout
-#define MSG_STATUS_PRG_FAIL   0xfffffff4  // Programming failure
 
 static const char *
 smash_err(uint code)
@@ -684,46 +519,6 @@ ee_id_string(uint32_t id)
     return (chip_ids[pos].ci_dev);
 }
 
-static uint
-cia_ticks(void)
-{
-    uint8_t hi1;
-    uint8_t hi2;
-    uint8_t lo;
-
-    hi1 = *CIAA_TBHI;
-    lo  = *CIAA_TBLO;
-    hi2 = *CIAA_TBHI;
-
-    /*
-     * The below operation will provide the same effect as:
-     *     if (hi2 != hi1)
-     *         lo = 0xff;  // rollover occurred
-     */
-    lo |= (hi2 - hi1);  // rollover of hi forces lo to 0xff value
-
-    return (lo | (hi2 << 8));
-}
-
-static void
-cia_spin(uint ticks)
-{
-    uint16_t start = cia_ticks();
-    uint16_t now;
-    uint16_t diff;
-
-    while (ticks != 0) {
-        now = cia_ticks();
-        diff = start - now;
-        if (diff >= ticks)
-            break;
-        ticks -= diff;
-        start = now;
-        __asm__ __volatile__("nop");
-        __asm__ __volatile__("nop");
-    }
-}
-
 static void __attribute__ ((noinline))
 spin(uint loops)
 {
@@ -785,230 +580,6 @@ spin_memory_ovl(uint32_t addr)
     printf("done\n");
 }
 
-
-static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
-uint smash_cmd_shift = 2;
-
-/*
- * send_cmd_core
- * -------------
- * This function assumes interrupts and cache are already disabled
- * by the caller.
- */
-uint
-send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
-              void *reply, uint replymax, uint *replyalen)
-{
-    uint      pos;
-    uint32_t  crc;
-    uint32_t  replycrc = 0;
-    uint16_t *replybuf = (uint16_t *) reply;
-    uint      word = 0;
-    uint      magic = 0;
-    uint      replylen = 0;
-    uint      replystatus = 0;
-    uint16_t *argbuf = arg;
-    uint16_t  val;
-    uint32_t  val32 = 0;
-    uint      replyround;
-
-    for (pos = 0; pos < ARRAY_SIZE(sm_magic); pos++)
-        (void) *ADDR32(ROM_BASE + (sm_magic[pos] << smash_cmd_shift));
-
-    (void) *ADDR32(ROM_BASE + (arglen << smash_cmd_shift));
-    crc = crc32(0, &arglen, sizeof (arglen));
-    crc = crc32(crc, &cmd, sizeof (cmd));
-    crc = crc32(crc, argbuf, arglen);
-    (void) *ADDR32(ROM_BASE + (cmd << smash_cmd_shift));
-
-    for (pos = 0; pos < arglen / sizeof (uint16_t); pos++) {
-        (void) *ADDR32(ROM_BASE + (argbuf[pos] << smash_cmd_shift));
-    }
-    if (arglen & 1) {
-        /* Odd byte at end */
-        (void) *ADDR32(ROM_BASE + (argbuf[pos] << smash_cmd_shift));
-    }
-
-    /* CRC high and low words */
-    (void) *ADDR32(ROM_BASE + ((crc >> 16) << smash_cmd_shift));
-    (void) *ADDR32(ROM_BASE + ((crc & 0xffff) << smash_cmd_shift));
-
-    /*
-     * Delay to prevent reads before Kicksmash has set up DMA hardware
-     * with the data to send. This is necessary so that the two DMA
-     * engines on 32-bit Amigas are started in a synchronized manner.
-     * Might need more delay on a faster CPU.
-     *
-     * A3000 68030-25:  10 spins minimum
-     * A3000 A3660 50M: 30 spins minimum
-     */
-    cia_spin((arglen >> 3) + (replymax >> 4) + 30);
-//  cia_spin(100);  // XXX Debug delay for brief KS output
-
-    /*
-     * Find reply magic, length, and status.
-     *
-     * The below code must handle both a 32-bit reply and a 16-bit reply
-     * where data begins in the lower 16 bits.
-     *
-     *            hi16bits lo16bits hi16bits lo16bits hi16bits lo16bits
-     * Example 1: 0x1017   0x0204   0x0117   0x0119   len      status
-     * Example 2: ?        0x0119   0x0117   0x0204   0x1017   len
-     */
-#define WAIT_FOR_MAGIC_LOOPS 128
-    for (word = 0; word < WAIT_FOR_MAGIC_LOOPS; word++) {
-        // XXX: This code might need to change for 16-bit Amigas
-        if (word & 1) {
-            val = (uint16_t) val32;
-        } else {
-            val32 = *ADDR32(ROM_BASE + 0x1554); // remote addr 0x0555 or 0x0aaa
-//          *ADDR32(0x7770000 + word * 2) = val;
-            val = val32 >> 16;
-        }
-        if (flag_debug && (replybuf != NULL) && (word < (replymax / 2))) {
-            replybuf[word] = val;  // Just for debug on failure (-d flag)
-        }
-
-        if (magic < ARRAY_SIZE(sm_magic)) {
-            if (val != sm_magic[magic]) {
-                magic = 0;
-                cia_spin(10);
-                continue;
-            }
-        } else if (magic < ARRAY_SIZE(sm_magic) + 1) {
-            replylen = val;     // Reply length
-            crc = crc32(0, &val, sizeof (val));
-        } else if (magic < ARRAY_SIZE(sm_magic) + 2) {
-            replystatus = val;  // Reply status
-            crc = crc32(crc, &val, sizeof (val));
-            word++;
-            break;
-        }
-        magic++;
-    }
-
-    if (word >= WAIT_FOR_MAGIC_LOOPS) {
-        /* Did not see reply magic */
-        replystatus = MSG_STATUS_NO_REPLY;
-        if (replyalen != NULL) {
-            *replyalen = word * 2;
-            if (*replyalen > replymax)
-                *replyalen = replymax;
-        }
-        /* Ensure Kicksmash firmware has returned ROM to normal state */
-        for (pos = 0; pos < 1000; pos++)
-            (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        cia_spin(CIA_USEC_LONG(100000));        // 100 msec
-        goto scc_cleanup;
-    }
-
-    if (replyalen != NULL)
-        *replyalen = replylen;
-
-    replyround = (replylen + 1) & ~1;  // Round up reply length to word
-
-    if (replyround > replymax) {
-        replystatus = MSG_STATUS_BAD_LENGTH;
-        if (replyalen != NULL) {
-            *replyalen = replylen;
-            if (*replyalen > replymax)
-                *replyalen = replymax;
-        }
-        goto scc_cleanup;
-    }
-
-    /* Response is valid so far; read data */
-    if (replybuf == NULL) {
-        pos = 0;
-    } else {
-        uint replymin = (replymax < replylen) ? replymax : replylen;
-        for (pos = 0; pos < replymin; pos += 2, word++) {
-            if (word & 1) {
-                val = (uint16_t) val32;
-            } else {
-                val32 = *ADDR32(ROM_BASE);
-                val = val32 >> 16;
-            }
-            *(replybuf++) = val;
-        }
-    }
-    if (pos < replylen) {
-        /* Discard data that doesn't fit */
-        for (; pos < replylen; pos += 4)
-            val32 = *ADDR32(ROM_BASE);
-    }
-
-    /* Read CRC */
-    if (word & 1) {
-        replycrc = (val32 << 16) | *ADDR16(ROM_BASE);
-    } else {
-        replycrc = *ADDR32(ROM_BASE);
-    }
-
-scc_cleanup:
-#if 0
-    /* Debug cleanup */
-    for (pos = 0; pos < 4; pos++)
-        *ADDR32(0x7770010 + pos * 4) = *ADDR32(ROM_BASE);
-#endif
-
-    if ((replystatus & 0xffffff00) != 0) {
-        /* Ensure Kicksmash firmware has returned ROM to normal state */
-        cia_spin(CIA_USEC(30));
-        for (pos = 0; pos < 100; pos++)
-            (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-// XXX: implement new recovery function which will loop until
-//      value at ROM address is consistent for 100 iterations.
-//      cia_spin(10) in between.
-        cia_spin(CIA_USEC(4000U));
-    }
-    if (((replystatus & 0xffff0000) == 0) && (replystatus != KS_STATUS_CRC)) {
-        crc = crc32(crc, reply, replylen);
-        if (crc != replycrc) {
-//          *ADDR32(0x7770000) = crc;
-//          *ADDR32(0x7770004) = replycrc;
-            return (MSG_STATUS_BAD_CRC);
-        }
-    }
-
-    return (replystatus);
-}
-
-/*
- * send_cmd
- * --------
- * Sends a command to the STM32 ARM CPU running on Kicksmash.
- * All messages are protected by CRC. Message format:
- *     Magic (64 bits)
- *        0x0117, 0x0119, 0x1017, 0x0204
- *     Length (16 bits)
- *        The length specifies the number of payload bytes (not including
- *        magic, length, command, or CRC bytes at end). This number may be
- *        zero (0) if only a command is present.
- *     Command or status code (16 bits)
- *        KS_CMD_*
- *     Additional data (if any)
- *     CRC (32 bits)
- *        CRC is over all content except magic (includes length and command)
- */
-uint
-send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
-         void *reply, uint replymax, uint *replyalen)
-{
-    uint rc;
-    SUPERVISOR_STATE_ENTER();
-    INTERRUPTS_DISABLE();
-    CACHE_DISABLE_DATA();
-    MMU_DISABLE();
-
-    rc = send_cmd_core(cmd, arg, arglen, reply, replymax, replyalen);
-
-    MMU_RESTORE();
-    CACHE_RESTORE_STATE();
-    INTERRUPTS_ENABLE();
-    SUPERVISOR_STATE_EXIT();
-    return (rc);
-}
 
 #if 0
 static uint
@@ -3755,7 +3326,7 @@ main(int argc, char *argv[])
 #ifndef _DCC
     SysBase = *(struct ExecBase **)4UL;
 #endif
-    cpu_type = get_cpu();
+    cpu_control_init();  // cpu_type, SysBase
 
     for (arg = 1; arg < argc; arg++) {
         const char *ptr;
