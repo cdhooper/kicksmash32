@@ -384,6 +384,32 @@ oe_input(void)
 }
 
 /*
+ * oewe_output
+ * -----------
+ * Drives the OEWE (flash write enable on output enable) pin with the
+ * specified value. If this pin is high, when the host drives OE# low,
+ * it will result in WE# being driven low.
+ */
+static void
+oewe_output(uint value)
+{
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, value);
+}
+
+/*
+ * we_enable
+ * ---------
+ * Enables or disables WE# pin output
+ */
+static void
+we_enable(uint value)
+{
+    gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN,
+                 (value != 0) ? GPIO_SETMODE_OUTPUT_PPULL_50 :
+                                GPIO_SETMODE_INPUT_PULLUPDOWN);
+}
+
+/*
  * flash_oe_input
  * --------------
  * Return the current value of the FLASH_OE pin (either 0 or non-zero).
@@ -743,32 +769,49 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
 
     /* FLASH_OE=1 disables flash from driving data pins */
     oe_output(1);
-    oe_output_enable();
+    oe_output_enable();  // Enable override of FLASH_OE
 
     /*
      * Board rev 3 and higher have external bus tranceiver, so STM32 can
      * always drive data bus so long as FLASH_OE is disabled.
      */
     data_output_enable();  // Drive data pins
-    if (flags & KS_REPLY_WE) {
-        we_output(1);
-        we_enable(0);      // Pull up
-        oewe_output(1);
-    }
+
+    if (flags & KS_REPLY_WE)
+        we_enable(0);      // Pull up WE instead of driving it high
 
     disable_irq();
 
-    /* Ensure OE is high before enabling DMA */
-    while ((oe_input() == 0) || (flash_oe_input() == 0))
-        __asm__("nop");
+    /* Wait for OE to go low */
+    count = 0;
+    while (oe_input() != 0) {
+        if (count++ > 100000) {
+            enable_irq();
+            printf("OE low timeout\n");
+            goto oe_reply_end;
+        }
+    }
+
+    /* Wait for OE to go high before enabling DMA */
+    count = 0;
+    while ((oe_input() == 0) || (flash_oe_input() == 0)) {
+        if (count++ > 100000) {
+            enable_irq();
+            printf("OE high timeout\n");
+            goto oe_reply_end;
+        }
+    }
+
+    if (flags & KS_REPLY_WE)
+        oewe_output(1);  // Allow SOCKET_OE to drive WE
 
     if (ee_mode == EE_MODE_32) {
-//      TIM2_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
-//      TIM5_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
+        TIM2_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
+        TIM5_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
         TIM_CCER(TIM2) = TIM_CCER_CC1E;  // Enable DMA, rising edge
         TIM_CCER(TIM5) = TIM_CCER_CC1E;  // Enable DMA, rising edge
     } else {
-//      TIM5_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
+        TIM5_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
         TIM_CCER(TIM5) = TIM_CCER_CC1E;  // Enable DMA, rising edge
     }
     enable_irq();
@@ -786,10 +829,10 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             for (count = 0; dma_last == dma_left; count++) {
                 if (count > 100000) {
                     if (flags & KS_REPLY_WE)
-                        oewe_output(0);
-
+                        oewe_output(0);  // Disconnect SOCKET_OE from WE
                     data_output_disable();
                     oe_output_disable();
+
                     if (timer_tick_has_elapsed(ks_timeout_timer))
                         ks_timeout_count = 0;
                     if (ks_timeout_count++ < 4)
@@ -810,10 +853,9 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
 #endif
 
     if (flags & KS_REPLY_WE)
-        oewe_output(0);
-
-    data_output_disable();
-    oe_output_disable();
+        oewe_output(0);    // Disconnect SOCKET_OE from WE
+    data_output_disable(); // Stop driving data lines
+    oe_output_disable();   // Stop doing override of FLASH_OE
 
 oe_reply_end:
     configure_oe_capture_rx(false);

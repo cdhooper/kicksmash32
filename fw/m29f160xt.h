@@ -45,9 +45,6 @@ void     data_output_enable(void);
 void     oe_output(uint value);
 void     oe_output_enable(void);
 void     oe_output_disable(void);
-void     oewe_output(uint value);
-void     we_output(uint value);
-void     we_enable(uint value);
 
 #define MX_ERASE_MODE_CHIP   0
 #define MX_ERASE_MODE_SECTOR 1

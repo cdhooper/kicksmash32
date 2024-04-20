@@ -269,27 +269,11 @@ data_output_disable(void)
 }
 
 /*
- * oewe_output
- * -----------
- * Drives the OEWE (flash write enable on output enable) pin with the
- * specified value. If this pin is high, when the host drives OE# low,
- * it will result in WE# being driven low.
- */
-void
-oewe_output(uint value)
-{
-#ifdef DEBUG_SIGNALS
-    printf(" WE=%d", value);
-#endif
-    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, value);
-}
-
-/*
  * we_output
  * ---------
  * Drives the WE# (flash write enable) pin with the specified value.
  */
-void
+static void
 we_output(uint value)
 {
 #ifdef DEBUG_SIGNALS
@@ -303,7 +287,7 @@ we_output(uint value)
  * ---------
  * Enables or disables WE# pin output
  */
-void
+static void
 we_enable(uint value)
 {
     gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN,

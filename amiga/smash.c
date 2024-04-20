@@ -138,6 +138,7 @@ static struct    timerequest TimeRequest;
 
 #define VALUE_UNASSIGNED 0xffffffff
 
+#define TEST_LOOPBACK_BUF 4096
 #define TEST_LOOPBACK_MAX 64
 #define MEM_LOOPS         1000000
 #define ROM_WINDOW_SIZE   (512 << 10)  // 512 KB
@@ -871,7 +872,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         if (magic < ARRAY_SIZE(sm_magic)) {
             if (val != sm_magic[magic]) {
                 magic = 0;
-                cia_spin(5);
+                cia_spin(10);
                 continue;
             }
         } else if (magic < ARRAY_SIZE(sm_magic) + 1) {
@@ -1161,7 +1162,7 @@ smash_test_loopback(void)
     show_test_state("Test loopback", -1);
 
     tx_buf = &test_loopback_buf[0];
-    rx_buf = &test_loopback_buf[TEST_LOOPBACK_MAX];
+    rx_buf = &test_loopback_buf[TEST_LOOPBACK_BUF];
     memset(rx_buf, 0, TEST_LOOPBACK_MAX * 4);
     for (cur = 0; cur < nums; cur++)
         tx_buf[cur] = (uint8_t) (rand32() >> 8);
@@ -1855,8 +1856,9 @@ smash_test(uint mask)
 static int
 flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 {
+    uint32_t addr;
     uint32_t addrs[64];
-    uint32_t data[64];
+//  uint32_t data[64];
 //  uint32_t val;
 //  uint     retry = 0;
     uint     num_addr;
@@ -1879,6 +1881,11 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
     num_addr /= 4;
 
     cia_spin(CIA_USEC(5));
+
+    addr = ROM_BASE + ((addrs[0] << smash_cmd_shift) & 0x7ffff);
+    (void) *ADDR32(addr);  // Generate OE strobe to kick off DMA
+    cia_spin(1);
+
     for (pos = 0; pos < num_addr; pos++) {
         uint32_t addr = ROM_BASE + ((addrs[pos] << smash_cmd_shift) & 0x7ffff);
 #if 1
@@ -1912,11 +1919,13 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 
 flash_cmd_cleanup:
     if (rc == 0) {
+#if 0
         if (flag_debug && !irq_disabled) {
             printf("Flash sequence\n");
             for (pos = 0; pos < num_addr; pos++)
                 printf("    %08x = %08x\n", addrs[pos], data[pos]);
         }
+#endif
     } else {
         /* Attempt to drain data and wait for Kicksmash to enable flash */
         for (pos = 0; pos < 1000; pos++) {
@@ -3853,7 +3862,7 @@ main(int argc, char *argv[])
         flag_test_mask = ~0;
     if (flag_test) {
         srand32(time(NULL));
-        test_loopback_buf = AllocMem(TEST_LOOPBACK_MAX * 2, MEMF_PUBLIC);
+        test_loopback_buf = AllocMem(TEST_LOOPBACK_BUF * 2, MEMF_PUBLIC);
         if (flag_test_mask & (flag_test_mask - 1))
             do_multiple = 1;
     }
@@ -3916,7 +3925,7 @@ end_now:
         printf("Pass %u done\n", loop);
     }
     if (test_loopback_buf != NULL)
-        FreeMem(test_loopback_buf, TEST_LOOPBACK_MAX * 2);
+        FreeMem(test_loopback_buf, TEST_LOOPBACK_BUF * 2);
 
     exit(errs ? EXIT_FAILURE : EXIT_SUCCESS);
 }
