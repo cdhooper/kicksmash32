@@ -14,4 +14,6 @@
 
 typedef unsigned int uint;
 
+void main_poll(void);
+
 #endif /* _MAIN_H */

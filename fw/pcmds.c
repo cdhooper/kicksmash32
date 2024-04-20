@@ -66,6 +66,7 @@ const char cmd_prom_help[] =
 "prom mode 0|1|2         - set EEPROM access mode (0=32, 1=16lo, 2=16hi)\n"
 "prom name [<name>]      - set or show name of this board\n"
 "prom read <addr> <len>  - read binary data from EEPROM (to terminal)\n"
+"prom service            - enter Amiga/USB message service mode\n"
 "prom temp               - show STM32 die temperature\n"
 "prom verify             - verify PROM is connected\n"
 "prom write <addr> <len> - write binary data to EEPROM (from terminal)";
@@ -87,7 +88,8 @@ const char cmd_snoop_help[] =
 const char cmd_usb_help[] =
 "usb disable - reset and disable USB\n"
 "usb regs    - display USB device registers\n"
-"usb reset   - reset and restart USB device";
+"usb reset   - reset and restart USB device\n"
+"usb stats   - USB statistics";
 
 typedef struct {
     const char *const name;
@@ -425,6 +427,7 @@ cmd_prom(int argc, char * const *argv)
     enum {
         OP_NONE,
         OP_READ,
+        OP_SERVICE,
         OP_WRITE,
         OP_ERASE_CHIP,
         OP_ERASE_SECTOR,
@@ -511,6 +514,8 @@ cmd_prom(int argc, char * const *argv)
         return (RC_SUCCESS);
     } else if (strcmp("read", arg) == 0) {
         op_mode = OP_READ;
+    } else if (strcmp("service", arg) == 0) {
+        op_mode = OP_SERVICE;
     } else if (strcmp("temp", arg) == 0) {
         return (cmd_prom_temp(argc - 1, argv + 1));
     } else if (strcmp("verify", arg) == 0) {
@@ -572,6 +577,9 @@ cmd_prom(int argc, char * const *argv)
             }
             rc = prom_erase(ERASE_MODE_SECTOR, addr, len);
             break;
+        case OP_SERVICE:
+            msg_usb_service();
+            return (RC_SUCCESS);
         default:
             printf("BUG: op_mode\n");
             return (RC_FAILURE);
@@ -686,6 +694,8 @@ cmd_usb(int argc, char * const *argv)
         usb_signal_reset_to_host(1);
         usb_startup();
         return (RC_SUCCESS);
+    } else if (strncmp(argv[1], "stat", 2) == 0) {
+        usb_show_stats();
     } else {
         printf("Unknown argument %s\n", argv[1]);
         return (RC_USER_HELP);

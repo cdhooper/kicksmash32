@@ -841,7 +841,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      * A3000 68030-25:  10 spins minimum
      * A3000 A3660 50M: 30 spins minimum
      */
-    cia_spin((arglen >> 2) + 20);
+    cia_spin((arglen >> 3) + (replymax >> 4) + 30);
 //  cia_spin(100);  // XXX Debug delay for brief KS output
 
     /*
@@ -956,6 +956,9 @@ scc_cleanup:
         cia_spin(CIA_USEC(30));
         for (pos = 0; pos < 100; pos++)
             (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
+// XXX: implement new recovery function which will loop until
+//      value at ROM address is consistent for 100 iterations.
+//      cia_spin(10) in between.
         cia_spin(CIA_USEC(4000U));
     }
     if (((replystatus & 0xffff0000) == 0) && (replystatus != KS_STATUS_CRC)) {
@@ -1288,6 +1291,31 @@ cleanup:
     return (rc);
 }
 
+#define DELAY_MS_PER_TICK (1000 / 50)  // 50 ticks per second = 20 ms/tick
+
+static uint
+recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
+{
+    uint rc;
+    rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
+    while (rc == KS_STATUS_NODATA) {
+        Delay(1);
+        rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
+        if (timeout_ms > DELAY_MS_PER_TICK)
+            timeout_ms -= DELAY_MS_PER_TICK;
+        else
+            break;
+    }
+    if (rc == KS_CMD_MSG_SEND)
+        rc = 0;
+    if (rc != 0) {
+        printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
+        if (flag_debug)
+            dump_memory(buf, 0x40, VALUE_UNASSIGNED);
+    }
+    return (rc);
+}
+
 static uint
 recv_msg_loopback(void *buf, uint len, uint *rlen, uint which_buf)
 {
@@ -1320,8 +1348,8 @@ send_msg_loopback(void *buf, uint len, uint which_buf)
 
     rc = send_cmd(cmd, buf, len, rbuf, sizeof (rbuf), NULL);
     if (rc != 0) {
-        printf("Send message buf%s failed: %d (%s)\n", which_buf ? " alt" : "",
-               rc, smash_err(rc));
+        printf("Send message buf%s l=%u failed: %d (%s)\n",
+               which_buf ? " alt" : "", len, rc, smash_err(rc));
         if (flag_debug)
             dump_memory(rbuf, sizeof (rbuf), VALUE_UNASSIGNED);
     }
@@ -1396,33 +1424,18 @@ smash_test_msg_loopback(void)
     if ((omsginfo.smi_atou_inuse != 0) || (omsginfo.smi_utoa_inuse != 0)) {
         printf("Clearing atou=%u and utoa=%u bytes\n",
                 omsginfo.smi_atou_inuse, omsginfo.smi_utoa_inuse);
+
+        /* Discard old messages */
+        if ((rc = send_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, NULL)) != 0) {
+            printf("Msg flush failed: %d (%s)\n", rc, smash_err(rc));
+            goto fail;
+        }
+        rc = send_cmd(KS_CMD_MSG_FLUSH | KS_MSG_ALTBUF, NULL, 0, NULL, 0, NULL);
+        if (rc != 0) {
+            printf("Msg flush failed: %d (%s)\n", rc, smash_err(rc));
+            goto fail;
+        }
     }
-
-    /* Clear out old messages, if any */
-    do {
-        if ((rc = get_msg_info(&msginfo)) != 0)
-            goto fail;
-
-        if (msginfo.smi_atou_inuse != 0) {
-            rc = recv_msg_loopback(buf, MAX_CHUNK, &rlen, 0);
-            if (rc != 0)
-                goto fail;
-        }
-        if (msginfo.smi_utoa_inuse != 0) {
-            rc = recv_msg_loopback(buf, MAX_CHUNK, &rlen, 1);
-            if (rc != 0)
-                goto fail;
-        }
-        if (count++ > MAX_MESSAGES) {
-            printf("Too many tries to remove old messages\n");
-            printf("    atou_inuse=%u atou_avail=%u "
-                   "    utoa_inuse=%u utoa_avail=%u\n",
-                   msginfo.smi_atou_inuse, msginfo.smi_atou_avail,
-                   msginfo.smi_utoa_inuse, msginfo.smi_utoa_avail);
-            rc = 1;
-            goto fail;
-        }
-    } while ((msginfo.smi_atou_inuse != 0) || (msginfo.smi_utoa_inuse != 0));
 
     for (count = 0; count < MAX_CHUNK; count++)
         buf[count] = count;
@@ -1496,7 +1509,7 @@ smash_test_msg_loopback(void)
         for (count = 0; count < MAX_MESSAGES * 2; count++) {
             uint inuse;
             uint len;
-// len &= ~1;   // eventually handle odd bytes
+
             if ((rc = recv_msg_loopback(buf, MAX_CHUNK, &rlen, pass)) != 0)
                 goto fail;
             count_r += rlen + KS_HDR_AND_CRC_LEN;
@@ -1600,7 +1613,6 @@ fail:
         printf("Message unlock failed: %d (%s)\n", rc2, smash_err(rc2));
         if (rc == 0)
             rc = rc2;
-        goto fail;
     }
 
     FreeMem(buf, MAX_CHUNK);
@@ -1620,6 +1632,185 @@ fail:
     }
     return (rc);
 }
+
+static int
+smash_test_usb_msg_loopback(void)
+{
+    km_msg_hdr_t *skm;
+    km_msg_hdr_t *rkm;
+    smash_msg_info_t msginfo;
+    uint8_t  *buf[2];
+    uint      pos;
+    uint      rc;
+    uint      maxlen = 2000;
+    uint      len = 32;
+    uint      rlen;
+    uint      count;
+    uint      icount;
+    uint      total;
+    uint      perf;
+    uint      diff;
+    uint      errs = 0;
+    uint64_t  time_start;
+    uint64_t  time_end;
+    static uint8_t worked_before = 0;
+
+    show_test_state("Remote message", -1);
+
+    if ((rc = get_msg_info(&msginfo)) != 0) {
+        printf("Get msg info failed: %d (%s)\n", rc, smash_err(rc));
+        return (rc);
+    }
+
+    if ((msginfo.smi_state_usb &
+         (APP_STATE_SERVICE_UP | APP_STATE_HAVE_LOOPBACK)) !=
+         (APP_STATE_SERVICE_UP | APP_STATE_HAVE_LOOPBACK)) {
+        printf("Unavailable\n");
+        if (worked_before)
+            return (1);  // Then this is a failure
+        else
+            return (0);  // Was probably never available
+    }
+
+    buf[0] = NULL;
+    buf[1] = NULL;
+    for (pos = 0; pos < ARRAY_SIZE(buf); pos++) {
+        buf[pos] = AllocMem(MAX_CHUNK, MEMF_PUBLIC);
+        if (buf[pos] == NULL) {
+            printf("Memory allocation failure\n");
+            goto fail;
+        }
+    }
+
+    for (pos = 0; pos < maxlen; pos++) {
+        buf[0][pos] = pos;
+        buf[1][pos] = ~pos;
+    }
+
+    rkm = (km_msg_hdr_t *)buf[1];
+    skm = (km_msg_hdr_t *)buf[0];
+    skm->km_handler = 0;
+    skm->km_op = KM_OP_LOOPBACK;
+    skm->km_status = 0xff;
+    skm->km_tag = 0;
+    skm->km_unused = 0;
+
+    /* Discard old messages */
+    if ((rc = send_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, NULL)) != 0) {
+        printf("Msg flush failed: %d (%s)\n", rc, smash_err(rc));
+        goto fail;
+    }
+
+    for (count = 0; count < 10; count++) {
+        len = (rand() & (maxlen / 2 - 1)) + sizeof (*skm);
+        skm->km_tag = count;
+        if ((rc = send_msg_loopback(buf[0], len, 0)) != 0)
+            goto fail;
+        if ((rc = recv_msg(buf[1], MAX_CHUNK, &rlen, 1000)) != 0) {
+            printf("  Expected message len=%u\n", len);
+            if (flag_debug) {
+                for (pos = 0; pos < len; pos++)
+                    printf(" %02x", buf[0][pos]);
+                printf("\n");
+            }
+            goto fail;
+        }
+        if (rlen != len) {
+            printf("Receive length %u != expected %u\n", rlen, len);
+            rc = MSG_STATUS_BAD_DATA;
+            break;
+        }
+        if (rkm->km_op != (KM_OP_LOOPBACK | KM_OP_REPLY)) {
+            printf("Receive message op %02x != expected %02x\n",
+                   rkm->km_op, KM_OP_LOOPBACK | KM_OP_REPLY);
+            rc = MSG_STATUS_BAD_DATA;
+            break;
+        }
+        if (rkm->km_tag != count) {
+            printf("Receive message tag %02x != expected %02x\n",
+                   rkm->km_tag, count);
+            rc = MSG_STATUS_BAD_DATA;
+            break;
+        }
+#if 0
+        printf("rlen=%u op=%x status=%x seq=%x\n",
+               rlen, rkm->km_op, rkm->km_status, rkm->km_tag);
+#endif
+        for (pos = sizeof (*rkm); pos < len; pos++) {
+            if (buf[1][pos] != buf[0][pos]) {
+                if (errs++ < 5) {
+                    if (errs == 1)
+                        printf("Miscompare\n");
+                    printf("  Pass %u pos=0x%x %02x != expected %02x\n",
+                           count, pos, buf[1][pos], buf[0][pos]);
+                }
+            }
+        }
+        if (errs != 0) {
+            rc = MSG_STATUS_BAD_DATA;
+            break;
+        }
+    }
+    if (rc != 0)
+        goto fail;
+
+    len = maxlen;
+    time_start = smash_time();
+    for (count = 0; count < 10; count++) {
+        skm->km_tag = count;
+        for (icount = 0; icount < 1; icount++) {
+            if ((rc = send_msg_loopback(buf[0], len, 0)) != 0)
+                goto fail;
+        }
+        for (icount = 0; icount < 1; icount++) {
+            if ((rc = recv_msg(buf[1], MAX_CHUNK, &rlen, 1000)) != 0) {
+                if (flag_debug) {
+                    printf("Expected message len=%u\n", len);
+                    for (pos = 0; pos < len; pos++)
+                        printf(" %02x", buf[0][pos]);
+                    printf("\n");
+                }
+                goto fail;
+            }
+            if (rlen != len) {
+                printf("Receive length %u != expected %u\n", rlen, len);
+                rc = MSG_STATUS_BAD_DATA;
+                break;
+            }
+            if (rkm->km_op != (KM_OP_LOOPBACK | KM_OP_REPLY)) {
+                printf("Receive message op %02x != expected %02x\n",
+                       rkm->km_op, KM_OP_LOOPBACK | KM_OP_REPLY);
+                rc = MSG_STATUS_BAD_DATA;
+                break;
+            }
+            if (rkm->km_tag != count) {
+                printf("Receive message tag %02x != expected %02x\n",
+                       rkm->km_tag, count);
+                rc = MSG_STATUS_BAD_DATA;
+                break;
+            }
+        }
+    }
+    if (flag_quiet == 0) {
+        time_end = smash_time();
+        diff = (uint) (time_end - time_start);
+        if (diff == 0)
+            diff = 1;
+        total = count * (maxlen + KS_HDR_AND_CRC_LEN);
+        perf = total * 1000 / diff;
+        perf *= 2 * icount;  // Write data + Read (reply) data
+        printf("PASS  %u KB/sec\n", perf);
+    }
+
+fail:
+    for (pos = 0; pos < ARRAY_SIZE(buf); pos++) {
+        if (buf[pos] != NULL)
+            FreeMem(buf[pos], MAX_CHUNK);
+    }
+    worked_before = 1;
+    return (rc);
+}
+
 
 static int
 smash_test(uint mask)
@@ -1642,6 +1833,11 @@ smash_test(uint mask)
     }
     if (mask & BIT(3)) {
         rc = smash_test_msg_loopback();
+        if (rc != 0)
+            return (rc);
+    }
+    if (mask & BIT(4)) {
+        rc = smash_test_usb_msg_loopback();
         if (rc != 0)
             return (rc);
     }
@@ -3591,7 +3787,8 @@ main(int argc, char *argv[])
                     case '0':  // pattern test
                     case '1':  // loopback test
                     case '2':  // loopback perf test
-                    case '3':  // USB host message loopback test
+                    case '3':  // Message buffer loopback test
+                    case '4':  // Remote USB host message loopback test
                         flag_test_mask |= BIT(*ptr - '0');
                         flag_test++;
                         break;

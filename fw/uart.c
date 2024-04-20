@@ -202,7 +202,7 @@ usb_putchar_flush(void)
     if (usb_out_bufpos == 0)
         return;
     if (CDC_Transmit_FS(usb_out_buf, usb_out_bufpos) == USBD_OK)
-        usb_out_bufpos = 0;
+        usb_out_bufpos = 0;  // Flush was successful
 }
 
 static void
@@ -257,8 +257,10 @@ usb_puts_wait(uint8_t *buf, uint32_t len)
             while (CDC_Transmit_FS(buf, tlen) != USBD_OK) {
                 if (timer_tick_has_elapsed(timeout)) {
                     printf("Host Timeout on USB send\n");
+                    usb_send_timeouts++;
                     return (1);
                 }
+                timer_delay_msec(1);
             }
         }
         len -= tlen;
@@ -268,9 +270,9 @@ usb_puts_wait(uint8_t *buf, uint32_t len)
 }
 
 int
-puts_binary(void *buf, uint32_t len)
+puts_binary(const void *buf, uint32_t len)
 {
-    uint8_t *ptr = buf;
+    uint8_t *ptr = (uint8_t *) buf;
     if (last_input_source == SOURCE_UART) {
         while (len-- > 0)
             uart_putchar(*(ptr++));

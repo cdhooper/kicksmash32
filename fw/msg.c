@@ -18,6 +18,7 @@
 #include "config.h"
 #include "crc32.h"
 #include "kbrst.h"
+#include "main.h"
 #include "msg.h"
 #include "m29f160xt.h"
 #include "timer.h"
@@ -74,8 +75,19 @@
 extern uint8_t usb_serial_str[32];
 
 static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
+static const uint8_t *sm_magic_b = (uint8_t *) sm_magic;
 // static const uint16_t reset_magic_32[] = { 0x0000, 0x0001, 0x0034, 0x0035 };
 // static const uint16_t reset_magic_16[] = { 0x0002, 0x0003, 0x0068, 0x0069 };
+
+static const uint32_t testpatt_reply[] = {
+    0x54534554, 0x54544150, 0x53202d20, 0x54524154,
+    0xaaaa5555, 0xcccc3333, 0xeeee1111, 0x66669999,
+    0x00020001, 0x00080004, 0x00200010, 0x00800040,
+    0x02000100, 0x08000400, 0x20001000, 0x80004000,
+    0xfffdfffe, 0xfff7fffb, 0xffdfffef, 0xff7fffbf,
+    0xfdfffeff, 0xf7fffbff, 0xdfffefff, 0x7fffbfff,
+    0x54534554, 0x54544150, 0x444e4520, 0x68646320,
+};
 
 #define REBOOT_MAGIC_NUM 8
 static const uint16_t reboot_magic_32[] =
@@ -91,10 +103,10 @@ static uint     ks_timeout_count = 0;  // count of complaint messages
 
 static uint     consumer_spin;
 static uint8_t  capture_mode = CAPTURE_ADDR;
+static uint8_t  msg_lock;       // Bits !USB 0=atou 1=utoa, !Amiga 2=atou 3=utoa
 static uint     consumer_wrap;
 static uint     consumer_wrap_last_poll;
 static uint     rx_consumer = 0;
-static uint     message_count = 0;
 static uint64_t amiga_time = 0;           // Seconds and microseconds
 static uint64_t expire_update_amiga_app;  // Expiration time for last Amiga app
 static uint64_t expire_update_usb_app;    // Expiration time for last USB app
@@ -102,11 +114,14 @@ static uint16_t state_amiga_app;          // Amiga app state
 static uint16_t state_usb_app;            // USB app state
 
 /* Message interface through Kicksmash between Amiga and USB host */
-static uint     prod_atou;   // Producer for Amiga -> USB buffer
-static uint     cons_atou;   // Consumer for Amiga -> USB buffer
-static uint     prod_utoa;   // Producer for USB buffer -> Amiga
-static uint     cons_utoa;   // Consumer for USB buffer -> Amiga
-static uint8_t  msg_lock;    // Bits !USB 0=atou 1=utoa, !Amiga 2=atou 3=utoa
+static uint     prod_atou;      // Producer for Amiga -> USB buffer
+static uint     cons_atou;      // Consumer for Amiga -> USB buffer
+static uint     prod_utoa;      // Producer for USB buffer -> Amiga
+static uint     cons_utoa;      // Consumer for USB buffer -> Amiga
+static uint     messages_atou;  // Count of Amiga-to-USB messages
+static uint     messages_utoa;  // Count of USB-to-Amiga messages
+static uint     messages_amiga; // Messages sent by Amiga
+static uint     messages_usb;   // Messages sent by USB Host
 
 /* Buffers for DMA from/to GPIOs and Timer event generation registers */
 #define ADDR_BUF_COUNT 1024
@@ -222,9 +237,17 @@ gpio_showbuf(uint count)
 #endif
 
 /*
+ * The Amiga-to-USB (atou) and USB-to-Amiga buffers are used to store data
+ * which is to be moved between the Amiga and a USB host.
+ *
+ * Note that data is stored in byte-swapped order (B1 B0 B4 B3 B6 B5...).
+ * This is done to help reduce latency in response to Amiga requests for
+ * I/O, which are very timing-sensitive. The STM32 DMA hardware delivers
+ * data to/from the GPIO ports in a byte-swapped manner.
+ *
  * Compute buffer space available   Compute buffer space in use
- * (S-1)-(P-C)&(S-1)                (P-C)&(S-1)
- * 4 ops                            3 ops
+ * (S-2)-(P-C)&(S-1)                (P-C)&(S-1)
+ * 5 ops                            3 ops
  *
  * Producer / consumer scenarios
  *  _ _ _ _ _ _ _ _    _ _ _ _ _ _ _ _    _ _ _ _ _ _ _ _
@@ -243,12 +266,11 @@ gpio_showbuf(uint count)
  * First scenario P-C will result in a negative, which is then masked
  * against the total_size - 1. That will yield a positive which is the
  * number of elements in use.
- *
  */
-#define MBUF1_SPACE_INUSE ((prod_atou - cons_atou) & (sizeof (msg_atou) - 1))
-#define MBUF2_SPACE_INUSE ((prod_utoa - cons_utoa) & (sizeof (msg_utoa) - 1))
-#define MBUF1_SPACE_AVAIL (sizeof (msg_atou) - 2 - MBUF1_SPACE_INUSE)
-#define MBUF2_SPACE_AVAIL (sizeof (msg_utoa) - 2 - MBUF2_SPACE_INUSE)
+#define SPACE_INUSE_ATOU ((prod_atou - cons_atou) & (sizeof (msg_atou) - 1))
+#define SPACE_INUSE_UTOA ((prod_utoa - cons_utoa) & (sizeof (msg_utoa) - 1))
+#define SPACE_AVAIL_ATOU (sizeof (msg_atou) - 2 - SPACE_INUSE_ATOU)
+#define SPACE_AVAIL_UTOA (sizeof (msg_utoa) - 2 - SPACE_INUSE_UTOA)
 
 static uint
 atou_add(uint len, void *ptr)
@@ -256,7 +278,7 @@ atou_add(uint len, void *ptr)
     uint xlen;
     uint8_t *sptr = ptr;
     len = (len + 1) & ~1;  // Round up to 16-bit alignment
-    if (MBUF1_SPACE_AVAIL < len)
+    if (len > SPACE_AVAIL_ATOU)
         return (1);
     xlen = sizeof (msg_atou) - prod_atou;
     if (len <= xlen) {
@@ -266,6 +288,7 @@ atou_add(uint len, void *ptr)
         memcpy(msg_atou, sptr + xlen, len - xlen);
     }
     prod_atou = (prod_atou + len) & (sizeof (msg_atou) - 1);
+    messages_atou++;
     return (0);
 }
 
@@ -275,7 +298,7 @@ utoa_add(uint len, void *ptr)
     uint xlen;
     uint8_t *sptr = ptr;
     len = (len + 1) & ~1;  // Round up to 16-bit alignment
-    if (MBUF2_SPACE_AVAIL < len)
+    if (len > SPACE_AVAIL_UTOA)
         return (1);
     xlen = sizeof (msg_utoa) - prod_utoa;
     if (len <= xlen) {
@@ -285,6 +308,7 @@ utoa_add(uint len, void *ptr)
         memcpy(msg_utoa, sptr + xlen, len - xlen);
     }
     prod_utoa = (prod_utoa + len) & (sizeof (msg_utoa) - 1);
+    messages_utoa++;
     return (0);
 }
 
@@ -293,7 +317,7 @@ atou_next_msg_len(void)
 {
     uint     len;
     uint     pos;
-    uint     inuse = MBUF1_SPACE_INUSE;
+    uint     inuse = SPACE_INUSE_ATOU;
     uint     count;
     uint16_t magic;
 
@@ -324,7 +348,7 @@ utoa_next_msg_len(void)
 {
     uint     len;
     uint     pos;
-    uint     inuse = MBUF2_SPACE_INUSE;
+    uint     inuse = SPACE_INUSE_UTOA;
     uint     count;
     uint16_t magic;
 
@@ -357,6 +381,17 @@ static uint
 oe_input(void)
 {
     return (GPIO_IDR(SOCKET_OE_PORT) & SOCKET_OE_PIN);
+}
+
+/*
+ * flash_oe_input
+ * --------------
+ * Return the current value of the FLASH_OE pin (either 0 or non-zero).
+ */
+static uint
+flash_oe_input(void)
+{
+    return (GPIO_IDR(FLASH_OE_PORT) & FLASH_OE_PIN);
 }
 
 static void
@@ -530,21 +565,6 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
     uint      dma_last;
     uint16_t  rlen = rlen1 + rlen2;
 
-    /* FLASH_OE=1 disables flash from driving data pins */
-    oe_output(1);
-    oe_output_enable();
-
-    /*
-     * Board rev 3 and higher have external bus tranceiver, so STM32 can
-     * always drive data bus so long as FLASH_OE is disabled.
-     */
-    data_output_enable();  // Drive data pins
-    if (flags & KS_REPLY_WE) {
-        we_output(1);
-        we_enable(0);      // Pull up
-        oewe_output(1);
-    }
-
     /*
      * Configure DMA hardware to drive data pins from RAM when OE goes high
      *
@@ -618,7 +638,7 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
                         txh--;          // Odd first + odd second = even
                 }
             }
-            pos = txh - buffer_txd_hi;
+            pos = (rlen + 3) / 4;
         } else {
             uint32_t crc;
             for (count = 0; count < ARRAY_SIZE(sm_magic); pos++) {
@@ -650,7 +670,7 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             }
             buffer_txd_hi[pos] = crc >> 16;
             buffer_txd_lo[pos] = (uint16_t) crc;
-            pos++;  // Include CRC
+            pos = (rlen + 3 + KS_HDR_AND_CRC_LEN) / 4;
         }
 
         /* TIM5 DMA drives low 16 bits */
@@ -676,14 +696,6 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
         dma_set_memory_size(DMA1, DMA_CHANNEL5, DMA_CCR_MSIZE_16BIT);
         DMA_CCR(DMA1, DMA_CHANNEL5) &= ~DMA_CCR_CIRC;
         dma_enable_channel(DMA1, DMA_CHANNEL5);
-
-        /* Send out first data and enable capture */
-        disable_irq();
-        TIM2_EGR = TIM_EGR_CC1G;
-        TIM5_EGR = TIM_EGR_CC1G;
-        TIM_CCER(TIM2) = TIM_CCER_CC1E;  // Enable, rising edge
-        TIM_CCER(TIM5) = TIM_CCER_CC1E;  // Enable, rising edge
-        enable_irq();
     } else {
         /* For 16-bit mode, a single DMA engine can be used */
         if (flags & KS_REPLY_RAW) {
@@ -711,6 +723,7 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             }
             buffer_txd_lo[pos++] = crc >> 16;
             buffer_txd_lo[pos++] = (uint16_t) crc;
+            pos = (rlen + 3 + KS_HDR_AND_CRC_LEN) / 2;
         }
 
         /* TIM5 DMA drives low 16 bits */
@@ -726,13 +739,39 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
         dma_enable_channel(DMA2, DMA_CHANNEL5);
 
         dma_disable_channel(DMA1, DMA_CHANNEL5);  // TIM2
-
-        /* Send out first data and enable capture */
-        disable_irq();
-        TIM5_EGR = TIM_EGR_CC1G;
-        TIM_CCER(TIM5) = TIM_CCER_CC1E;  // Enable, rising edge
-        enable_irq();
     }
+
+    /* FLASH_OE=1 disables flash from driving data pins */
+    oe_output(1);
+    oe_output_enable();
+
+    /*
+     * Board rev 3 and higher have external bus tranceiver, so STM32 can
+     * always drive data bus so long as FLASH_OE is disabled.
+     */
+    data_output_enable();  // Drive data pins
+    if (flags & KS_REPLY_WE) {
+        we_output(1);
+        we_enable(0);      // Pull up
+        oewe_output(1);
+    }
+
+    disable_irq();
+
+    /* Ensure OE is high before enabling DMA */
+    while ((oe_input() == 0) || (flash_oe_input() == 0))
+        __asm__("nop");
+
+    if (ee_mode == EE_MODE_32) {
+//      TIM2_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
+//      TIM5_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
+        TIM_CCER(TIM2) = TIM_CCER_CC1E;  // Enable DMA, rising edge
+        TIM_CCER(TIM5) = TIM_CCER_CC1E;  // Enable DMA, rising edge
+    } else {
+//      TIM5_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
+        TIM_CCER(TIM5) = TIM_CCER_CC1E;  // Enable DMA, rising edge
+    }
+    enable_irq();
 
 #ifdef CAPTURE_GPIOS
     if (flags & KS_REPLY_RAW) {
@@ -753,9 +792,9 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
                     oe_output_disable();
                     if (timer_tick_has_elapsed(ks_timeout_timer))
                         ks_timeout_count = 0;
-                    ks_timeout_timer = timer_tick_plus_msec(1000);
                     if (ks_timeout_count++ < 4)
                         printf(" KS timeout 0: %u reads left\n", dma_left);
+                    ks_timeout_timer = timer_tick_plus_msec(1000);
                     goto oe_reply_end;
                 }
                 __asm__ volatile("dmb");
@@ -827,7 +866,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             reply.si_ks_time[2] = temp[2];
             reply.si_ks_time[3] = 0;
             strcpy(reply.si_serial, (const char *)usb_serial_str);
-            reply.si_rev      = SWAP16(0x01);       // Protocol version 0.1
+            reply.si_rev      = SWAP16(0x0001);     // Protocol version 0.1
             reply.si_features = SWAP16(0x0001);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
             reply.si_mode     = ee_mode;
@@ -845,16 +884,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
         }
         case KS_CMD_TESTPATT: {
             /* Send special data pattern (for test / diagnostic) */
-            static const uint32_t reply[] = {
-                0x54534554, 0x54544150, 0x53202d20, 0x54524154,
-                0xaaaa5555, 0xcccc3333, 0xeeee1111, 0x66669999,
-                0x00020001, 0x00080004, 0x00200010, 0x00800040,
-                0x02000100, 0x08000400, 0x20001000, 0x80004000,
-                0xfffdfffe, 0xfff7fffb, 0xffdfffef, 0xff7fffbf,
-                0xfdfffeff, 0xf7fffbff, 0xdfffefff, 0x7fffbfff,
-                0x54534554, 0x54544150, 0x444e4520, 0x68646320,
-            };
-            ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
+            ks_reply(0, KS_STATUS_OK, sizeof (testpatt_reply),
+                     &testpatt_reply, 0, NULL);
             break;
         }
         case KS_CMD_LOOPBACK: {
@@ -870,7 +901,6 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 len1 = raw_len;
                 buf1 = (uint8_t *) &buffer_rxa_lo[cons_s];
                 ks_reply(KS_REPLY_RAW, 0, len1, buf1, 0, NULL);
-// printf("e=%02x%02x%02x%02x\n", buf1[len1 - 4], buf1[len1 - 3], buf1[len1 - 2], buf1[len1 - 1]);
             } else {
                 /* Send data from end of buffer + beginning of buffer */
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
@@ -881,7 +911,6 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 len2 = raw_len - len1;
                 buf2 = (uint8_t *) buffer_rxa_lo;
                 ks_reply(KS_REPLY_RAW, 0, len1, buf1, len2, buf2);
-// printf("c=%u l=%u+%u e1=%02x%02x e=%02x%02x%02x%02x\n", cons_s, len1, len2, buf1[len1 - 2], buf1[len1 - 1], buf2[len2 - 4], buf2[len2 - 3], buf2[len2 - 2], buf2[len2 - 1]);
             }
             break;
         }
@@ -1186,7 +1215,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 }
                 state_amiga_app = (state_amiga_app & ~mask) | (state & mask);
                 expire_update_amiga_app = timer_tick_plus_msec(expire);
-printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
+//printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
             }
             reply[0] = SWAP16(state_amiga_app);
             reply[1] = SWAP16(state_usb_app);
@@ -1195,34 +1224,47 @@ printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
         }
         case KS_CMD_MSG_INFO: {
             smash_msg_info_t reply;
-            uint16_t         temp;
-            uint16_t         avail1;
-            uint16_t         avail2;
+            uint16_t         avail_atou;
+            uint16_t         avail_utoa;
+            uint16_t         inuse_atou;
+            uint16_t         inuse_utoa;
 
-            avail1 = MBUF1_SPACE_AVAIL;
-            avail2 = MBUF2_SPACE_AVAIL;
-            if (avail1 >= KS_HDR_AND_CRC_LEN)
-                avail1 -= KS_HDR_AND_CRC_LEN;
-            else
-                avail1 = 0;
-            if (avail2 >= KS_HDR_AND_CRC_LEN)
-                avail2 -= KS_HDR_AND_CRC_LEN;
-            else
-                avail2 = 0;
+            if (msg_lock & BIT(2)) {
+                inuse_atou = 0;
+                avail_atou = 0;
+            } else {
+                inuse_atou = SPACE_INUSE_ATOU;
+                avail_atou = SPACE_AVAIL_ATOU;
+                if (avail_atou >= KS_HDR_AND_CRC_LEN)
+                    avail_atou -= KS_HDR_AND_CRC_LEN;
+                else
+                    avail_atou = 0;
+            }
+
+            if (msg_lock & BIT(3)) {
+                inuse_utoa = 0;
+                avail_utoa = 0;
+            } else {
+                inuse_utoa = SPACE_INUSE_UTOA;
+                avail_utoa = SPACE_AVAIL_UTOA;
+                if (avail_utoa >= KS_HDR_AND_CRC_LEN)
+                    avail_utoa -= KS_HDR_AND_CRC_LEN;
+                else
+                    avail_utoa = 0;
+            }
 
             if (timer_tick_has_elapsed(expire_update_amiga_app))
                 state_amiga_app = 0;
             if (timer_tick_has_elapsed(expire_update_usb_app))
                 state_usb_app = 0;
 
-            temp                  = MBUF1_SPACE_INUSE;
-            reply.smi_atou_inuse  = SWAP16(temp);
-            reply.smi_atou_avail  = SWAP16(avail1);
-            temp                  = MBUF2_SPACE_INUSE;
-            reply.smi_utoa_inuse  = SWAP16(temp);
-            reply.smi_utoa_avail  = SWAP16(avail2);
+            reply.smi_atou_inuse  = SWAP16(inuse_atou);
+            reply.smi_atou_avail  = SWAP16(avail_atou);
+            reply.smi_utoa_inuse  = SWAP16(inuse_utoa);
+            reply.smi_utoa_avail  = SWAP16(avail_utoa);
             reply.smi_state_amiga = SWAP16(state_amiga_app);
             reply.smi_state_usb   = SWAP16(state_usb_app);
+            memset(reply.smi_unused, 0, sizeof (reply.smi_unused));
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
             break;
         }
@@ -1234,16 +1276,21 @@ printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
             uint len2;
             uint rc;
             cons_s = rx_consumer - (raw_len - 1) / 2;
-//printf("[%u]", raw_len);
+
+            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(2))) ||
+                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(3)))) {
+                ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                break;
+            }
+
             if ((int) cons_s >= 0) {
                 /* Receive data doesn't wrap */
                 len1 = raw_len;
                 buf1 = (uint8_t *) &buffer_rxa_lo[cons_s];
-                if (cmd & KS_MSG_ALTBUF) {
-                    rc = utoa_add(len1, buf1);
-                } else {
+                if ((cmd & KS_MSG_ALTBUF) == 0) {
                     rc = atou_add(len1, buf1);
-//printf("pb1=%u\n", prod_atou);
+                } else {
+                    rc = utoa_add(len1, buf1);
                 }
             } else {
                 /* Send data from end of buffer + beginning of buffer */
@@ -1255,25 +1302,25 @@ printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
                 len2 = raw_len - len1;
                 buf2 = (uint8_t *) buffer_rxa_lo;
 
-                if (cmd & KS_MSG_ALTBUF) {
-                    if (len1 + len2 > MBUF2_SPACE_AVAIL) {
-                        rc = 1;
-                    } else {
-                        rc = utoa_add(len1, buf1);
-                        if (rc == 0)
-                            rc = utoa_add(len2, buf2);
-                    }
-                } else {
-                    if (len1 + len2 > MBUF1_SPACE_AVAIL) {
+                if ((cmd & KS_MSG_ALTBUF) == 0) {
+                    if (raw_len > SPACE_AVAIL_ATOU) {
                         rc = 1;
                     } else {
                         rc = atou_add(len1, buf1);
-//printf("Pb1=%u\n", prod_atou);
-                        if (rc == 0)
-{
+                        if (rc == 0) {
                             rc = atou_add(len2, buf2);
-//printf("PB1=%u\n", prod_atou);
-}
+                            messages_atou--;
+                        }
+                    }
+                } else {
+                    if (raw_len > SPACE_AVAIL_UTOA) {
+                        rc = 1;
+                    } else {
+                        rc = utoa_add(len1, buf1);
+                        if (rc == 0) {
+                            rc = utoa_add(len2, buf2);
+                            messages_utoa--;
+                        }
                     }
                 }
             }
@@ -1289,29 +1336,14 @@ printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
             uint     len2;
             uint8_t *buf1;
             uint8_t *buf2;
-            if (cmd & KS_MSG_ALTBUF) {
-                if (msg_lock & BIT(2)) {
-                    ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
-                    break;
-                }
-                len = atou_next_msg_len();
-                len1 = sizeof (msg_atou) - cons_atou;
-                if (len1 > len) {
-                    /* Send data doesn't wrap */
-                    len1 = len;
-                    len2 = 0;
-                } else {
-                    /* Send data from end + beginning of circular buffer */
-                    len2 = len - len1;
-                }
-                buf1 = msg_atou + cons_atou;
-                buf2 = msg_atou;
-                cons_atou = (cons_atou + len) & (sizeof (msg_atou) - 1);
-            } else {
-                if (msg_lock & BIT(3)) {
-                    ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
-                    break;
-                }
+
+            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(3))) ||
+                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(2)))) {
+                ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                break;
+            }
+
+            if ((cmd & KS_MSG_ALTBUF) == 0) {
                 len = utoa_next_msg_len();
                 len1 = sizeof (msg_utoa) - cons_utoa;
                 if (len1 > len) {
@@ -1324,15 +1356,30 @@ printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
                 }
                 buf1 = msg_utoa + cons_utoa;
                 buf2 = msg_utoa;
-                cons_utoa = (cons_utoa + len) & (sizeof (msg_utoa) - 1);
+            } else {
+                len = atou_next_msg_len();
+                len1 = sizeof (msg_atou) - cons_atou;
+                if (len1 > len) {
+                    /* Send data doesn't wrap */
+                    len1 = len;
+                    len2 = 0;
+                } else {
+                    /* Send data from end + beginning of circular buffer */
+                    len2 = len - len1;
+                }
+                buf1 = msg_atou + cons_atou;
+                buf2 = msg_atou;
             }
             if (len == 0) {
                 ks_reply(0, KS_STATUS_NODATA, 0, NULL, 0, NULL);
-printf("nd%s\n", (cmd & KS_MSG_ALTBUF) ? " alt" : "");
-            } else {
-                ks_reply(KS_REPLY_RAW, 0, len1, buf1, len2, buf2);
-//              printf("l=%u+%u cb1=%u pb1=%u %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x %02x%02x%s\n", len1, len2, cons_atou, prod_atou, buf1[0], buf1[1], buf1[2], buf1[3], buf1[4], buf1[5], buf1[6], buf1[7], buf1[9], buf1[9], buf1[10], buf1[11], (cmd & KS_MSG_ALTBUF) ? " alt" : "");
+                break;
             }
+
+            ks_reply(KS_REPLY_RAW, 0, len1, buf1, len2, buf2);
+            if ((cmd & KS_MSG_ALTBUF) == 0)
+                cons_utoa = (cons_utoa + len) & (sizeof (msg_utoa) - 1);
+            else
+                cons_atou = (cons_atou + len) & (sizeof (msg_atou) - 1);
             break;
         }
         case KS_CMD_MSG_LOCK: {
@@ -1356,6 +1403,13 @@ printf("nd%s\n", (cmd & KS_MSG_ALTBUF) ? " alt" : "");
             ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             break;
         }
+        case KS_CMD_MSG_FLUSH:
+            if (cmd & KS_MSG_ALTBUF)
+                cons_atou = prod_atou;
+            else
+                cons_utoa = prod_utoa;  // default: flush "my" receive buffer
+            ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            break;
         case KS_CMD_CLOCK: {
             uint64_t  now  = timer_tick_get();
             uint64_t  usec = timer_tick_to_usec(now);
@@ -1407,8 +1461,6 @@ printf("nd%s\n", (cmd & KS_MSG_ALTBUF) ? " alt" : "");
             break;
     }
 }
-
-
 
 /*
  * process_addresses
@@ -1474,7 +1526,7 @@ new_cmd_post:
                 break;
             case ARRAY_SIZE(sm_magic):
                 /* Length phase */
-                message_count++;
+                messages_amiga++;
                 len = cmd_len = buffer_rxa_lo[rx_consumer];
                 crc = crc32r(0, &len, sizeof (uint16_t));
                 cmd_len = (cmd_len + 1) & ~1;  // round up
@@ -1521,7 +1573,7 @@ new_cmd_post:
                     static uint16_t tempcap[16];
                     uint c = rx_consumer;
                     int pos;
-                    for (pos = ARRAY_SIZE(tempcap) - 1; pos > 0; pos--) {
+                    for (pos = ARRAY_SIZE(tempcap) - 1; pos >= 0; pos--) {
                         tempcap[pos] = buffer_rxa_lo[c];
                         if (c-- == 0)
                             c = ARRAY_SIZE(buffer_rxa_lo) - 1;
@@ -1578,12 +1630,7 @@ new_cmd_post:
 void
 tim5_isr(void)
 {
-#if 0
-    uint flags = TIM_SR(TIM5) & TIM_DIER(TIM5);
-    TIM_SR(TIM5) = ~flags;  /* Clear interrupt */
-#else
     TIM_SR(TIM5) = 0;  /* Clear all TIM5 interrupt status */
-#endif
 
     process_addresses();
 }
@@ -1614,13 +1661,21 @@ address_log_replay(uint max)
                "T5C1=%04x %08x\n"
                "Wrap=%u\n"
                "Spin=%u\n"
-               "Msgs=%u\n",
+               "KS Messages  Amiga=%-8u  USB=%u\n"
+               "Buf Messages  AtoU=%-8u UtoA=%u\n"
+               "Message Prod  AtoU=%-8u UtoA=%u\n"
+               "Message Cons  AtoU=%-8u UtoA=%u\n",
                (uint) DMA_CNDTR(DMA1, DMA_CHANNEL5), (uintptr_t)buffer_rxd,
                (uint) DMA_CNDTR(DMA2, DMA_CHANNEL5), (uintptr_t)buffer_rxa_lo,
-               consumer_wrap, consumer_spin, message_count);
+               consumer_wrap, consumer_spin, messages_amiga, messages_usb,
+               messages_atou, messages_utoa, prod_atou, prod_utoa,
+               cons_atou, cons_utoa);
         consumer_wrap = 0;
         consumer_spin = 0;
-        message_count = 0;
+        messages_amiga = 0;
+        messages_usb = 0;
+        messages_atou = 0;
+        messages_utoa = 0;
         return (0);
     }
     if (max > ARRAY_SIZE(buffer_rxa_lo) - 1)
@@ -1793,6 +1848,390 @@ msg_mode(uint mode)
     else
         reboot_magic = reboot_magic_32;
     reboot_magic_end = reboot_magic[0];
+}
+
+static uint8_t usb_msg_buffer[2048];
+
+static void
+usb_msg_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
+              uint rlen2, const void *rbuf2)
+{
+    uint rlen = rlen1 + rlen2;
+
+    if (flags & KS_REPLY_RAW) {
+        /* raw mode byte swaps and sends an already constructed message */
+        if (rlen1 != 0) {
+            if (puts_binary(rbuf1, rlen1))
+                printf("puts_binary %u fail\n", rlen1);
+        }
+        if (rlen2 != 0) {
+            if (puts_binary(rbuf2, rlen2))
+                printf("puts_binary %u fail\n", rlen2);
+        }
+    } else {
+        uint16_t data[2];
+        uint32_t crc;
+        if (puts_binary(sm_magic, sizeof (sm_magic)))
+            printf("puts_binary %u fail\n", sizeof (sm_magic));
+        data[0] = rlen;
+        data[1] = status;
+        crc = crc32s(0, data, sizeof (data));
+        if (puts_binary(data, sizeof (data)))
+            printf("puts_binary %u fail\n", sizeof (data));
+        if (rlen1 != 0) {
+            if (puts_binary(rbuf1, rlen1))
+                printf("puts_binary %u fail\n", rlen1);
+            crc = crc32s(crc, rbuf1, rlen1);
+        }
+        if (rlen2 != 0) {
+            if (puts_binary(rbuf2, rlen2))
+                printf("puts_binary %u fail\n", rlen2);
+            crc = crc32s(crc, rbuf2, rlen2);
+        }
+        crc = (crc << 16) | (crc >> 16);  // Convert to match Amiga format
+        if (puts_binary(&crc, sizeof (crc)))
+            printf("puts_binary %u fail\n", sizeof (crc));
+    }
+}
+
+static void
+execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
+{
+    uint8_t *buf = rawbuf + 12;
+    switch ((uint8_t) cmd) {
+        case KS_CMD_NULL:
+            /* Do absolutely nothing (discard command) */
+            break;
+        case KS_CMD_NOP:
+            /* Do nothing but reply */
+            usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            break;  // End processing
+        case KS_CMD_ID: {
+            /* Send Kickflash identification and configuration */
+            smash_id_t reply;
+            uint temp[3];
+            int  pos = 0;
+            memset(&reply, 0, sizeof (reply));
+            sscanf(version_str + 8, "%u.%u%n", &temp[0], &temp[1], &pos);
+            reply.si_ks_version[0] = SWAP16(temp[0]);
+            reply.si_ks_version[1] = SWAP16(temp[1]);
+            if (pos == 0)
+                pos = 18;
+            else
+                pos += 8 + 7;
+            sscanf(version_str + pos, "%04u-%02u-%02u",
+                   &temp[0], &temp[1], &temp[2]);
+            reply.si_ks_date[0] = temp[0] / 100;
+            reply.si_ks_date[1] = temp[0] % 100;
+            reply.si_ks_date[2] = temp[1];
+            reply.si_ks_date[3] = temp[2];
+            pos += 11;
+            sscanf(version_str + pos, "%02u:%02u:%02u",
+                   &temp[0], &temp[1], &temp[2]);
+            reply.si_ks_time[0] = temp[0];
+            reply.si_ks_time[1] = temp[1];
+            reply.si_ks_time[2] = temp[2];
+            reply.si_ks_time[3] = 0;
+            strcpy(reply.si_serial, (const char *)usb_serial_str);
+            reply.si_rev      = SWAP16(0x0001);     // Protocol version 0.1
+            reply.si_features = SWAP16(0x0001);     // Features
+            reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
+            reply.si_mode     = ee_mode;
+            strcpy(reply.si_name, config.name);
+            memset(reply.si_unused, 0, sizeof (reply.si_unused));
+            usb_msg_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
+            break;
+        }
+        case KS_CMD_UPTIME: {
+            uint64_t now = timer_tick_get();
+            uint64_t usec = timer_tick_to_usec(now);
+            usec = SWAP64(usec);  // Big endian format
+            usb_msg_reply(0, KS_STATUS_OK, sizeof (usec), &usec, 0, NULL);
+            break;
+        }
+        case KS_CMD_TESTPATT: {
+            /* Send special data pattern (for test / diagnostic) */
+            usb_msg_reply(0, KS_STATUS_OK, sizeof (testpatt_reply),
+                          &testpatt_reply, 0, NULL);
+            break;
+        }
+        case KS_CMD_LOOPBACK: {
+            uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
+            usb_msg_reply(1, 0, raw_len, rawbuf, 0, NULL);
+            break;
+        }
+        case KS_CMD_BANK_INFO:
+            /* Get bank info */
+            usb_msg_reply(0, KS_STATUS_OK, sizeof (config.bi),
+                          &config.bi, 0, NULL);
+            break;
+        case KS_CMD_APP_STATE: {
+            uint16_t reply[2];
+            if (cmd & KS_APP_STATE_SET) {
+                uint16_t mask;
+                uint16_t state;
+                uint16_t expire = 10000;  // 10 seconds
+                if ((cmd_len != 4) && (cmd_len != 6)) {
+                    usb_msg_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                    break;
+                }
+                mask = (buf[0] << 8) | buf[1];
+                state = (buf[2] << 8) | buf[3];
+                if (cmd_len == 6) {
+                    expire = (buf[4] << 8) | buf[5];
+                }
+                state_usb_app = (state_usb_app & ~mask) | (state & mask);
+                expire_update_usb_app = timer_tick_plus_msec(expire);
+            }
+            reply[0] = SWAP16(state_amiga_app);
+            reply[1] = SWAP16(state_usb_app);
+            usb_msg_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
+            break;
+        }
+        case KS_CMD_MSG_INFO: {
+            smash_msg_info_t reply;
+            uint16_t         avail_atou;
+            uint16_t         avail_utoa;
+            uint16_t         inuse_atou;
+            uint16_t         inuse_utoa;
+
+            if (msg_lock & BIT(0)) {
+                inuse_atou = 0;
+                avail_atou = 0;
+            } else {
+                inuse_atou = SPACE_INUSE_ATOU;
+                avail_atou = SPACE_AVAIL_ATOU;
+                if (avail_atou >= KS_HDR_AND_CRC_LEN)
+                    avail_atou -= KS_HDR_AND_CRC_LEN;
+                else
+                    avail_atou = 0;
+            }
+
+            if (msg_lock & BIT(1)) {
+                inuse_utoa = 0;
+                avail_utoa = 0;
+            } else {
+                inuse_utoa = SPACE_INUSE_UTOA;
+                avail_utoa = SPACE_AVAIL_UTOA;
+                if (avail_utoa >= KS_HDR_AND_CRC_LEN)
+                    avail_utoa -= KS_HDR_AND_CRC_LEN;
+                else
+                    avail_utoa = 0;
+            }
+
+            if (timer_tick_has_elapsed(expire_update_amiga_app))
+                state_amiga_app = 0;
+            if (timer_tick_has_elapsed(expire_update_usb_app))
+                state_usb_app = 0;
+
+            reply.smi_atou_inuse  = SWAP16(inuse_atou);
+            reply.smi_atou_avail  = SWAP16(avail_atou);
+            reply.smi_utoa_inuse  = SWAP16(inuse_utoa);
+            reply.smi_utoa_avail  = SWAP16(avail_utoa);
+            reply.smi_state_amiga = SWAP16(state_amiga_app);
+            reply.smi_state_usb   = SWAP16(state_usb_app);
+            memset(reply.smi_unused, 0, sizeof (reply.smi_unused));
+            usb_msg_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
+            break;
+        }
+        case KS_CMD_MSG_SEND: {
+            uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
+            uint rc;
+
+            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(1))) ||
+                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(0)))) {
+                usb_msg_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                break;
+            }
+            if ((cmd & KS_MSG_ALTBUF) == 0)
+                rc = utoa_add(raw_len, rawbuf);
+            else
+                rc = atou_add(raw_len, rawbuf);
+
+            if (rc != 0)
+                usb_msg_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+            else
+                usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            break;
+        }
+        case KS_CMD_MSG_RECEIVE: {
+            uint     len;
+            uint     len1;
+            uint     len2;
+            uint8_t *buf1;
+            uint8_t *buf2;
+
+            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(0))) ||
+                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(1)))) {
+                usb_msg_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                break;
+            }
+
+            if ((cmd & KS_MSG_ALTBUF) == 0) {
+                len = atou_next_msg_len();
+                len1 = sizeof (msg_atou) - cons_atou;
+                if (len1 > len) {
+                    /* Send data doesn't wrap */
+                    len1 = len;
+                    len2 = 0;
+                } else {
+                    /* Send data from end + beginning of circular buffer */
+                    len2 = len - len1;
+                }
+                buf1 = msg_atou + cons_atou;
+                buf2 = msg_atou;
+            } else {
+                len = utoa_next_msg_len();
+                len1 = sizeof (msg_utoa) - cons_utoa;
+                if (len1 > len) {
+                    /* Send data doesn't wrap */
+                    len1 = len;
+                    len2 = 0;
+                } else {
+                    /* Send data from end + beginning of circular buffer */
+                    len2 = len - len1;
+                }
+                buf1 = msg_utoa + cons_utoa;
+                buf2 = msg_utoa;
+            }
+            if (len == 0) {
+                usb_msg_reply(0, KS_STATUS_NODATA, 0, NULL, 0, NULL);
+                break;
+            }
+
+            usb_msg_reply(KS_REPLY_RAW, 0, len1, buf1, len2, buf2);
+            if ((cmd & KS_MSG_ALTBUF) == 0)
+                cons_atou = (cons_atou + len) & (sizeof (msg_atou) - 1);
+            else
+                cons_utoa = (cons_utoa + len) & (sizeof (msg_utoa) - 1);
+            break;
+        }
+        case KS_CMD_MSG_LOCK: {
+            uint lockbits = (buf[0] << 8) | buf[1];
+
+            if (cmd & KS_MSG_UNLOCK) {
+                msg_lock &= ~lockbits;
+            } else {
+                if (((lockbits & BIT(2)) && (msg_lock & BIT(0))) ||
+                    ((lockbits & BIT(3)) && (msg_lock & BIT(1)))) {
+                    /* Attempted to lock resource owned by the other side */
+                    usb_msg_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                    break;
+                }
+                msg_lock |= lockbits;
+            }
+            usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            break;
+        }
+        case KS_CMD_MSG_FLUSH:
+            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(0))) ||
+                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(1)))) {
+                usb_msg_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                break;
+            }
+            if ((cmd & KS_MSG_ALTBUF) == 0)
+                cons_atou = prod_atou;  // default: flush "my" receive buffer
+            else
+                cons_utoa = prod_utoa;
+            usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            break;
+    }
+}
+
+void
+msg_usb_service(void)
+{
+    uint     ch;
+    uint     len = 0;
+    uint     len_rounded = 0;
+    uint     pos = 0;
+    uint32_t crc;
+
+    while (1) {
+        ch = getchar();
+        if ((int)ch == -1) {
+            /* Timeout will clobber received data and reset */
+            uint64_t timeout = timer_tick_plus_msec(200);
+            while ((int)(ch = getchar()) == -1) {
+                main_poll();
+                if (timer_tick_has_elapsed(timeout)) {
+                    pos = 0;
+                    break;
+                }
+            }
+            if ((int)ch == -1) {
+                continue;
+            }
+        }
+        usb_msg_buffer[pos] = ch;
+        switch (pos) {
+            case 0:  // Magic start
+                if ((ch == 0x3) || (ch == '\n') || (ch == '\r'))
+                    return;  // Abort received ^C, LF, or CR
+                /* FALLTHROUGH */
+            case 1:  // Magic
+            case 2:  // Magic
+            case 3:  // Magic
+            case 4:  // Magic
+            case 5:  // Magic
+            case 6:  // Magic
+            case 7:  // Magic
+                if (ch != sm_magic_b[pos])
+                    pos = 0;
+                else
+                    pos++;
+                break;
+            case 8:  // Length phase 1
+                messages_usb++;
+                len = ch;
+                pos++;
+                break;
+            case 9:  // Length phase 2
+                len |= (ch << 8);
+                len_rounded = (len + 1) & ~1;
+                pos++;
+                break;
+            case 10:  // Command phase 1
+            case 11:  // Command phase 2
+                pos++;
+                break;
+            default: {  // Data and CRC phase
+                uint32_t crc_rx;
+                uint     cmd;
+                if (pos != len_rounded + 15) {
+                    /* More data pending */
+                    pos++;
+                    break;
+                }
+
+                /*
+                 * Last byte of CRC received. CRC region begins after
+                 * sm_magic (8 bytes) and includes length (2) + cmd (2).
+                 */
+                crc = crc32s(0, usb_msg_buffer + 8, len + 4);
+                cmd = usb_msg_buffer[10] | (usb_msg_buffer[11] << 8);
+                crc_rx = (usb_msg_buffer[12 + 1 + len_rounded] << 24) |
+                         (usb_msg_buffer[12 + 0 + len_rounded] << 16) |
+                         (usb_msg_buffer[12 + 3 + len_rounded] << 8) |
+                         (usb_msg_buffer[12 + 2 + len_rounded]);
+                if (crc != crc_rx) {
+                    uint16_t error[2];
+                    error[0] = KS_STATUS_CRC;
+                    error[1] = crc;
+                    usb_msg_reply(0, KS_STATUS_CRC, sizeof (error),
+                                  &error, 0, NULL);
+                    printf("Ucmd=%x l=%04x CRC %08lx != calc %08lx\n",
+                           cmd, len, crc_rx, crc);
+                    pos = 0;
+                    break;
+                }
+                execute_usb_cmd(cmd, len, usb_msg_buffer);
+
+                pos = 0;
+                break;
+            }
+        }
+    }
 }
 
 void

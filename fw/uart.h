@@ -67,7 +67,7 @@ int input_break_pending(void);
 
 int uart_putchar(int ch);
 void uart_flush(void);
-int puts_binary(void *buf, uint32_t len);
+int puts_binary(const void *buf, uint32_t len);
 
 #define SOURCE_UART 0  // Last input source was serial UART
 #define SOURCE_USB  1  // Last input source was USB virtual serial port

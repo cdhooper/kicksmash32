@@ -42,6 +42,16 @@ reset_everything(void)
     RCC_APB2RSTR = 0x00000000;  // Release APB2 reset
 }
 
+void
+main_poll(void)
+{
+    usb_poll();
+    adc_poll(true, false);
+    ee_poll();
+    kbrst_poll();
+    config_poll();
+    msg_poll();
+}
 
 int
 main(void)
@@ -77,13 +87,8 @@ main(void)
     led_power(1);
 
     while (1) {
-        usb_poll();
-        adc_poll(true, false);
-        ee_poll();
+        main_poll();
         cmdline();
-        kbrst_poll();
-        config_poll();
-        msg_poll();
     }
 
     return (0);

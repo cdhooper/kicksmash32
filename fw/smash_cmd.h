@@ -36,6 +36,7 @@
 #define KS_CMD_MSG_SEND      0x21  // Send a remote message
 #define KS_CMD_MSG_RECEIVE   0x22  // Receive a remote message
 #define KS_CMD_MSG_LOCK      0x23  // Lock or unlock message buffers
+#define KS_CMD_MSG_FLUSH     0x24  // Flush and discard message buffer(s)
 
 /* Status codes returned by Kicksmash */
 #define KS_STATUS_OK       0x0000  // Success
@@ -67,6 +68,20 @@
 #define KS_APP_STATE_SET   0x0100  // Update Amiga-side app state
 
 #define KS_HDR_AND_CRC_LEN (8 + 2 + 2 + 4)  // Magic+Len+Cmd+CRC = 16 bytes
+
+/* Application state bits */
+#define APP_STATE_SERVICE_UP    0x0001  // Message service running
+#define APP_STATE_HAVE_LOOPBACK 0x0002  // Loopback service available
+#define APP_STATE_HAVE_FILE     0x0004  // File service available
+
+/* Operations which apply to message payload header km_op */
+#define KM_OP_NULL           0x00  // Do nothing (discard message)
+#define KM_OP_NOP            0x01  // Do nothing but reply
+#define KM_OP_ID             0x02  // Report app ID and configuration
+#define KM_OP_LOOPBACK       0x05  // Message loopback
+#define KM_OP_FILE           0x0f  // File storage
+
+#define KM_OP_REPLY          0x80  // Reply message to requested operation
 
 /*
  * All Kicksmash commands are encapsulated within a standard message body
@@ -210,9 +225,11 @@
  *              uint16_t smi_app_state_usb;
  *   KS_CMD_MSG_SEND
  *        Any data provided, including Header and CRC, is sent to the USB host.
+ *        See below for payload format.
  *   KS_CMD_MSG_RECV
  *        If there is data pending from the USB host, it will be returned to
  *        the Amiga in the buffer, given there is sufficient space available.
+ *        See below for payload format.
  *   KS_CMD_MSG_LOCK
  *        A single value is specified, which are the lock bits:
  *              bit 0 = lock buffer 1 from Amiga access
@@ -221,6 +238,23 @@
  *              bit 3 = lock buffer 2 from USB access
  *        If the command code includes KS_MSG_UNLOCK, then the specified
  *        lock bits will be unlocked.
+ *   KS_CMD_MSG_FLUSH
+ *        The receive message buffer will be flushed. For the Amiga, this
+ *        is the USB-to-Amiga buffer. If KS_MSG_ALTBUF is specified, then the
+ *        opposite-direction buffer will be flushed.
+ *
+ * The payload of KS_CMD_MSG_SEND is normal byte order on the Amiga side,
+ * but is byte-swapped when the USB host is dealing with the data. This is
+ * an artifact of how the STM32 DMA works with GPIO ports. The USB host is
+ * responsible for byte swapping messages, both for receive and transmit.
+ * A message payload includes the following header structure:
+ *      uint32_t km_handler;   // Amiga-side handler
+ *      uint8_t  km_op;        // Operation to perform (KM_OP_*)
+ *      uint8_t  km_status;    // Status reply
+ *      uint8_t  km_tag;       // Sequence number
+ *      uint8_t  km_unused;    // Reserved
+ * All header fields except the status reply are preserved from a request
+ * message to the reply message.
  */
 
 #define ROM_BANKS 8
@@ -257,5 +291,13 @@ typedef struct {
     uint16_t smi_state_usb;              // USB host connection state
     uint8_t  smi_unused[16];             // Unused space
 } smash_msg_info_t;
+
+typedef struct {
+    uint8_t  km_op;        // Operation to perform (KM_OP_*)
+    uint8_t  km_status;    // Status reply
+    uint8_t  km_tag;       // Message tag or sequence number
+    uint8_t  km_unused;    // Reserved
+    uint32_t km_handler;   // Amiga-side handler
+} km_msg_hdr_t;
 
 #endif /* _SMASH_H */

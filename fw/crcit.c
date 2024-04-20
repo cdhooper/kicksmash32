@@ -48,12 +48,14 @@ main(int argc, char *argv[])
                 /* Length phase */
                 len = cmd_len = v;
                 crc = crc32r(0, &len, sizeof (uint16_t));
+                printf("crc at len=%08x\n", crc);
                 magic_pos++;
                 break;
             case ARRAY_SIZE(sm_magic) + 1:
                 /* Command phase */
                 cmd = v;
                 crc = crc32r(crc, &cmd, sizeof (uint16_t));
+                printf("crc at cmd=%08x\n", crc);
                 if (len == 0)
                     magic_pos++;  // Skip following Data Phase
                 magic_pos++;
@@ -66,7 +68,8 @@ main(int argc, char *argv[])
                     len--;
                 } else {
                     /* Special case -- odd byte at end */
-                    crc = crc32(crc, ((uint8_t *) &v) + 1, 1);
+                    printf("odd last byte=%02x\n", *((uint8_t *) &v));
+                    crc = crc32(crc, (uint8_t *) &v, 1);
                 }
                 if (len == 0)
                     magic_pos++;

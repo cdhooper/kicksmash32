@@ -50,6 +50,7 @@
 #endif
 
 #define USB_MAX_EP0_SIZE 64
+#define USB_MAX_EP2_SIZE 64
 #define DEVICE_CLASS_MISC 0xef
 #define GPIO_OSPEED_LOW GPIO_MODE_OUTPUT_2_MHZ
 
@@ -98,7 +99,12 @@
 #define ARRAY_SIZE(x) (int)((sizeof (x) / sizeof ((x)[0])))
 
 static bool using_usb_interrupt = false;
+static uint8_t ep_send_zero = 0xff;
 uint8_t usb_console_active = false;
+uint  usb_drop_packets = 0;
+uint  usb_drop_bytes = 0;
+uint  usb_send_timeouts = 0;
+
 
 /**
  * Device Descriptor for USB FS port
@@ -224,10 +230,11 @@ usb_signal_reset_to_host(int restart)
 }
 
 /* libopencm3 */
+#if 0
 static uint8_t *gbuf;                      // Start of current packet
 static uint16_t glen;                      // Total length of current packet
 static uint16_t gpos;                      // Progress position of current pkt
-static volatile bool preparing_packet = false;  // Preparing to send new packet
+#endif
 
 /*
  * CDC_Transmit_FS() is used to put data in the USB transmit FIFO so that
@@ -241,37 +248,103 @@ static volatile bool preparing_packet = false;  // Preparing to send new packet
  * as this will overrun hardware buffers.
  */
 uint8_t
-CDC_Transmit_FS(uint8_t *buf, uint16_t len)
+CDC_Transmit_FS(uint8_t *buf, uint len)
 {
-#ifdef DEBUG_NO_USB
-    return (USBD_OK);
-#endif
+#ifndef DEBUG_NO_USB
+    uint tlen = USB_MAX_EP2_SIZE;  // 64 bytes
     uint64_t timeout = 0;
 
     if (usb_console_active == false)
         return (-1);
-    preparing_packet = true;
 
-    while (len > 0) {
-        uint16_t tlen = len;
-        uint16_t rc;
-        if (tlen > 64)
-            tlen = 64;
+    if (len == 0)
+        return (USBD_OK);
+
+#if 0
+    /*
+     * Transfer all data in USB_MAX_EP2_SIZE size packets.
+     * If the last packet is exactly USB_MAX_EP2_SIZE size in bytes,
+     * then a following zero-length packet must be sent.
+     */
+    while (len != 0) {
+        uint count;
+        if (tlen > len)
+            tlen = len;
         usb_poll();
         usb_mask_interrupts();
-        rc = usbd_ep_write_packet(usbd_gdev, 0x82, buf, tlen);
+        count = usbd_ep_write_packet(usbd_gdev, 0x82, buf, tlen);
+        if ((len - count) == 0)
+            ep_send_zero = 0x2;  // Callback will send final zero-length packet
         usb_unmask_interrupts();
-        if (rc == 0) {
-            if (timeout == 0)
-                return (-1);
-            if (timer_tick_has_elapsed(timeout))
-                return (-1);
+        if (count == 0) {
+            /* Wrote 0 bytes */
+            if (timeout == 0) {
+                timeout = timer_tick_plus_msec(50);
+            } else if (timer_tick_has_elapsed(timeout)) {
+                /* Try one last time */
+                usb_mask_interrupts();
+                count = usbd_ep_write_packet(usbd_gdev, 0x82, buf, tlen);
+                if ((len - count) == 0)
+                    ep_send_zero = 0x2;  // Send final zero-length packet
+                usb_unmask_interrupts();
+                if (count != 0)
+                    goto transmit_success;
+                usb_drop_packets++;
+                usb_drop_bytes += tlen;
+                return (-1);  // Timeout
+            }
+            continue;
         } else {
-            len -= tlen;
-            buf += tlen;
-            timeout = timer_tick_plus_msec(10);
+transmit_success:
+            len -= count;
+            buf += count;
+            timeout = timer_tick_plus_msec(50);
         }
     }
+#else
+    /*
+     * Transfer all data in USB_MAX_EP2_SIZE size packets.
+     * If the last packet is exactly USB_MAX_EP2_SIZE size in bytes,
+     * we will split that packet to avoid having to deal with the
+     * terminating zero-length packet in the callback function.
+     */
+    while (len != 0) {
+        uint count;
+        if (tlen > len)
+            tlen = len;
+        if ((tlen == USB_MAX_EP2_SIZE) && (len == USB_MAX_EP2_SIZE)) {
+            /* Last packet */
+            tlen = USB_MAX_EP2_SIZE / 2;
+        }
+        usb_poll();
+        usb_mask_interrupts();
+        count = usbd_ep_write_packet(usbd_gdev, 0x82, buf, tlen);
+        usb_unmask_interrupts();
+        if (count == 0) {
+            /* Wrote 0 bytes */
+            if (timeout == 0) {
+                timeout = timer_tick_plus_msec(50);
+            } else if (timer_tick_has_elapsed(timeout)) {
+                /* Try one last time */
+                usb_mask_interrupts();
+                count = usbd_ep_write_packet(usbd_gdev, 0x82, buf, tlen);
+                usb_unmask_interrupts();
+                if (count != 0)
+                    goto transmit_success;
+                usb_drop_packets++;
+                usb_drop_bytes += tlen;
+                return (-1);  // Timeout
+            }
+            continue;
+        } else {
+transmit_success:
+            len -= count;
+            buf += count;
+            timeout = timer_tick_plus_msec(50);
+        }
+    }
+#endif
+#endif
     return (USBD_OK);
 }
 
@@ -478,12 +551,20 @@ static void cdcacm_rx_cb(usbd_device *usbd_dev, uint8_t ep)
  */
 static void cdcacm_tx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
+    if (ep_send_zero == ep) {
+        /*
+         * If the final transfer was exactly a multiple of a maximum
+         * packet size, then a zero length packet must be sent to
+         * terminate the host request. That operation can only be
+         * performed in this callback.
+         */
+        usbd_ep_write_packet(usbd_gdev, 0x82, NULL, 0);
+        ep_send_zero = 0xff;
+    }
+#if 0
     if (preparing_packet)
         return;  // New transmit packet is being prepared
 
-    // XXX: If the final transfer was exactly a multiple of a packet
-    //      size, then a zero length packet must be sent to terminate
-    //      the host requests.
     if (gpos < glen) {
         uint16_t len = glen - gpos;
         if (len > 64)
@@ -495,18 +576,7 @@ static void cdcacm_tx_cb(usbd_device *usbd_dev, uint8_t ep)
             uart_putchar("0123456789abcdef"[gbuf[gpos] & 0xf]);
             gpos += len;
         }
-#if 0
-uart_putchar("0123456789abcdef"[(gpos >> 8) & 0xf]);
-uart_putchar("0123456789abcdef"[(gpos >> 4) & 0xf]);
-uart_putchar("0123456789abcdef"[gpos & 0xf]);
-#endif
     }
-#if 0
-    /* Not currently used because we keep all transfers under 64 bytes */
-    char buf[64] __attribute__ ((aligned(4)));
-    usbd_ep_write_packet(usbd_dev, 0x82, buf, 64);
-
-    uart_putchar('+');
 #endif
 }
 
@@ -776,4 +846,14 @@ usb_show_regs(void)
         printf(" CMOD");
     printf("\n");
 #endif
+}
+
+void
+usb_show_stats(void)
+{
+    printf("interrupt=%s\n", using_usb_interrupt ? "true" : "false");
+    printf("console_active=%s\n", usb_console_active ? "true" : "false");
+    printf("packet drops=%u\n", usb_drop_packets);
+    printf("byte drops=%u\n", usb_drop_bytes);
+    printf("send timeouts=%u\n", usb_send_timeouts);
 }

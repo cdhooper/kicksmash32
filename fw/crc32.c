@@ -133,3 +133,21 @@ crc32r(uint32_t crc, const void *buf, size_t len)
 
     return (crc);
 }
+
+/*
+ * crc32s() calculates a byte-swapped version of the STM32 32-bit CRC which
+ *          is calculated by crc32(). This function is useful for incremental
+ *          CRC on parts which are in a different endian.
+ */
+uint32_t
+crc32s(uint32_t crc, const void *buf, size_t len)
+{
+    unsigned int pos;
+    uint8_t *ptr = (uint8_t *) buf;
+
+    for (pos = 0; pos < len; pos++) {
+        crc = (crc << 8) ^ crc32_table[(crc >> 24) ^ ptr[pos ^ 1]];
+    }
+
+    return (crc);
+}

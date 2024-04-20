@@ -23,10 +23,12 @@ void usb_poll(void);
 void usb_mask_interrupts(void);
 void usb_unmask_interrupts(void);
 void usb_show_regs(void);
+void usb_show_stats(void);
 
-uint8_t CDC_Transmit_FS(uint8_t *buf, uint16_t len);
+uint8_t CDC_Transmit_FS(uint8_t *buf, unsigned int len);
 
 extern uint8_t usb_console_active;
+extern unsigned int usb_send_timeouts;
 
 /* libopencm3 */
 // #include <libopencm3/stm32/memorymap.h>
