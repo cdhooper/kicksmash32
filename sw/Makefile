@@ -38,7 +38,7 @@ endef
 $(foreach SRCFILE,$(SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE))))
 
 
-$(OBJS): Makefile
+$(OBJS): Makefile smash_cmd.h version.h
 $(OBJDIR)/hostsmash.o: | $(USB_HDR)
 $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(OBJS)) Makefile
 

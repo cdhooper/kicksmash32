@@ -1038,10 +1038,6 @@ smash_test_msg_loopback(void)
             count_w1 += len + KS_HDR_AND_CRC_LEN;
             len = (len + 1) & ~1;   // round up for buffer use
             sent += len + KS_HDR_AND_CRC_LEN;
-            if (is_user_abort()) {
-                rc = 1;
-                goto fail;
-            }
             if ((rc = get_msg_info(&msginfo)) != 0)
                 goto fail;
             if (pass == 0) {
@@ -1087,8 +1083,8 @@ smash_test_msg_loopback(void)
             count_r += rlen + KS_HDR_AND_CRC_LEN;
             for (pos = 0; pos < rlen; pos++) {
                 if (buf[pos] != (uint8_t)pos) {
-                    printf("Data corrupt: %02x != expected %02x\n",
-                           buf[pos], (uint8_t)pos);
+                    printf("Data corrupt at %x of %x: %02x != expected %02x\n",
+                           pos, rlen, buf[pos], (uint8_t)pos);
                     buf[pos] = pos;
                     break;
                 }
@@ -1235,8 +1231,8 @@ smash_test_usb_msg_loopback(void)
     }
 
     if ((msginfo.smi_state_usb &
-         (APP_STATE_SERVICE_UP | APP_STATE_HAVE_LOOPBACK)) !=
-         (APP_STATE_SERVICE_UP | APP_STATE_HAVE_LOOPBACK)) {
+         (MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_LOOPBACK)) !=
+         (MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_LOOPBACK)) {
         printf("Unavailable\n");
         if (worked_before)
             return (1);  // Then this is a failure
@@ -1261,11 +1257,9 @@ smash_test_usb_msg_loopback(void)
 
     rkm = (km_msg_hdr_t *)buf[1];
     skm = (km_msg_hdr_t *)buf[0];
-    skm->km_handler = 0;
     skm->km_op = KM_OP_LOOPBACK;
     skm->km_status = 0xff;
     skm->km_tag = 0;
-    skm->km_unused = 0;
 
     /* Discard old messages */
     if ((rc = send_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, NULL)) != 0) {
@@ -1393,21 +1387,37 @@ smash_test(uint mask)
         if (rc != 0)
             return (rc);
     }
+
+    if (is_user_abort())
+        return (1);
+
     if (mask & BIT(1)) {
         rc = smash_test_loopback();
         if (rc != 0)
             return (rc);
     }
+
+    if (is_user_abort())
+        return (1);
+
     if (mask & BIT(2)) {
         rc = smash_test_loopback_perf();
         if (rc != 0)
             return (rc);
     }
+
+    if (is_user_abort())
+        return (1);
+
     if (mask & BIT(3)) {
         rc = smash_test_msg_loopback();
         if (rc != 0)
             return (rc);
     }
+
+    if (is_user_abort())
+        return (1);
+
     if (mask & BIT(4)) {
         rc = smash_test_usb_msg_loopback();
         if (rc != 0)
@@ -1546,12 +1556,24 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
     *dev1 = 0;
     *dev2 = 0;
 
+    /*
+     * XXX: This code needs to be revised for 16-bit machines so that
+     *      it probes with both smash_cmd_shift = 2 and also = 1.
+     *      An alternative is to just ask KS what mode it's running in
+     *      with the KS_CMD_ID call.
+     */
     SUPERVISOR_STATE_ENTER();
     INTERRUPTS_DISABLE();
     CACHE_DISABLE_DATA();
     MMU_DISABLE();
 
+#ifdef TEST_CMD_FLASH_CMD
+    uint32_t values[] = { 0x00555, 0x002aa, 0x00555,
+                          0x00aa00aa, 0x00550055, 0x00900090 };
+    rc1 = flash_cmd_core(KS_CMD_FLASH_CMD, values, sizeof (values));
+#else
     rc1 = flash_cmd_core(KS_CMD_FLASH_ID, NULL, 0);
+#endif
     if (rc1 == 0) {
         for (pos = 0; pos < ARRAY_SIZE(data); pos++) {
             data[pos] = *ADDR32(ROM_BASE + pos * 4);

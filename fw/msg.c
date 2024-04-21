@@ -969,6 +969,62 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             }
             break;
         }
+        case KS_CMD_FLASH_CMD: {
+            /* Send a custom command to flash (UNTESTED) */
+            uint32_t  values[32];
+            uint16_t *valuep = (uint16_t *)values;
+            uint      count;
+            uint      datalen;
+            uint      pos;
+
+            if (ee_mode == EE_MODE_32) {
+                count = cmd_len / 8;  // 32-bit data
+                datalen = count * 4;
+            } else {
+                count = cmd_len / 6;  // 16-bit data
+                datalen = count * 2;
+            }
+
+            if ((count > ARRAY_SIZE(values)) || (count == 0)) {
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                break;
+            }
+
+            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            for (pos = 0; pos < cmd_len / 2; pos++) {
+                *(valuep++) = buffer_rxa_lo[cons_s];
+                if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
+                    cons_s = 0;
+            }
+
+            /* Swap address */
+            for (pos = 0; pos < count; pos++) {
+                uint32_t value = (values[pos] << 16) | (values[pos] >> 16);
+                values[pos] = SWAP32(value);
+            }
+
+            /* Swap data */
+            if (ee_mode == EE_MODE_32) {
+                for (pos = 0; pos < count; pos++) {
+                    uint32_t value = values[pos + count];
+                    values[pos + count] = (value << 16) | (value >> 16);
+                }
+            }
+
+            /*
+             * First half of values are addresses to generate.
+             * Second half of values are data to apply.
+             */
+            ks_reply(0, KS_STATUS_OK, count * 4, &values[0], 0, NULL);
+            ks_reply(KS_REPLY_WE_RAW, 0, datalen, &values[count], 0, NULL);
+
+#ifdef FLASH_CMD_DEBUG
+            printf("FLASH_CMD: count=%u\n", count);
+            for (pos = 0; pos < count; pos++)
+                printf("%08lx = %08lx\n", values[pos], values[pos + count]);
+#endif
+            break;
+        }
         case KS_CMD_FLASH_ID: {
             /* Send command sequence to put it in identify mode */
             static const uint32_t addr[] = {
@@ -1233,9 +1289,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             config_updated();
             break;
         }
-        case KS_CMD_APP_STATE: {
+        case KS_CMD_MSG_STATE: {
             uint16_t reply[2];
-            if (cmd & KS_APP_STATE_SET) {
+            if (cmd & KS_MSG_STATE_SET) {
                 uint16_t mask;
                 uint16_t state;
                 uint16_t expire = 10000;  // 10 seconds
@@ -2007,9 +2063,9 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             usb_msg_reply(0, KS_STATUS_OK, sizeof (config.bi),
                           &config.bi, 0, NULL);
             break;
-        case KS_CMD_APP_STATE: {
+        case KS_CMD_MSG_STATE: {
             uint16_t reply[2];
-            if (cmd & KS_APP_STATE_SET) {
+            if (cmd & KS_MSG_STATE_SET) {
                 uint16_t mask;
                 uint16_t state;
                 uint16_t expire = 10000;  // 10 seconds

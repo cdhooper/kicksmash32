@@ -2395,7 +2395,7 @@ keep_app_state(void)
 {
     uint status;
     uint rc;
-    rc = send_ks_cmd(KS_CMD_APP_STATE | KS_APP_STATE_SET, app_state_send,
+    rc = send_ks_cmd(KS_CMD_MSG_STATE | KS_MSG_STATE_SET, app_state_send,
                      sizeof (app_state_send), NULL, 0, &status, NULL, 0);
     if (rc != 0) {
         printf("KS send message failed: %d (%s)\n", rc, smash_err(rc));
@@ -2545,7 +2545,7 @@ run_message_mode(void)
     uint fstick = 0;
     uint count;
     uint16_t *msg;
-    uint16_t app_state = APP_STATE_SERVICE_UP | APP_STATE_HAVE_LOOPBACK;
+    uint16_t app_state = MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_LOOPBACK;
     smash_msg_info_t mi;
 
     printf("message mode\n");
@@ -2557,7 +2557,7 @@ run_message_mode(void)
 
     show_ks_inquiry();
 
-    rc = send_ks_cmd(KS_CMD_APP_STATE | KS_APP_STATE_SET, app_state_send,
+    rc = send_ks_cmd(KS_CMD_MSG_STATE | KS_MSG_STATE_SET, app_state_send,
                      sizeof (app_state_send), buf, sizeof (buf), &status,
                      &rxlen, 1);
     if (rc == 0)
