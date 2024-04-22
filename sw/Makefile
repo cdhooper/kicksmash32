@@ -3,17 +3,22 @@ SRCS=hostsmash.c crc32.c version.c
 CC=gcc
 CFLAGS  := -O2 -g -pthread -Wall -Wpedantic
 LDFLAGS := -O2 -g -lpthread
+UNAME_S := $(shell uname -s)
 
-NOW  := $(shell date)
-DATE := $(shell date -d '$(NOW)' '+%Y-%m-%d')
-TIME := $(shell date -d '$(NOW)' '+%H:%M:%S')
+NOW  := $(shell date +%s)
+ifeq ($(UNAME_S),Darwin)
+DATE := $(shell date -j -f %s $(NOW)  '+%Y-%m-%d')
+TIME := $(shell date -j -f %s $(NOW)  '+%H:%M:%S')
+else
+DATE := $(shell date -d "@$(NOW)" '+%Y-%m-%d')
+TIME := $(shell date -d "@$(NOW)" '+%H:%M:%S')
+endif
 CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 
 ifeq ($(OS),Windows_NT)
     CFLAGS += -DWIN32
     OBJDIR := objs.win
 else
-    UNAME_S := $(shell uname -s)
     ifeq ($(UNAME_S),Linux)
         CFLAGS += -DLINUX
 	UNAME_M := $(shell uname -m)
@@ -21,7 +26,7 @@ else
     endif
     ifeq ($(UNAME_S),Darwin)
 #        CFLAGS += -DOSX -target x86_64-apple-macos10.12
-        CFLAGS += -DOSX -lxml2 -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/libxml2
+        CFLAGS += -DOSX #-lxml2 -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/libxml2
 	OBJDIR := objs.mac
     endif
 endif
