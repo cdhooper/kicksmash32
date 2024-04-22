@@ -6,11 +6,11 @@
  *
  * ---------------------------------------------------------------------
  *
- * main prototypes.
+ * Kicksmash command interface
  */
 
-#ifndef _SMASH_H
-#define _SMASH_H
+#ifndef _SMASH_CMD_H
+#define _SMASH_CMD_H
 
 /* Command codes sent to Kicksmash */
 #define KS_CMD_NULL          0x00  // Do nothing (no reply)
@@ -78,10 +78,10 @@
 #define KM_OP_NULL           0x00  // Do nothing (discard message)
 #define KM_OP_NOP            0x01  // Do nothing but reply
 #define KM_OP_ID             0x02  // Report app ID and configuration
-#define KM_OP_LOOPBACK       0x05  // Message loopback
+#define KM_OP_LOOPBACK       0x06  // Message loopback
 #define KM_OP_FILE           0x0f  // File storage
 
-#define KM_OP_REPLY          0x80  // Reply message to requested operation
+#define KM_OP_REPLY          0x80  // Reply message flag to requested operation
 
 /*
  * All Kicksmash commands are encapsulated within a standard message body
@@ -336,4 +336,4 @@ typedef struct {
     uint16_t km_tag;       // Message tag or sequence number
 } km_msg_hdr_t;
 
-#endif /* _SMASH_H */
+#endif /* _SMASH_CMD_H */

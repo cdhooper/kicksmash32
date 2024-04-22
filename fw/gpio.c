@@ -464,7 +464,7 @@ gpio_show(int whichport, int pins)
         printf("Socket OE=PA0 LED=PB8 KBRST=PB4\n"
                "Socket A0-A15=PC0-PC15 A13-A19=PA1-PA7 D31=PB12\n"
                "Flash  D0-D15=PD0-PD15 D16-D31=PE0-PE15\n"
-               "Flash  A18=PB10 RP=PB1 RB1=PB15 RB2=PB0\n"
+               "Flash  A18=PB10 RP=PB1 RB=PB15\n"
                "Flash  A19=PB11 OE=PB13 WE=PB14 OEWE=PB9\n"
                "USB    V5=PA9 CC1=PA8 CC2=PA10 DM=PA11 DP=PA12\n");
         printf("\nMODE  ");

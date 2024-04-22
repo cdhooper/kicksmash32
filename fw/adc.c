@@ -118,7 +118,7 @@ adc_init(void)
     adc_enable_scan_mode(adcbase);
 
     adc_set_continuous_conversion_mode(adcbase);
-    adc_set_sample_time_on_all_channels(adcbase, ADC_SMPR_SMP_28DOT5CYC);
+    adc_set_sample_time_on_all_channels(adcbase, ADC_SMPR_SMP_239DOT5CYC);
     adc_disable_external_trigger_regular(adcbase);
     adc_disable_external_trigger_injected(adcbase);
     adc_set_right_aligned(adcbase);
@@ -160,10 +160,20 @@ print_reading(int value, char *suffix)
 static uint
 adc_get_scale(uint16_t adc0_value)
 {
+    static int scale = 0;
+    int tscale;
+
     if (adc0_value == 0)
         adc0_value = 1;
 
-    return (SCALE_VREF / adc0_value);
+    tscale = SCALE_VREF / adc0_value;
+
+    if (scale == 0)
+        scale = tscale;
+    else
+        scale += (tscale - scale) / 16;
+
+    return (scale);
 }
 
 void
@@ -237,8 +247,8 @@ adc_show_sensors(void)
 void
 adc_poll(int verbose, int force)
 {
+    static uint     avg_v5 = 0;
     uint            calc_v5;
-    uint            diff;
     uint            scale;
     int             percent5;   // 0.1 percent voltage deviation for 5V
     uint16_t        adc[CHANNEL_COUNT];
@@ -250,20 +260,23 @@ adc_poll(int verbose, int force)
 
     memcpy(adc, (void *)adc_buffer, sizeof (adc_buffer));
     scale = adc_get_scale(adc[0]);
-    calc_v5   = adc[2] * scale * V5_DIVIDER_SCALE;
+    calc_v5 = adc[2] * scale * V5_DIVIDER_SCALE;
+    if (avg_v5 == 0)
+        avg_v5 = calc_v5;
+    else
+        avg_v5 += ((int)calc_v5 - (int)avg_v5) / 2;
 
-    diff = V5_EXPECTED_MV - calc_v5;
-    percent5 = diff * 1000 / V5_EXPECTED_MV;
-    if ((percent5 > 100) || (percent5 < -100)) {
+    percent5 = avg_v5 * 100 / V5_EXPECTED_MV;
+    if ((percent5 < 90) || (percent5 > 105)) {  // 4.5V - 5.25V
         if ((v5_stable == true) && verbose) {
             printf("Amiga V5 not stable at ");
-            print_reading(calc_v5, "V\n");
+            print_reading(avg_v5, "V\n");
         }
         v5_stable = false;
     } else {
         if ((v5_stable == false) && verbose) {
             printf("Amiga V5 stable at ");
-            print_reading(calc_v5, "V\n");
+            print_reading(avg_v5, "V\n");
         }
         v5_stable = true;
     }
