@@ -148,7 +148,13 @@ const char cmd_time_help[] =
 void
 msleep(uint msec)
 {
-    Delay(msec * 1000 / TICKS_PER_SECOND);
+    while (msec > 1000) {
+        Delay(TICKS_PER_SECOND);
+        msec -= 1000;
+        if (is_user_abort())
+            return (1);
+    }
+    Delay(msec * TICKS_PER_SECOND / 1000);
 }
 
 void
@@ -1018,19 +1024,21 @@ remove_quotes(char *line)
  *      need for this function.
  */
 static char *
-loop_index_substitute(char *src, int value, int count)
+loop_index_substitute(char *src, int value, int count, int loop_level)
 {
     char   valbuf[10];
     int    vallen  = sprintf(valbuf, "%x", value);
     size_t newsize = strlen(src) + vallen * count + 1;
     char  *nstr    = malloc(newsize);
     char  *dptr    = nstr;
+    char   varstr[4] = "$a";
 
+    varstr[1] += loop_level;  // $a, $b, $c, etc.
     if (nstr == NULL)
         return (strdup(src));
 
     while (*src != '\0') {
-        char *ptr = strstr(src, "$a");
+        char *ptr = strstr(src, varstr);
         int   len;
         if (ptr == NULL) {
             /* Nothing more */
@@ -1051,11 +1059,14 @@ loop_index_substitute(char *src, int value, int count)
 }
 
 static int
-loop_index_count(char *src)
+loop_index_count(char *src, int loop_level)
 {
     int   count = 0;
+    char  varstr[4] = "$a";
+    varstr[1] += loop_level;  // $a, $b, $c, etc.
+
     while (*src != '\0') {
-        src = strstr(src, "$a");
+        src = strstr(src, varstr);
         if (src == NULL)
             break;
         count++;
@@ -1076,6 +1087,7 @@ cmd_loop(int argc, char * const *argv)
     char   *cmd;
     char   *cmdline;
     rc_t    rc = RC_SUCCESS;
+    static uint loop_level = 0;  // for nested loops
 
     if (argc <= 2) {
         printf("error: loop command requires count and command to execute\n");
@@ -1087,7 +1099,7 @@ cmd_loop(int argc, char * const *argv)
     if (cmdline == NULL)
         return (RC_FAILURE);
     cmd = remove_quotes(cmdline);
-    index_uses = loop_index_count(cmd);
+    index_uses = loop_index_count(cmd, loop_level);
     if (index_uses == 0)
         nargc = make_arglist(cmd, nargv);
 
@@ -1095,11 +1107,13 @@ cmd_loop(int argc, char * const *argv)
         if (index_uses > 0) {
             if (cur != 0)
                 free_arglist(nargc, nargv);
-            ptr = loop_index_substitute(cmd, cur, index_uses);
+            ptr = loop_index_substitute(cmd, cur, index_uses, loop_level);
             nargc = make_arglist(ptr, nargv);
             free(ptr);
         }
+        loop_level++;
         rc = cmd_exec_argv(nargc, nargv);
+        loop_level--;
         if (rc != RC_SUCCESS) {
             if (rc == RC_USER_HELP)
                 rc = RC_FAILURE;

@@ -47,6 +47,8 @@
 #define KS_STATUS_BADLEN   0x0500  // Bad message length
 #define KS_STATUS_NODATA   0x0600  // No data available
 #define KS_STATUS_LOCKED   0x0700  // Resource locked
+#define KS_STATUS_LAST_ENT 0x0800  // Fake status: must always be last + 1
+
 
 /* Command-specific options (upper byte of command) */
 #define KS_BANK_SETCURRENT 0x0100  // Set current ROM bank (immediate change)
@@ -73,15 +75,6 @@
 #define MSG_STATE_SERVICE_UP    0x0001  // Message service running
 #define MSG_STATE_HAVE_LOOPBACK 0x0002  // Loopback service available
 #define MSG_STATE_HAVE_FILE     0x0004  // File service available
-
-/* Operations which apply to message payload header km_op */
-#define KM_OP_NULL           0x00  // Do nothing (discard message)
-#define KM_OP_NOP            0x01  // Do nothing but reply
-#define KM_OP_ID             0x02  // Report app ID and configuration
-#define KM_OP_LOOPBACK       0x06  // Message loopback
-#define KM_OP_FILE           0x0f  // File storage
-
-#define KM_OP_REPLY          0x80  // Reply message flag to requested operation
 
 /*
  * All Kicksmash commands are encapsulated within a standard message body

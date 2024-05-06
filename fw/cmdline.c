@@ -133,14 +133,17 @@ check_for_do_not_eval(const char *str)
 static rc_t
 cmd_help(int argc, char * const *argv)
 {
-    int    cur;
+    size_t cur;
     rc_t   rc = RC_SUCCESS;
     int    arg;
 
     if (argc <= 1) {
         for (cur = 0; cur < ARRAY_SIZE(cmd_list); cur++) {
-            int len = strlen(cmd_list[cur].cl_name) +
-                      strlen(cmd_list[cur].cl_help_args);
+            int len;
+            if (cmd_list[cur].cl_help_desc == NULL)
+                continue;  // hidden command
+            len = strlen(cmd_list[cur].cl_name) +
+                  strlen(cmd_list[cur].cl_help_args);
             printf("%s%s", cmd_list[cur].cl_name, cmd_list[cur].cl_help_args);
             if (len < 38)
                 printf("%*s", 38 - len, "");
@@ -157,6 +160,8 @@ cmd_help(int argc, char * const *argv)
 
             if ((strcmp(argv[arg], cl_name) == 0) ||
                 ((cl_len != 0) && (strncmp(argv[arg], cl_name, cl_len) == 0))) {
+                if (cmd_list[cur].cl_help_desc == NULL)
+                    continue;  // hidden command
                 printf("%s%s - %s\n", cl_name,
                        cmd_list[cur].cl_help_args, cmd_list[cur].cl_help_desc);
                 if (cmd_list[cur].cl_help_long != NULL)
@@ -354,7 +359,7 @@ scan_int(const char *str, int *intval)
 static rc_t
 cmd_exec_argv_single(int argc, char * const *argv)
 {
-    int cur;
+    size_t cur;
     int rc = RC_SUCCESS;
 #ifdef DEBUG_ARGLIST
     printf("exec_argv\n");
@@ -370,7 +375,7 @@ cmd_exec_argv_single(int argc, char * const *argv)
             if (rc == RC_USER_HELP) {
                 if (cmd_list[cur].cl_help_long != NULL)
                     printf("%s\n", cmd_list[cur].cl_help_long);
-                else
+                else if (cmd_list[cur].cl_help_desc != NULL)
                     printf("%s%s - %s\n", cl_name, cmd_list[cur].cl_help_args,
                            cmd_list[cur].cl_help_desc);
             }
@@ -845,12 +850,12 @@ eval_cmdline_expr(const char *str)
     char *buf = strdup(str);
     char *sptr = NULL;
 
+    if (buf == NULL)
+        errx(EXIT_FAILURE, "Unable to allocate memory");
+
     /* Some commands should not have arguments evaluated / expanded */
     if (check_for_do_not_eval(str))
         return (buf);
-
-    if (buf == NULL)
-        errx(EXIT_FAILURE, "Unable to allocate memory");
 
     /* Repeatedly scan string, evaluating expressions within parens first */
 eval_again:

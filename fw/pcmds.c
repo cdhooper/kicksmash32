@@ -491,10 +491,12 @@ cmd_prom(int argc, char * const *argv)
     } else if (strcmp("id", arg) == 0) {
         return (prom_id());
     } else if (strcmp("log", arg) == 0) {
-        uint max = 10;
-        rc = parse_value(argv[1], (uint8_t *) &max, 2);
-        if (rc != RC_SUCCESS)
-            return (rc);
+        uint max = 0;
+        if (argc > 1) {
+            rc = parse_value(argv[1], (uint8_t *) &max, 2);
+            if (rc != RC_SUCCESS)
+                return (rc);
+        }
         if (max == 0)
             max = 10;
         return (address_log_replay(max));

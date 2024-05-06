@@ -264,7 +264,7 @@ adc_poll(int verbose, int force)
     if (avg_v5 == 0)
         avg_v5 = calc_v5;
     else
-        avg_v5 += ((int)calc_v5 - (int)avg_v5) / 2;
+        avg_v5 += ((int)calc_v5 - (int)avg_v5) / 4;
 
     percent5 = avg_v5 * 100 / V5_EXPECTED_MV;
     if ((percent5 < 90) || (percent5 > 105)) {  // 4.5V - 5.25V

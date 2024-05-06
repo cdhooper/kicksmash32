@@ -48,7 +48,9 @@
 
 #ifndef EMBEDDED_CMD
 #include <stdint.h>
+#ifndef AMIGA
 #include <printf.h>
+#endif
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
@@ -86,6 +88,11 @@ typedef struct {
     unsigned char  _ubuf[3]; /* ungetc() buffer */
 } x_FILE;
 
+#ifdef AMIGA
+#define __submore(x) (EOF)
+#define _UB(x) ((x)->_bf)
+#endif
+
 #ifdef EMBEDDED_CMD
 #define __submore(x) (EOF)
 #define _UB(x) ((x)->_bf)
@@ -95,11 +102,19 @@ typedef struct {
 #endif
 #include <wchar.h>
 #else
+#ifndef AMIGA
 #include "namespace.h"
+#endif
 #include <assert.h>
 #include <ctype.h>
 #include <inttypes.h>
+#ifdef AMIGA
+#define ungetc xungetc
+#endif
 #include <stdio.h>
+#ifdef AMIGA
+#undef ungetc
+#endif
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -107,8 +122,12 @@ typedef struct {
 #include <wchar.h>
 #include <wctype.h>
 
+#ifdef AMIGA
+typedef unsigned char  uchar_t;
+#else
 #include "reentrant.h"
 #include "local.h"
+#endif
 #endif
 
 #define NO_FLOATING_POINT
