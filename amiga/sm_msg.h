@@ -14,7 +14,7 @@
 
 /* Status codes from local message handling */
 #define MSG_STATUS_SUCCESS    0           // No error
-#define MSG_STATUS_FAILURE    1           // Generic failure
+#define MSG_STATUS_FAIL       0xfffffffa  // Generic failure
 #define MSG_STATUS_NO_REPLY   0xfffffff9  // Did not get reply from Kicksmash
 #define MSG_STATUS_BAD_LENGTH 0xfffffff8  // Bad length detected
 #define MSG_STATUS_BAD_CRC    0xfffffff7  // CRC failure detected
@@ -31,6 +31,8 @@ uint send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
 
 uint send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
               void *reply, uint replymax, uint *replyalen);
+
+const char *smash_err(uint status);
 
 extern uint smash_cmd_shift;
 

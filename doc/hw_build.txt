@@ -1,0 +1,41 @@
+KickSmash Hardware Build
+------------------------
+
+Use files in the rev4 directory to have a fab house build a PCB.
+HASL is fine. I use JLCPCB for most of my builds.
+
+My general order for building these boards is:
+    1. Top side STM32
+    2. Top side Flash chips
+    3. Bottom side 74FCT162244 parts
+    4. USB-C connector
+    5. AM1117-3.3 voltage regulator and 8 MHz oscillator
+    6. All passives
+    7. LEDs are last
+    8. Right angle header for STM32 SWD (if desired)
+    9. Right angle header for KBRST pin (required)
+   10. Right angle header for console (I usually don't install this)
+   11. Bottom pin headers
+
+For in-system fit, you might choose to install the 7 and 8 headers
+on the bottom side of the board rather than the top.
+
+The bottom pin headers are two 20-pin and two 9-pin. Note they are 20-pin,
+not 21-pin, unless your Amiga has been modified to add more address lines
+from a device such as Romy. Before installing any headers, I recommend
+that you jump to programming with the ST-Link or by USB DFU. If you need
+to remove shorts, improve soldering, or correct part orientation, it's
+much easier to do without the pin headers in place.
+
+You can choose to use machined pin (round) or Flip-Pins. Don't use standard
+Dupont-stype male headers. These are too thick (0.5mm+) and will damage
+your ROM sockets. Machined pins are around 0.35mm, and Flip-Pins are around
+0.25mm. I like the Flip-Pins, but I've discovered they are much more
+difficult to install in the Amiga ROM sockets than machined pins.
+
+For the LEDs, I use purple for POWER, Orange for READ, and Green for WRITE.
+Feel free to use your own color scheme. The reason I like purple for POWER
+is that it's the only LED which is on all the time, and I found that Green
+is too bright for that.
+
+After the board is built, follow the hw_programming.txt guide.

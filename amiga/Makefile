@@ -3,15 +3,24 @@
 #
 
 SMASH_PROG   := smash
+FS_PROG      := smashfs
+FTP_PROG     := smashftp
 OBJDIR       := objs
-SMASH_SRCS   := smash.c crc32.c msg.c cpu_control.c
-HDRS         := smash_cmd.h crc32.h cpu_control.h msg.h
+SMASH_SRCS   := smash.c crc32.c sm_msg.c cpu_control.c
+SMASH_HDRS   := smash_cmd.h host_cmd.h crc32.h cpu_control.h sm_msg.h sm_file.h
 SMASH_OBJS   := $(SMASH_SRCS:%.c=$(OBJDIR)/%.o)
+FS_SRCS      := fs_hand.c
+FS_OBJS      := $(FS_SRCS:%.c=$(OBJDIR)/%.o)
+FTP_SRCS     := smashftp.c smashftp_cli.c crc32.c sm_msg.c cpu_control.c \
+		readline.c sm_file.c
+FTP_OBJS     := $(FTP_SRCS:%.c=$(OBJDIR)/%.o)
+
 CC      := m68k-amigaos-gcc
 CFLAGS  := -Wall -Wextra -Wno-pointer-sign -fomit-frame-pointer
-CFLAGS  += -Wno-strict-aliasing
+CFLAGS  += -Wno-strict-aliasing -Wno-sign-compare
 LDFLAGS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -mcrt=clib2 -lgcc -lc -lamiga
-#LDFLAGS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -fomit-frame-pointer -mcrt=clib2 -lgcc -lc -lamiga
+LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lamiga -lgcc -lc
+LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -mcrt=clib2 -lgcc -lc -lamiga
 PROGVER := $(SMASH_PROG)_$(shell awk '/char[[:space:]]*\*version =/{print $$7}' smash.c)
 
 CFLAGS  += -Os
@@ -21,11 +30,17 @@ QUIET   := @
 #LDFLAGS += -g
 #CFLAGS  += -g
 
+#
+# Allowing links opens security risk for remote mounts because anything
+# the user running hostsmash can access may then be potentially linked
+# and accessed by the Amiga
+CFLAGS += -DALLOW_CREATE_LINK
+
 ifeq (, $(shell which $(CC) 2>/dev/null ))
 $(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga/bin")
 endif
 
-all: $(SMASH_PROG)
+all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG)
 
 gdb:
 	m68k-amigaos-gdb $(SMASH_PROG)
@@ -35,15 +50,28 @@ define DEPEND_SRC
 # given source file.
 $(patsubst %,$(OBJDIR)/%,$(filter-out $(OBJDIR)/%,$(basename $(1)).o)) $(filter $(OBJDIR)/%,$(basename $(1)).o): $(1)
 endef
-$(foreach SRCFILE,$(SMASH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE))))
+$(foreach SRCFILE,$(SMASH_SRCS) $(FS_SRCS) $(FTP_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE))))
 
-$(SMASH_OBJS): Makefile $(HDRS) | $(OBJDIR)
+OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS))
+
+$(OBJS): Makefile $(SMASH_HDRS) | $(OBJDIR)
 	@echo Building $@
 	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -o $@
 
 $(SMASH_PROG): $(SMASH_OBJS)
+$(FTP_PROG): $(FTP_OBJS)
+
+$(SMASH_PROG):
 	@echo Building $@
-	$(QUIET)$(CC) $(SMASH_OBJS) $(LDFLAGS) -o $@
+	$(QUIET)$(CC) $^ $(LDFLAGS) -o $@
+
+$(FTP_PROG):
+	@echo Building $@
+	$(QUIET)$(CC) $^ $(LDFLAGS_FTP) -o $@
+
+$(FS_PROG): $(FS_OBJS)
+	@echo Building $@
+	$(QUIET)$(CC) $(FS_OBJS) $(LDFLAGS_FS) -o $@
 
 $(OBJDIR):
 	mkdir -p $@
@@ -65,7 +93,7 @@ lha:
 	$(QUIET)rm -rf $(PROGVER)
 
 clean:
-	rm -f $(SMASH_OBJS) $(OBJDIR)/*.map $(OBJDIR)/*.lst
+	rm -f $(OBJS) $(OBJDIR)/*.map $(OBJDIR)/*.lst
 
 FLINT_FILE=flexelint.lnt
 flint:

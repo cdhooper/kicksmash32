@@ -1,0 +1,549 @@
+smashftp - host file transfer utility
+-------------------------------------
+The smashftp utility may be used to transfer files between AmigaOS
+and the USB Host. It requires the hostsmash utility running and
+connected to KickSmash. See the sw_hostsmash.txt document for details
+on this program. Just basic information on hostsmash will be provided
+here.
+
+The smashftp utility can either take commands as arguments, or similar
+to ftp and sftp, it can also provide a command line interface. Commands
+similar to those provided by ftp and sftp are provided.
+
+
+Getting started
+---------------
+Before you can use this command, start hostsmash on your USB Host.
+Here's a simple command to get you started (run it from the sw directory
+in the KickSmash repository):
+    ./hostsmash -d /dev/ttyACM0 -M amiga: ../amiga
+This exports a single "volume" to the Amiga and makes it the default
+that you see with smashftp.
+
+On your Amiga, use the following command:
+    smashftp list
+
+You should see the contents of the amiga directory from the KickSmash
+repository. Example:
+    9.OS322:> smashftp list
+    ftp.h                              1583 ----rw-d 2024-05-02 15:15:35
+    crc32.h                            Link ----rwed 2024-04-11 21:06:25
+    sm_msg.c                           8166 ----rw-d 2024-05-03 17:00:24
+    fs_hand.c                          1158 ----rw-d 2024-05-01 14:14:32
+    ftp_cmdline.c                     31504 ----rw-d 2024-05-03 01:48:09
+    objs                                Dir ----rwed 2024-05-03 17:00:25
+    sm_file.c                         16240 ----rw-d 2024-05-02 23:26:28
+    readline.c                        23036 ----rw-d 2024-04-27 23:31:23
+    Makefile                           3048 ----rw-d 2024-05-02 01:51:18
+    sm_file.h                          1083 ----rw-d 2024-05-02 23:14:21
+    cpu_control.c                      3844 ----rw-d 2024-04-20 00:06:13
+    smashftp                          76288 ----rwed 2024-05-03 17:00:25
+    smashfs                           65096 ----rwed 2024-05-02 23:15:27
+    smash                             72932 ----rwed 2024-05-03 17:00:25
+    crc32.c                            Link ----rwed 2024-04-11 21:06:26
+    smash_cmd.h                        Link ----rwed 2024-02-02 23:25:01
+    sm_msg.h                           1236 ----rw-d 2024-04-19 23:36:02
+    ftp.c                             75466 ----rw-d 2024-05-03 01:44:47
+    host_cmd.h                         7413 ----rw-d 2024-05-02 23:12:20
+    readline.h                         1322 ----rw-d 2024-04-21 22:14:32
+    ftp_cmdline.h                      1397 ----rw-d 2024-04-22 02:30:25
+    smash.c                          111167 ----rw-d 2024-05-03 16:43:07
+    cpu_control.h                      3047 ----rw-d 2024-05-02 02:46:28
+
+Get a file from your USB Host:
+    smashftp get Makefile
+Example:
+    9.OS322:> smashftp get Makefile
+    Get Makefile as Makefile (3048 bytes)  51 KB/sec
+
+Send that file back to the USB host, renaming it:
+    9.OS322:> smashftp put Makefile mf
+    Put Makefile as mf (3048 bytes)  50 KB/sec
+    9.OS322:> smashftp ls -l mf
+    -rw-rw-rw-     3048 2024-05-04 21:32:55 mf
+
+On your host, you can verify that it was received intact:
+    % cd amiga
+    % ls -l mf
+    -rw-rw-rw-. 1 cdh cdh 3048 2024-05-04 21:32 mf
+    % diff mf Makefile
+    % rm mf
+
+
+Using the smashftp command line
+-------------------------------
+The smashftp command line is automatically entered if no arguments are
+provided to smashftp. The command line will maintain the current working
+directory on both the remote host and the local Amiga.
+
+Example session:
+    9.OS322:> smashftp
+    smashftp> list objs/smash.o
+    smash.o                           34184 ----rw-d 2024-05-04 23:36:09
+    smashftp> cd objs
+    cwd=amiga:/objs
+    smashftp> list smash.o
+    smash.o                           34184 ----rw-d 2024-05-04 23:36:09
+    smashftp> mkdir test
+    smashftp> cd test
+    cwd=amiga:/objs/test
+    smashftp> put s:Startup-Sequence
+    Put s:Startup-Sequence as Startup-Sequence (1970 bytes)  33 KB/sec
+    smashftp> list
+    Startup-Sequence                   1970 -s--rw-d 2024-05-05 00:07:54
+    smashftp> delete Startup-Sequence
+    smashftp> cd ..
+    cwd=amiga:/objs/
+    smashftp> rmdir test
+    smashftp> quit
+
+
+All commands
+------------
+All commands provided by smashftp:
+    ? [<cmd>]                             - display help
+    cd [<dir>]                            - change current directory
+    chmod [ugoa][+-=][hsparwed] <file>    - set remote file protection
+    get <file>                            - get file from remote
+    debug                                 - enable debug output
+    delay<time> [s|ms|us]                 - delay for time
+    echo <text>                           - display text
+    ignore <cmd>                          - ignore result of command
+    help [<cmd>]                          - display help
+    history                               - show history
+    lcd <dir>                             - change local directory
+    lchmod [ugoa][+-=][hsparwed] <file>   - set local file protection
+    lls [-adlF] <file...>                 - show local directory or files
+    lmkdir [-p] <dir>                     - create local directory
+    lmv <old> <new>                       - rename local file or directory
+    lln <tgt> <newname>                   - create a local symbolic link
+    ln <tgt> <newname>                    - create a symbolic link
+    loop <count> <cmd>                    - execute command multiple times
+    lpwd                                  - show current local directory
+    lrm <file>                            - remove local file
+    lrmdir [-p] <dir>                     - remove local directory
+    ls [-acdFlu] <file...>                - show directory or files
+    mkdir [-p] <dir>                      - create directory
+    mv <old> <new>                        - rename file or directory
+    put <file>                            - send file to remote
+    pwd                                   - show current directory
+    quit                                  - exit program
+    rm <file>                             - remove file
+    rmdir <file>                          - remove directory
+    time cmd <cmd>                        - measure command execution time
+    version                               - show version
+
+File transfer commands
+    get is used to get a file from the remote USB Host.
+    put is used to send a file to the remote USB host.
+Commands interacting with local files and directories:
+    lcd llist lls lmkdir lmv lpwd lln lrm lrmdir
+Commands interacting with remote files and directories:
+    cd list ls mkdir mv ln pwd rm rmdir
+Miscellaneous commands
+    debug help loop quit time version
+
+----------------------------------------------------------
+get
+    Get a file from the remote USB host
+    Options
+        get [path/]<name>               - get file from remote and keep name
+        get [path/]<name> <localname>   - get file from remote & rename locally
+        get [path/]<name> <localdir>    - get file from remote to local dir
+        get <name1> <name2> <name3...>  - get multiple files from remote
+    Example
+        smashftp> get smashftp
+        Get smashftp as smashftp (76180 bytes)  52 KB/sec
+        smashftp> get smashftp smash Makefile sys:test
+        Get smashftp as sys:test/smashftp (76248 bytes)  54 KB/sec
+        Get smash as sys:test/smash (73532 bytes)  53 KB/sec
+        Get Makefile as sys:test/Makefile (3048 bytes)  49 KB/sec
+put
+    Send a file to the remote USB host
+    Options
+        put [path/]<name>               - send file to remote and keep name
+        put [path/]<name> <remotename>  - send file to remote & rename
+        put [path/]<name> <remotedir>   - send file from local to remote dir
+        put <name1> <name2> <name3...>  - send multiple files to remote dir
+    Example
+        smashftp> mkdir test
+        smashftp> cd test
+        smashftp> lcd c:
+        smashftp> put List Copy Dir ,
+        Put List as List (12268 bytes)  54 KB/sec
+        Put Copy as Copy (5812 bytes)  52 KB/sec
+        Put Dir as Dir (4156 bytes)  47 KB/sec
+        smashftp> ls -l
+        -rwxrwxrwx    12268 2024-05-05 03:12:29 List
+        -rwxrwxrwx     4156 2024-05-05 03:05:26 Dir
+        -rwxrwxrwx    12268 2024-05-05 03:12:30 Copy
+
+----------------------------------------------------------
+
+lcd
+    Change the local directory.
+    There are no command options. You must provide a directory to use.
+    Example
+        smashftp> lcd RAM:
+        smashftp> list
+        Disk.info                           Dir ----rwed 2024-05-04 04:20:24
+        Clipboards                          Dir ----rwed 2024-05-04 04:20:19
+        T                                   Dir ----rwed 2024-05-04 04:20:19
+        ENV                                 Dir ----rwed 2024-05-04 04:20:20
+lchmod
+    Change permissions on a local file.
+    Alias
+        lprotect
+    Options
+        Use either UNIX chmod option syntax or AmigaOS Protect option
+        syntax.
+    Example
+        smashftp> lls -l testfile
+        -rw-------        4 2024-02-17 23:28:10 testfile
+        smashftp> lchmod +r testfile
+        smashftp> lls -l testfile
+        -rw-r--r--        4 2024-02-17 23:28:10 testfile
+        smashftp> llist testfile
+        testfile                              4 ----rw-d 2024-02-17 23:28:10
+        smashftp> lprotect +px testfile
+        smashftp> llist testfile
+        testfile                              4 --p-rwed 2024-02-17 23:28:10
+llist
+    Provide a local directory listing in a format similar to the AmigaDOS
+    list command.
+    Example
+        smashftp> llist sys:L
+        FileSystem_Trans                    Dir ----rwed 2021-04-13 02:43:19
+        Aux-Handler                         524 ----rw-d 2021-04-13 02:43:19
+        CrossDOSFileSystem                32368 ----rw-d 2021-04-13 02:43:19
+        CDFileSystem                      33016 ----rw-d 2023-02-20 17:35:01
+        Port-Handler                       4072 ----rw-d 2021-04-13 02:43:19
+        Queue-Handler                      2416 ----rw-d 2021-04-13 02:43:19
+        FastFileSystem                    30532 ----rw-d 2021-04-13 02:43:19
+lls
+    Provide a local directory listing in a format similar to the UNIX ls
+    command.
+    Options
+        -A   show . and .. files
+        -d   Show directory itself instead of contents
+        -l   Show long listing with file size and date
+    Example
+        smashftp> lls -l sys:L
+        drwxrwxrwx        0 2021-04-13 02:43:19 FileSystem_Trans
+        -rw-rw-rw-      524 2021-04-13 02:43:19 Aux-Handler
+        -rw-rw-rw-    32368 2021-04-13 02:43:19 CrossDOSFileSystem
+        -rw-rw-rw-    33016 2023-02-20 17:35:01 CDFileSystem
+        -rw-rw-rw-     4072 2021-04-13 02:43:19 Port-Handler
+        -rw-rw-rw-     2416 2021-04-13 02:43:19 Queue-Handler
+        -rw-rw-rw-    30532 2021-04-13 02:43:19 FastFileSystem
+        smashftp> lls -ld ram:
+        drwx------        0 2024-05-05 12:47:31 RAM Disk
+        smashftp> lls -ld ram:ENV
+        drwx------        0 2024-05-04 04:20:20 ENV
+lmkdir
+    Create a local directory.
+    Alias
+        lmakedir
+    Options
+        -p  Create path elements as required.
+    Example
+        smashftp> lls -ld ram:testdir
+        Could not locate ram:testdir
+        smashftp> lmkdir -p ram:testdir/child
+        smashftp> lls -ld ram:testdir
+        drwx------        0 2024-05-05 12:43:12 testdir
+        smashftp> lls -l ram:testdir
+        drwx------        0 2024-05-05 12:43:12 child
+        smashftp> llist ram:
+        testdir                             Dir ----rwed 2024-05-05 12:36:38
+        Disk.info                           Dir ----rwed 2024-05-04 04:20:24
+        Clipboards                          Dir ----rwed 2024-05-04 04:20:19
+        T                                   Dir ----rwed 2024-05-04 04:20:19
+        ENV                                 Dir ----rwed 2024-05-04 04:20:20
+lmv
+    Rename or move a local file to a new location.
+    Alias
+        lrename
+    Example
+        smashftp> lcd ram:
+        smashftp> lls -ld testdir
+        drwx------        0 2024-05-05 12:43:12 testdir
+        smashftp> lmv testdir tt
+        smashftp> lls -ld tt
+        drwx------        0 2024-05-05 12:43:12 tt
+lln
+    Create a local soft link
+    Alias
+        lmakelink
+    Example
+        smashftp> lln tt xt
+        lln not implemented yet
+        smashftp> q
+        9.OS322:> list ram:
+        Directory "ram:" on Sunday 05-May-24
+        xt                              Dir ----rwed Today     12:52:53
+        > tt
+        tt                              Dir ----rwed Today     12:43:12
+        ?                               Dir ----rwed Today     12:46:18
+        Disk.info                       352 ----rwed Yesterday 04:20:24
+        > ENVARC:Sys/def_RAM.info
+        Clipboards                      Dir ----rwed Yesterday 04:20:19
+        T                               Dir ----rwed Yesterday 04:20:19
+        ENV                             Dir ----rwed Yesterday 04:20:20
+        1 file - 352 bytes - 6 directories - 14 blocks used
+lpwd
+    Show the current local directory.
+    Example
+        smashftp> lpwd
+        RAM Disk:
+        smashftp> lcd sys:
+        smashftp> lpwd
+        OS322:
+lrm
+    Remove a local file
+    Alias
+        ldelete
+    Example
+        smashftp> llist testfile
+        testfile                              0 ----rwed 2024-05-05 12:58:08
+        smashftp> llist testfile
+        Could not locate testfile
+lrmdir
+    Remove a local directory.
+    Options
+        -p  Delete all parent directories in local path which are now empty.
+    Example
+        smashftp> llist
+        xt                                  Dir ----rwed 2024-05-05 12:52:53
+        tt                                  Dir ----rwed 2024-05-05 12:43:12
+        ?                                   Dir ----rwed 2024-05-05 12:46:18
+        Disk.info                           Dir ----rwed 2024-05-04 04:20:24
+        Clipboards                          Dir ----rwed 2024-05-04 04:20:19
+        T                                   Dir ----rwed 2024-05-04 04:20:19
+        ENV                                 Dir ----rwed 2024-05-04 04:20:20
+        smashftp> lrmdir -p tt/child
+        smashftp> llist
+        xt                                  Dir ----rwed 2024-05-05 12:52:53
+        ?                                   Dir ----rwed 2024-05-05 12:46:18
+        Disk.info                           Dir ----rwed 2024-05-04 04:20:24
+        Clipboards                          Dir ----rwed 2024-05-04 04:20:19
+        T                                   Dir ----rwed 2024-05-04 04:20:19
+        ENV                                 Dir ----rwed 2024-05-04 04:20:20
+
+----------------------------------------------------------
+
+cd
+    Change the local directory.
+    There are no command options. If a directory is not specified, the
+    current directory will be set to the remote Volume Directory.
+    Example
+        smashftp> cd
+        cwd=
+        smashftp> list
+        amiga:                           Volume ----rw-d 2024-05-05 02:04:05
+        smashftp> cd amiga:
+        cwd=amiga:
+        smashftp> list Makefile
+        Makefile                           3048 ----rw-d 2024-05-02 01:51:18
+chmod
+    Change permissions on a remote file.
+    Alias
+        protect
+    Options
+        Use either UNIX chmod option syntax or AmigaOS Protect option
+        syntax.
+    Example
+        smashftp> ls -l mf
+        -rw-rw-rw-     3048 2024-05-04 21:32:55 mf
+        smashftp> chmod go-r mf
+        smashftp> ls -l mf
+        -rw--w--w-     3048 2024-05-04 21:32:55 mf
+        smashftp> list mf
+        mf                                 3048 ----rw-d 2024-05-04 21:32:55
+        smashftp> protect rewds mf
+        smashftp> list mf
+        mf                                 3048 -s--rwed 2024-05-04 21:32:55
+list
+    Provide a remote directory listing in a format similar to the AmigaDOS
+    list command.
+    Example
+        smashftp> list Makefile
+        Makefile                           3048 ----rw-d 2024-05-02 01:51:18
+ls
+    Provide a remote directory listing in a format similar to the UNIX ls
+    command.
+    Options
+        -A   show . and .. files
+        -d   Show directory itself instead of contents
+        -l   Show long listing with file size and date
+    Example
+        smashftp> ls -l Makefile
+        -rw-rw-rw-     3048 2024-05-02 01:51:18 Makefile
+        smashftp> ls -ld Makefile
+        -rw-rw-rw-     3048 2024-05-02 01:51:18 Makefile
+        smashftp> ls -ld :
+        Drw-rw-rw-        0 2024-05-05 02:06:07 amiga:
+        smashftp> ls -ld ::
+        Drw-rw-rw-        0 2024-05-05 02:06:10 Volume Directory
+mkdir
+    Create a remote directory.
+    Alias
+        makedir
+    Options
+        -p  Create path elements as required.
+    Example
+        smashftp> makedir test
+        smashftp> cd test
+        cwd=amiga:/test
+        smashftp> list
+        smashftp> ls -la
+        drwx------     4096 2024-05-05 02:07:00 .
+        drwxrwxrwx     4096 2024-05-05 02:07:00 ..
+        smashftp> ls -ld .
+        drwx------     4096 2024-05-05 02:07:00 test/
+        smashftp> makedir -p a/b
+        smashftp> list a
+        smashftp> makedir -p a/b
+        smashftp> list a
+        b                                   Dir ----rwed 2024-05-05 02:08:55
+mv
+    Rename or move a remote file to a new location.
+    Alias
+        rename
+    Example
+        smashftp> mv a/b a/c
+        smashftp> list a
+        c                                   Dir ----rwed 2024-05-05 02:08:55
+ln
+    Create a remote symbolic link
+    Alias
+        makelink
+    Example
+        smashftp> ln -s a/c d
+        smashftp> list
+        a                                   Dir ----rwed 2024-05-05 02:09:44
+        d                                  Link ----rwed 2024-05-05 02:11:46
+        smashftp> ls -l
+        drwx------     4096 2024-05-05 02:09:44 a
+        lrwxrwxrwx        3 2024-05-05 02:11:46 d -> a/c
+pwd
+    Show the current remote directory.
+    Example
+        smashftp> pwd
+        amiga:/test
+rm
+    Remove a remote file
+    Alias
+        delete
+    Example
+        smashftp> ls -l
+        drwx------     4096 2024-05-05 02:09:44 a
+        lrwxrwxrwx        3 2024-05-05 02:11:46 d -> a/c
+        smashftp> rm d
+        smashftp> ls -l
+        drwx------     4096 2024-05-05 02:09:44 a
+rmdir
+    Remove a remote directory.
+    Example
+        smashftp> ls -l
+        drwx------     4096 2024-05-05 02:09:44 a
+        smashftp> ls -l a
+        drwx------     4096 2024-05-05 02:08:55 c
+        smashftp> ls -l a/c
+        smashftp> rmdir a/c
+        smashftp> rmdir a
+        smashftp> ls -l
+        smashftp>
+
+----------------------------------------------------------
+
+debug
+    Enables the program debug flag. Not useful for most users.
+    Output such as directory listings might include a dump of the
+    raw content received from the USB Host with this flag enabled.
+delay
+    Delay a specific period of time. This command is most useful in a
+    sequence of commands.
+    Example
+        smashftp> time cmd delay 1
+        1020 ms
+        smashftp> loop 3 time cmd delay 220 ms
+        220 ms
+        220 ms
+        220 ms
+        smashftp> loop 3 time cmd delay $a s
+        0 ms
+        1000 ms
+        2020 ms
+        smashftp> ls -ld . ; delay 3 s ; ls -ld .
+        Drwxrwxrwx        0 2024-05-05 17:02:36 amiga:
+        Drwxrwxrwx        0 2024-05-05 17:02:39 amiga:
+echo
+    Displays the specified message
+    Example
+        smashftp> echo This is a test
+        This is a test
+ignore <cmd>                          - ignore result of command
+    Execute a command, ignoring whether it succeeded or failed. This
+    command is useful when combined with the loop command to continuously
+    execute a command, even if it fails.
+    Example
+        smashftp> loop 4 ls junk
+        Could not locate junk
+        smashftp> loop 4 ignore ls junk
+        Could not locate junk
+        Could not locate junk
+        Could not locate junk
+        Could not locate junk
+
+help
+    Displays program help
+    Options
+        <cmd> - show help for a specific command
+    Example
+        smashftp> help get
+        get <file> - get file from remote
+history
+    Show command history of the current session. This can also be
+    invoked by pressing ^Y.
+    Example:
+        smashftp> history
+           0: ls
+           1: ls -l
+           2: time cmd get smash
+           3: history
+loop
+    Iterates a command the specified number of times. A variable, $a
+    is instantiated at the command line as the loop index. If loop
+    commands are nexted, then $b, $c, etc, will be instantiated as well.
+    Example:
+        smashftp> loop 4 ls -l smash
+        -rwxrwxrwx    73532 2024-05-05 00:11:32 smash
+        -rwxrwxrwx    73532 2024-05-05 00:11:32 smash
+        -rwxrwxrwx    73532 2024-05-05 00:11:32 smash
+        -rwxrwxrwx    73532 2024-05-05 00:11:32 smash
+        9.OS322:> smashftp loop 2 loop 3 echo $a $b
+        0 0
+        0 1
+        0 2
+        1 0
+        1 1
+        1 2
+quit
+    Exits smashftp
+    Alias
+        q
+    Example
+        smashftp> quit
+        9.OS322:>
+time cmd
+    Measure the time it takes to execute a command.
+    Example
+        smashftp> time cmd get smash
+        Get smash as smash (73532 bytes)  53 KB/sec
+        2040 ms
+version
+    Shows the version and release date of smashftp
+    Example
+        smashftp> version
+        smash 0.1 (May  5 2024) � Chris Hooper

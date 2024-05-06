@@ -17,7 +17,6 @@
 #include <inline/timer.h>
 #include <inline/exec.h>
 #include <inline/dos.h>
-#include <inttypes.h>
 #endif
 
 #define BIT(x) (1U << (x))
@@ -64,6 +63,16 @@
 #define ADDR8(x)    ((volatile uint8_t *)  ((uintptr_t)(x)))
 #define ADDR16(x)   ((volatile uint16_t *) ((uintptr_t)(x)))
 #define ADDR32(x)   ((volatile uint32_t *) ((uintptr_t)(x)))
+
+/*
+ * Define compile-time assert. This macro relies on gcc's built-in
+ * static assert checking which is available in C11.
+ */
+#include <assert.h>
+#define STATIC_ASSERT(test_for_true) \
+    static_assert((test_for_true), "(" #test_for_true ") failed")
+
+#define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
 
 void cpu_control_init(void);
 void cia_spin(unsigned int ticks);

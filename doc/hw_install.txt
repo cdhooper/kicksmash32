@@ -1,0 +1,110 @@
+KickSmash hardware install
+--------------------------
+
+KickSmash has so far only been tested in Amiga 3000 desktop systems.
+I do not anticipate any problems with Amiga 3000T, 4000 desktop, and
+4000T systems, and will be testing with some of these very soon.
+KickSmash might also work with the Amiga 1200, but I've investigated
+that system enough to confirm.
+
+1. Turn off your computer
+   It had to be said.
+
+2. Locate and attach a wire for the KBRST pin
+   For the Amiga 3000, I recommend soldering or clipping a wire to pin
+   1 or pin 3 of U713. You can also attach to pin 6 of RP701 if you
+   want to be more discrete. I usually solder this side and then run a
+   wire to a Dupont connector for attaching to the KickSmash.
+   For the Amiga 4000, I recommend using U141 pin 1 or pin 3, or attach
+   to one side (NOT the 5V side) of R120.
+
+3. Remove your old Kickstart ROMs
+    It's best to use a chip extractor. If you must use a flat edge
+    screwdriver, be very careful to not damage traces on your motherboard.
+
+4. Install KickSmash in place of the ROMs
+    In the Amiga 3000, KickSmash will be oriented with the USB-C
+    connector facing Gary.
+    In the Amiga 4000, KickSmash will be oriented with the USB-C
+    connector facing the 50 MHz oscillator and Gary.
+    Be careful to ensure that all pins are are aligned correctly with
+    the socket leaf springs before applying force to install KickSmash
+    into the sockets.
+
+5. Attach your KBRST wire to the KBRST pin on KickSmash
+
+6. Optionally attach your ST-Link
+    You can this if you plan to do firmware programming. Ensure the
+    cable is oriented correctly.
+
+7. Optionally attach a USB-C cable to your KickSmash
+    This cable would be routed out the back of your Amiga and then
+    connected to your host. Leaving the USB-C connected provides for
+    the possibility of a couple features which will be explained in
+    the software guides. One feature is that you can still program
+    flash while the KickSmash is installed in the Amiga. The Amiga
+    just needs to be put in reset during this operation. Another
+    feature is that software on the Amiga can communicate with the
+    hostsmash application for host file access.
+
+8. Power on your computer
+    If you previously attached your USB-C cable to your host computer,
+    the KickSmash power LED should have already been on while your
+    Amiga was still powered off. If not, once you power on your Amiga,
+    the KickSmash POWER LED should illuminate. If it doesn't, and it
+    did previously when you were testing stand-alone, you should
+    immediately turn off your computer. Something isn't right. If you
+    don't see the POWER LED, it could be that KickSmash is misaligned
+    in the socket.
+
+9. Watch for signs of life from your Amiga
+    You should see immediate READ LED activity on the KickSmash.
+    Your Amiga power LED should go from dim to bright. These are
+    excellent signs that things are working.
+
+    There are many potential causes for your Amiga not starting up
+    correctly at this point. One is that the installed ROM image is
+    not correct for this machine, or it was installed with incorrect
+    byte swapping.
+
+    KicKSmash might be able to help you identify what is going wrong.
+    You can use the hostsmash utility to connect as you did before
+    when testing the board standalone:
+        ./hostsmash -d /dev/ttyACM0 -t
+
+    The "prom log" command may be used to show the most recent
+    addresses that the Amiga fetched from flash. Example from a
+    working Amiga:
+        CMD> prom log
+        Ent ROMAddr AmigaAddr
+        733 00522   01488
+        734 00523   0148c
+        735 0055a   01568
+        736 0055b   0156c
+        737 00554   01550
+        738 00555   01554
+        739 00556   01558
+        740 00557   0155c
+        741 00558   01560
+        742 00559   01564
+
+    Every time you execute the command, it will show you the most
+    recent addresses accessed. If the list is not changing, that likely
+    means the Amiga has faulted. If there are no entries in the list,
+    then the Amiga CPU is probably not fetching at all.
+
+    One can kick off an Amiga reset and capture addresses. Example:
+        CMD> reset amiga ; reset amiga hold ; prom log 6
+        Resetting Amiga
+        Holding Amiga in reset
+        Ent ROMAddr AmigaAddr
+        199 055e4   15790
+        200 055e5   15794
+        201 055e6   15798
+        202 055e7   1579c
+        203 055e8   157a0
+        204 07306   1cc18
+    If very few addresses are driven on the bus before the Amiga CPU
+    stops, this is a good hint that it's faulting and stopping.
+
+Once you have your Amiga booting, follow the sw_install.txt guide.

@@ -25,8 +25,9 @@ const char *version = "\0$VER: smash 0.1 ("__DATE__") © Chris Hooper";
 #include <exec/execbase.h>
 #include <exec/memory.h>
 #include "smash_cmd.h"
+#include "host_cmd.h"
 #include "crc32.h"
-#include "msg.h"
+#include "sm_msg.h"
 #include "cpu_control.h"
 
 /*
@@ -92,6 +93,8 @@ static const char cmd_options[] =
     "   read <opt>   read from flash (-r ?, bank, file, ...)\n"
     "   verify <opt> verify flash matches file (-v ?, bank, file, ...)\n"
     "   write <opt>  write to flash (-w ?, bank, file, ...)\n"
+    "   loop <num>   repeat the command a specified number of times (-l)\n"
+    "   quiet        minimize test output\n"
     "   sr <addr>    spin loop reading address (-x)\n"
     "   srr <addr>   spin loop reading address with ROM OVL set (-y)\n"
     "   test[0123]   do interface test (-t)\n";
@@ -101,7 +104,7 @@ static const char cmd_bank_options[] =
     "  merge <start> <end>        Merge banks for larger ROMs (-m)\n"
     "  unmerge <start> <end>      Unmerge banks (-u)\n"
     "  name <bank> <text>         Set bank name / description (-n)\n"
-    "  longreset <bank>[,<bank>]  Banks to sequence at long reset (-l)\n"
+    "  longreset <bank> [<bank>]  Banks to sequence at long reset (-l)\n"
     "  poweron <bank> [reboot]    Default bank at poweron (-p)\n"
     "  current <bank> [reboot]    Force new bank immediately (-c)\n"
     "  nextreset <bank> [reboot]  Force new bank at next reset (-N)\n";
@@ -187,6 +190,8 @@ long_to_short_t long_to_short_bank[] = {
 };
 
 long_to_short_t long_to_short_clock[] = {
+    { "-h", "?" },
+    { "-h", "help" },
     { "-k", "loadifset" },
     { "-l", "load" },
     { "-s", "save" },
@@ -363,46 +368,6 @@ print_us_diff(uint64_t start, uint64_t end)
     }
     diff2 = diff / 10;
     printf("%u.%02u %s\n", diff2 / 100, diff2 % 100, scale);
-}
-
-
-static const char *
-smash_err(uint code)
-{
-    switch (code) {
-        case KS_STATUS_OK:
-            return ("Success");
-        case KS_STATUS_FAIL:
-            return ("KS Failure");
-        case KS_STATUS_CRC:
-            return ("KS reports CRC bad");
-        case KS_STATUS_UNKCMD:
-            return ("KS detected unknown command");
-        case KS_STATUS_BADARG:
-            return ("KS reports bad command argument");
-        case KS_STATUS_BADLEN:
-            return ("KS reports bad length");
-        case KS_STATUS_NODATA:
-            return ("KS reports no data available");
-        case KS_STATUS_LOCKED:
-            return ("KS reports resource locked");
-        case MSG_STATUS_FAILURE:
-            return ("Failure");
-        case MSG_STATUS_NO_REPLY:
-            return ("No Reply");
-        case MSG_STATUS_BAD_LENGTH:
-            return ("Smash detected bad length");
-        case MSG_STATUS_BAD_CRC:
-            return ("Smash detected bad CRC");
-        case MSG_STATUS_BAD_DATA:
-            return ("Invalid data");
-        case MSG_STATUS_PRG_TMOUT:
-            return ("Program/erase timeout");
-        case MSG_STATUS_PRG_FAIL:
-            return ("Program/erase failure");
-        default:
-            return ("Unknown");
-    }
 }
 
 static void
@@ -1090,7 +1055,7 @@ smash_test_msg_loopback(void)
                 }
             }
             if (pos < rlen) {
-                rc = MSG_STATUS_FAILURE;
+                rc = MSG_STATUS_FAIL;
                 goto fail;
             }
             if ((rc = get_msg_info(&msginfo)) != 0)
@@ -3261,6 +3226,8 @@ cmd_clock(int argc, char *argv[])
         if (*ptr == '-') {
             for (++ptr; *ptr != '\0'; ptr++) {
                 switch (*ptr) {
+                    case 'h':  // load
+                        goto usage;
                     case 'l':  // load
                         flag_load++;
                         break;
@@ -3439,6 +3406,9 @@ main(int argc, char *argv[])
                         exit(1);
                 }
             }
+        } else if ((*ptr >= '0') && (*ptr < '4') && (ptr[1] == '\0')) {
+            flag_test_mask |= BIT(*ptr - '0');
+            flag_test++;
         } else {
             printf("Error: unknown argument %s\n", ptr);
             usage();

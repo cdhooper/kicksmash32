@@ -18,8 +18,9 @@
 #include <stdio.h>
 #include <exec/execbase.h>
 #include "crc32.h"
-#include "msg.h"
+#include "sm_msg.h"
 #include "smash_cmd.h"
+#include "host_cmd.h"
 #include "cpu_control.h"
 
 #define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
@@ -114,7 +115,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         if (magic < ARRAY_SIZE(sm_magic)) {
             if (val != sm_magic[magic]) {
                 magic = 0;
-                cia_spin(10);
+                cia_spin(5);
                 continue;
             }
         } else if (magic < ARRAY_SIZE(sm_magic) + 1) {
@@ -257,4 +258,62 @@ void
 msg_init(void)
 {
     cpu_control_init();
+}
+
+static const char *const ks_status_s[] = {
+    "OK",                               // KS_STATUS_OK
+    "KS Failure",                       // KS_STATUS_FAIL
+    "KS reports CRC bad",               // KS_STATUS_CRC
+    "KS detected unknown command",      // KS_STATUS_UNKCMD
+    "KS reports bad command argument",  // KS_STATUS_BADARG
+    "KS reports bad length",            // KS_STATUS_BADLEN
+    "KS reports no data available",     // KS_STATUS_NODATA
+    "KS reports resource locked",       // KS_STATUS_LOCKED
+};
+STATIC_ASSERT(ARRAY_SIZE(ks_status_s) == (KS_STATUS_LAST_ENT >> 8));
+
+static const char *const km_status_s[] = {
+    "OK",
+    "FAIL",
+    "EOF",
+    "UNKCMD",
+    "PERM",
+    "INVALID",
+    "NOTEMPTY",
+    "NOEXIST",
+    "EXIST"
+};
+STATIC_ASSERT(ARRAY_SIZE(km_status_s) == KM_STATUS_LAST_ENTRY);
+
+static const char *const msg_status_s[] = {
+    "Msg Failure",                      // MSG_STATUS_FAIL
+    "Msg No Reply",                     // MSG_STATUS_NO_REPLY
+    "Msg detected bad length",          // MSG_STATUS_BAD_LENGTH
+    "Msg detected bad CRC",             // MSG_STATUS_BAD_CRC
+    "Msg Invalid data",                 // MSG_STATUS_BAD_DATA
+    "Msg Program/erase timeout",        // MSG_STATUS_PRG_TMOUT
+    "Msg Program/erase failure",        // MSG_STATUS_PRG_FAIL
+};
+
+/*
+ * smash_err
+ * ---------
+ * Converts KS_STATUS, KM_STATUS, or MSG_STATUS value to a readable string
+ */
+const char *
+smash_err(uint status)
+{
+    uint        ks_status_v  = status >> 8;
+    uint        msg_status_v = (~status) - (~MSG_STATUS_FAIL);
+    static char buf[64];
+    const char *str = "Unknown";
+
+    if (status < ARRAY_SIZE(km_status_s))
+        str = km_status_s[status];
+    else if (ks_status_v < ARRAY_SIZE(ks_status_s))
+        str = ks_status_s[ks_status_v];
+    else if (msg_status_v < ARRAY_SIZE(msg_status_s))
+        str = msg_status_s[msg_status_v];
+    sprintf(buf, "%u %s", status, str);
+    return (buf);
 }

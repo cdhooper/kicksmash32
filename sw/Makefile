@@ -1,9 +1,17 @@
 PROG=hostsmash
 SRCS=hostsmash.c crc32.c version.c
 CC=gcc
-CFLAGS  := -O2 -g -pthread -Wall -Wpedantic
-LDFLAGS := -O2 -g -lpthread
+#CFLAGS  := -O2 -g -pthread -Wall -Wpedantic
+#LDFLAGS := -O2 -g -lpthread
+CFLAGS  := -O0 -g -pthread -Wall -Wpedantic
+LDFLAGS := -O0 -g -lpthread
 UNAME_S := $(shell uname -s)
+
+#
+# Allowing links opens security risk for remote mounts because anything
+# the user running hostsmash can access may then be potentially linked
+# and accessed by the Amiga
+CFLAGS += -DALLOW_CREATE_LINK
 
 NOW  := $(shell date +%s)
 ifeq ($(UNAME_S),Darwin)

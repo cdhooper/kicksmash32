@@ -1,0 +1,563 @@
+smash utility under AmigaOS
+---------------------------
+The smash utility is useful for interacting with the KickSmash firmware,
+including updating Kickstart ROM images, showing and changing Kickstart
+bank information, and testing the message interface.
+
+Most smash commands provide additional information if not supplied
+with enough command arguments. For example, just running the smash
+utility, you will see:
+    9.OS322:> smash
+    You must specify an operation to perform
+    smash 0.1 (May  2 2024) � Chris Hooper
+
+    usage: smash <options>
+       bank <opt>   ROM bank operations (-b ?, show, ...)
+       clock <opt>  save / restore Amiga clock with KS (-c)
+       debug        show debug output (-d)
+       erase <opt>  erase flash (-e ?, bank, ...)
+       identify     identify Kicksmash and Flash parts (-i[ii])
+       read <opt>   read from flash (-r ?, bank, file, ...)
+       verify <opt> verify flash matches file (-v ?, bank, file, ...)
+       write <opt>  write to flash (-w ?, bank, file, ...)
+       loop <num>   repeat the command a specified number of times (-l)
+       quiet        minimize test output
+       sr <addr>    spin loop reading address (-x)
+       srr <addr>   spin loop reading address with ROM OVL set (-y)
+       test[0123]   do interface test (-t)
+
+
+Testing the interface
+---------------------
+Software running on the Amiga communicates with Kicksmash only by
+doing reads of addresses in the Kickstart ROM address space. A full
+message interface is implemented in both directions, including CRC
+protection for the message content. Since Kickstart is running from
+the same address space, performing this interaction while avoiding
+the CPU fetching invalid instructions can be complicated.
+
+If you recently installed or updated KickSmash, it is a good idea to
+test the interface before trying other operations. The "smash test"
+command may be used for this:
+    9.OS322:> smash test
+      Test pattern    PASS
+      Test loopback   PASS  1951 IOPS
+      Loopback perf   PASS  306 KB/sec
+      Message buffer  PASS  70-200 KB/sec (W)  11-53 KB/sec (R)
+      Remote message  Unavailable
+If you've not yet started the hostsmash utility on your USB connected
+host, this is the output you should expect. Tests are numbered 0-4,
+which allows you to select an individual test. You can also iterate on
+a given test multiple times. Example:
+    9.OS322:> smash test -12 -l 3
+    Pass 1
+      Test loopback   PASS  1953 IOPS
+      Loopback perf   PASS  304 KB/sec
+    Pass 2
+      Test loopback   PASS  1953 IOPS
+      Loopback perf   PASS  304 KB/sec
+    Pass 3
+      Test loopback   PASS  1952 IOPS
+      Loopback perf   PASS  308 KB/sec
+or run a test quietly
+    9.OS322:> smash test -1 -q -l 1000
+    ....Pass 1000 done
+
+If smash test discovers failures, it will likely be difficult to diagnose
+the cause, especially if you are sure that your Kicksmash board is
+installed and your Amiga is already booting. The "prom log" or "snoop"
+commands from the Kicksmash firmware "CMD>" command prompt may be helpful.
+You might also be able to loop on the smash "sr f80000" or the "srr 0" or
+"srr 555" command, etc, while using "prom log" or "snoop" from Kicksmash.
+
+Once you feel confident that Kicksmash communication is good, you might
+try also testing the message interface. For that, you will need to start
+the hostsmash utility. You will need to start the utility in message
+mode, which currently requires at least one volume to export. This
+restriction will likely be changed in the future. Run the following
+on your host:
+    hostsmash -d /dev/ttyACM0 . -M cur: .
+You should see output similar to the following (subject to revision):
+    add volume cur: = .
+    message mode
+    ID
+      Kicksmash 0.1 built 2024-05-03 09:12:34
+      USB 12091610  Serial "0db05GK90@T18C"  Name "amiga2"
+      Mode: 32-bit
+    got 4 bytes: len=0004 status=0000 0000 0300
+
+The host program will remain running in the foreground until you press ^C.
+You can now run smash -t4 to verify the host message interface is working:
+    9.OS322:> smash -t4 -l 4
+    Pass 1      Remote message  PASS  80 KB/sec
+    Pass 2      Remote message  PASS  80 KB/sec
+    Pass 3      Remote message  PASS  80 KB/sec
+    Pass 4      Remote message  PASS  78 KB/sec
+
+A final option for testing is the "debug" command. It may be used to
+enable a debug flag which can help in communication failure cases by
+showing the data which was received from KickSmash. Since the smash
+utility reads the Kickstart ROM area, if KickSmash is not responding
+at all, you will likely see content of the ROM area repeated multiple
+times. If you see a sequence of data, then some communication is
+probably taking place.
+
+The below is an example where the KickSmash did not reply at all.
+This was injected by typing the "reboot" command at the KickSmash
+CLI "CMD>" prompt:
+    9.OS322:> smash -t0 -l 10000 -q -d
+    .Reply message failure: -7 (No Reply)
+     26502013 26502013 26502013 26502013 &P .&P .&P .&P .
+     26502013 26502013 26502013 26502013 &P .&P .&P .&P .
+     26502013 26502013 26502013 26502013 &P .&P .&P .&P .
+     26502013 26502013 26502013 26502013 &P .&P .&P .&P .
+...
+     26502013 26502013 26502013 26502013 &P .&P .&P .&P .
+      Test pattern    FAIL
+    Failed at pass 236 (1 errors)
+
+and an example of KickSmash just being late with a reply:
+    9.OS322:> smash test 2 -l 10 -q -d
+    .
+    FAIL: -7 (No Reply)
+     26502013 26502013 26502013 26502013 &P .&P .&P .&P .
+     26502013 26502013 26502013 26502013 &P .&P .&P .&P .
+     26502013 26502013 26502013 26502013 &P .&P .&P .&P .
+     26502013 26502013 26502013 ffffffff &P .&P .&P .....
+     ffffffff 02041017 01190117 03e80006 .............. .
+     a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5 ................
+...
+The above failure (which was forced by modifying smash utility source
+code to be extremely impatient) shows a number of reads of the ROM area
+before KickSmash begins to set up DMA. The ffffffff values represent
+when KickSmash firwmare has disabled the flash from responding to CPU
+requests. The 02041017 and 01190117 are the sequence of magic data
+values which are provided in the header of every KickSmash message.
+Following that, you see the message length 03e8 (1000 bytes) and
+command code 0006 (KS_CMD_LOOPBACK) for the loopback message reply.
+Following those values should have been the pseudo-random message data,
+ended by a 32-bit CRC over the message. Those items are missing because
+the smash utility gave up too early (as forced by a code change).
+
+
+Identify
+--------
+You can verify your KickSmash is running the latest firmware with the
+smash utility. It will query KickSmash and report version information.
+    9.OS322:> smash identify
+    ID
+      Kicksmash 0.1 built 2024-05-03 09:12:34
+      USB 12091610  Serial "1d905GK73B6519C"  Name "amiga1"
+      Mode: 32-bit
+      Uptime: 25172.975650 sec
+
+All smash commands may be shortened to a single command flag.
+"smash -i" is identical to "smash identify"
+
+You can also identify the installed flash parts with "identify identify":
+    9.OS322:> smash -ii
+    Flash ID
+      000122d2 000122d2 M29F160FT M29F160FT (32-bit mode)
+
+This is a major milestone because not only did your Amiga need to send
+a command to KickSmash, the two of them also needed to precisely coordinate
+on the flash command sequencew so that the Amiga could supply the flash
+addresses and the STM32 CPU's DMA engines could supply synchronized unlock
+and command data to the flash parts.
+
+
+Flash Operations
+----------------
+Before getting into commands to read, erase, and write flash, it's
+helpful to understand the organization and terms. By default, Kicksmash
+partitions the flash address space into eight banks. Each bank is 512 KB.
+Certain banks may be merged together to form a larger 1MB or 2MB or even
+4MB bank, but this requires additional hardware in your Amiga, so that
+will be described later.
+
+If you've not yet used the "smash bank" command, then it's likely the
+"smash bank show" output will be blank. Example:
+    9.OS322:> smash bank show
+    Bank  Name            Merge LongReset  PowerOn  Current  NextReset
+    0                                      *        *
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+
+Let's start by labeling the bank you are obviously already using, and
+hopefully with Kickstart 3.2 or later. Example:
+    9.OS322:> smash bank name 0 "KS 3.2"
+    9.OS322:> smash bank show
+    Bank  Name            Merge LongReset  PowerOn  Current  NextReset
+    0     KS 3.2                           *        *
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+
+Now that's more interesting. Copy the ROM image in bank 0 to a file.
+    9.OS322:> smash read bank 0 file 322.rom
+    Read bank=0 addr=0 len=80000 to file="322.rom"
+    Proceed - are you sure? (y/n) y
+    Progress [................................]
+    Read complete in 2.28 sec
+
+There is now a file in your current directory called 322.rom:
+    9.OS322:> list 322.rom
+    322.rom                      524288 ----rw-d Today     03:53:09
+    1 file - 512K bytes - 514 blocks used
+
+Next erase bank 2:
+    9.OS322:> smash erase bank 1
+    Erase bank=1 addr=0 len=80000
+    Proceed - are you sure? (y/n) y
+    Progress [................................]
+    Erase complete in 2.42 sec
+
+and program the same image into bank 1 (this can take more than a minute):
+    9.OS322:> smash write verify bank 1 file 322.rom
+    Write bank=1 addr=0 len=80000 from file="322.rom"
+    Proceed - are you sure? (y/n) y
+    Progress [................................]
+      Verify [................................]
+    Write complete in 63.68 sec
+    Verify complete in 2.40 sec
+
+You can test this live, which is frankly a little scary. Don't do this
+if the Kickstart ROM image you programmed is not identical to the ROM
+you are already running.
+    9.OS322:> smash bank current 1
+    9.OS322:> smash bank show
+    Bank  Name            Merge LongReset  PowerOn  Current  NextReset
+    0     KS 3.2                           *
+    1                                               *
+    2
+    3
+    4
+    5
+    6
+    7
+
+If you managed to type the "smash bank show" command and see the output
+above, then congratulations! Your Amiga is now running on flash bank 1.
+Let's label that bank:
+    9.OS322:> smash bank name 1 "KS 3.2 backup"
+
+say you want to install DiagROM in bank 2. First you need to download
+the latest version:
+    https://www.diagrom.com/index.php/download/
+and get the proper ROM image into your Amiga. You could use smashftp to
+do this (see sw_smashftp.txt), but at 55 KB/sec, it might not be the
+fastest method you have available. The image you need from the DiagROM
+archive package is called "DiagROM".
+
+Assuming you have DiagROM in your current Amiga directory, you can then
+use "smash erase" and "smash write" to write that image:
+    9.OS322:> smash erase bank 2 yes
+    Erase bank=2 addr=0 len=80000
+    Progress [................................]
+    Erase complete in 2.38 sec
+    9.OS322:> smash write verify bank 2 yes file DiagROM
+    Write bank=2 addr=0 len=80000 from file="DiagROM"
+    Progress [................................]
+      Verify [................................]
+    Write complete in 63.86 sec
+    Verify complete in 2.40 sec
+    9.OS322:> smash bank name 2 "DiagROM 1.3"
+
+What else can the "smash bank" command do?
+    9.OS322:> smash bank ?
+      show                       Display all ROM bank information (-s)
+      merge <start> <end>        Merge banks for larger ROMs (-m)
+      unmerge <start> <end>      Unmerge banks (-u)
+      name <bank> <text>         Set bank name / description (-n)
+      longreset <bank> [<bank>]  Banks to sequence at long reset (-l)
+      poweron <bank> [reboot]    Default bank at poweron (-p)
+      current <bank> [reboot]    Force new bank immediately (-c)
+      nextreset <bank> [reboot]  Force new bank at next reset (-N)
+
+Before Rebooting into DiagROM, let's set up a few more things:
+    9.OS322:> smash bank poweron 0
+    9.OS322:> smash bank longreset 0 2
+    9.OS322:> smash bank nextreset 2
+    9.OS322:> smash bank show
+    Bank  Name            Merge LongReset  PowerOn  Current  NextReset
+    0     KS 3.2                0          *
+    1     KS 3.2 backup                             *
+    2     DiagROM 1.3           1                            *
+    3
+    4
+    5
+    6
+    7
+
+That should do it. The next time you reboot your Amiga, KickSmash will
+automatically change to bank 2. If you hold Control-Amiga-Amiga a long
+time (more than 3 seconds), then KickSmash will cycle the current ROM
+image to the "next" LongReset position according to the order you
+specified to the "longreset" command.
+
+Let's run DiagROM. Either press Control-Amiga-Amiga or use the smash
+bank nextreset command again with the reboot option:
+    9.OS322:> smash bank nextreset 0 reboot
+
+DiagROM should now be running on your Amiga. To get back to AmigaOS,
+hold Ctrl-Amiga-Amiga for three or more seconds.
+
+
+Large Flash Banks
+-----------------
+This section can get complicated. If you don't have Romy or don't
+care about larger custom Kickstart ROM images, feel free to skip.
+
+As mentioned above, by default there are eight flash banks, numbered
+0 to 7. If you have installed an Amiga ROM address space enhancement
+such as Romy:
+    https://github.com/reinauer/amiga-romy
+then KickSmash can be configured to merge flash banks into larger
+addressable banks which are compatible with Romy. Before doing this,
+it's helpful to understand how KickSmash treats flash addresses.
+With the Amiga 3000, the ROM sockets provide CPU address lines
+A2 through A19 which are connected to U180 and U181 address pins
+A0 through A17. This might be confusing. Each ROM supplies 16 bits
+of data at each address, and there are two ROMs. So one address to
+the ROMs account for four bytes of data to the CPU. Thus, the CPU
+address lines A0 and A1 are not useful to select which ROM address.
+The CPU will internally decode A0 and A1 if a byte or 16-bit value
+is requested from a ROM address. The fetch always gets 32 bits
+from the COM.
+
+In the standard Amiga address map, the Kickstart ROM begins at
+0x00f80000. The '8' corresponds to CPU address bit A19. So this
+value is consistently 1 so long as the Amiga is running from
+Kickstart at the standard Kickstart ROM address. When your Amiga
+is first powered on, however, the Motorola CPU begins executing
+instructions from address 0. The OVL line out of the 8520 U350 is
+routed to Gary and controls whether the ROM or Agnus should be
+enabled when accessing low memory. One of the first thing Kickstart
+does at power-on is jump to a high address and then disable OVL.
+After that, the ROM is no longer visible at address 0, and instead
+Agnus is then accessible there.
+
+What this means is that CPU A19 is very briefly 0 after a cold
+reset, while from the Kickstart ROM and after that it remains 1
+during fetches. This explains, when using EPROMs in the A3000,
+why the supplied image from Hyperion is 512 KB for each part.
+If you use an EPROM which is 512 KB or larger, it must be
+programmed with two copies of that ROM's 16-bit half of the total
+512 KB Kickstart ROM image. Examples:
+
+      CPU Address    U180        U181
+                   |---_---|   |---_---|
+      ffffff       | 3ffff |   | 3ffff |
+      fc0000       | 30000 |   | 30000 |
+      f84000       | 21000 |   | 21000 |
+      f80000       | 20000 |   | 20000 |
+       7ffff OVL   | 1ffff |   | 1ffff |
+       40000 OVL   | 10000 |   | 10000 |
+        4000 OVL   | 01000 |   | 01000 |
+           0 OVL   | 00000 |   | 00000 |
+                   |_______|   |_______|
+      Data bits       0-15        16-31
+
+Imagine if A17 of the EPROM could be attached to a jumper or switch
+instead of to the CPU's A19 address line. You could then have a
+completely different Kickstart ROM image in the high half versus the
+low half of each image. Example where a jumper is configured to drive
+EPROM A17 low:
+      CPU Address    U180        U181
+                   |---_---|   |---_---|
+      ffffff       | 1ffff |   | 1ffff |
+      fc0000       | 10000 |   | 10000 |
+      f84000       | 01000 |   | 01000 |
+      f80000       | 00000 |   | 00000 |
+       7ffff OVL   | 1ffff |   | 1ffff |
+       40000 OVL   | 10000 |   | 10000 |
+        4000 OVL   | 01000 |   | 01000 |
+           0 OVL   | 00000 |   | 00000 |
+                   |_______|   |_______|
+      Data bits       0-15        16-31
+
+or you have the jumper configured to drive EPROM A17 high:
+      CPU Address    U180        U181
+                   |---_---|   |---_---|
+      ffffff       | 3ffff |   | 3ffff |
+      fc0000       | 30000 |   | 30000 |
+      f84000       | 21000 |   | 21000 |
+      f80000       | 20000 |   | 20000 |
+       7ffff OVL   | 3ffff |   | 3ffff |
+       40000 OVL   | 30000 |   | 30000 |
+        4000 OVL   | 21000 |   | 21000 |
+           0 OVL   | 20000 |   | 20000 |
+                   |_______|   |_______|
+      Data bits       0-15        16-31
+
+KickSmash has two flash parts, each one 2 MB in size. It can also
+override flash A17, A18, and A19 (CPU address lines A19 to A21).
+In default mode, you can store up to eight 512 KB images using KickSmash.
+Each of these are called a bank in the terminology used by this software.
+
+You may wonder how Romy allows a larger ROM to be present in the Amiga.
+The Amiga memory map reserves the 0x00f80000-0x00ffffff region for the
+Kickstart ROM. A second region, not supported by Gary in the Amiga 3000
+or 4000, is the address range 0x00f00000-0x00f7ffff. This is known as
+the Diagnostic or Expansion ROM area. Romy works by watching the same
+address lines that Gary watches to decode ROM addresses, but it will also
+drive _ROMEN when it sees addresses in the range 0x00f00000-0x00f7ffff.
+This works out well. Now ROM A17 (CPU A19) is useful. The lower ROM
+addresses which were previously selected (OVL) only immediately after
+cold power-on are then also available at the 0x00f00000-0x00f7ffff
+addresses during normal system operation. Beyond the minimal amount of
+initial low address code necessary to perform the jump to high memory,
+the remainder of that 512 KB address space is available for additional
+ROM modules. Kickstart code knows to scan that secondary memory and
+initialize any additional ROM modules found there.
+
+This gets us to a 1 MB ROM image. KickSmash can support this mode by
+selectively not driving the Flash A17 pin and instead letting it be
+driven by the CPU's A19 address pin.
+
+How about 2 MB and 4 MB flash banks? This could also be enabled by
+KickSmash if it doesn't drive the flash A18 and A19 (CPU A20 and A21)
+address lines. The problem is that there is no room for an additional
+1 MB of ROM address space below the 0x00ffffff address. The solution
+that Romy implements is to also decode addresses 0x01000000 through
+0x013fffff as ROM addresses.
+
+The smash bank command has two additional options to support merging
+flash banks into a larger single bank.
+    9.OS322:> smash bank merge 4 5
+    9.OS322:> smash bank name 4 "1 MB Bank"
+    9.OS322:> smash bank show
+    Bank  Name            Merge LongReset  PowerOn  Current  NextReset
+    0     KS 3.2                0          *
+    1     KS 3.2 backup                             *
+    2     DiagROM 1.3           1                            *
+    3
+    4     1 MB Bank       -\
+    5                     -/
+    6
+    7
+
+The merged banks are denoted by markers in the Merge column. Let's
+make a 2 MB Bank.
+    9.OS322:> smash bank merge 4 7
+    Bank 4 is already part of a 2 bank range
+    9.OS322:> smash bank unmerge 4 5
+    9.OS322:> smash bank merge 4 7
+    9.OS322:> smash bank name 4 "2 MB Bank"
+    9.OS322:> smash bank show
+    Bank  Name            Merge LongReset  PowerOn  Current  NextReset
+    0     KS 3.2                0          *
+    1     KS 3.2 backup                             *
+    2     DiagROM 1.3           1                            *
+    3
+    4     2 MB Bank       -\
+    5                       |
+    6                       |
+    7                     -/
+
+Flash banks may only be merged at alignments at powers of two. This
+is due to how the Amiga address lines work. The following table enumerates
+all allowed bank merges:
+    1 MB  Banks 0-1, 2-3, 4-5, 6-7
+    2 MB  Banks 0-3, 4-7
+    4 MB  Banks 0-7
+
+
+Final notes on flash access
+---------------------------
+As seen above, it's useful to add a name to describe a bank that you've
+written a ROM image to. There is no requirement to do this, however.
+If you later find that you forgot to label a bank, you might be able to
+identify what is there by showing a dump of the contents. The "read"
+command, in addition to reading the contents of a bank to a file, can
+perform a hexadecimal and ASCII dump of select contents. Example:
+    9.OS322:> smash read bank 2 dump addr 0 len 100
+    Read bank=2 addr=0 len=100 to stdout (ASCII dump)
+    00000: 11144ef9 00f800d2 00f89cb0 00f89cc4 ..N. . . ... ...
+    00010: 00f89cd8 00f89cec 00f89d00 00f89d14  ... ... ..  ...
+    00020: 00f89d28 00f89d3c 00f89d50 49484f4c  ..( ..< ..PIHOL
+    00030: 203a203a 36553655 2c412c42 31553155  : :6U6U,A,B1U1U
+    00040: 35373637 552c552c 38313831 20312030 5767U,U,8181 1 0
+    00050: 20202020 48494c4f 3a203a20 55365536     HILO: : U6U6
+    00060: 412c422c 55315531 37353736 2c552c55 A,B,U1U17576,U,U
+    00070: 31383138 31203020 20202020 24564552 18181 0     $VER
+    00080: 3a204469 6167524f 4d20416d 69676120 : DiagROM Amiga
+    00090: 44696167 6e6f7374 69632062 79204a6f Diagnostic by Jo
+    000a0: 686e2048 65727465 6c6c2e20 7777772e hn Hertell. www.
+    000b0: 64696167 726f6d2e 636f6d20 32312d41 diagrom.com 21-A
+    000c0: 70722d32 33202d20 56312e33 00000000 pr-23 - V1.3
+    000d0: 00004280 42814282 42834284 42864287   B.B.B.B.B.B.B.
+    000e0: 41f90000 000043f9 00000000 45f90000 A.    C.    E.
+    000f0: 000047f9 00000000 49f90000 00004bf9   G.    I.    K.
+
+By default, the smash write command uses the size of the file for
+writing to flash and the size of the bank for reading from flash.
+You can also specify a size from the command line. For reads and
+writes, you can specify any size up to the length of the bank.
+So you could also use parts of a flash bank to store additional
+data than just a ROM. When erasing, however, you are subject to
+the minimum flash sector erase size. For example:
+    9.OS322:> smash erase bank 4 addr 100000 len 30
+    Erase bank=4 addr=100000 len=20000
+    Proceed - are you sure? (y/n) y
+    Progress [........]
+    Erase complete in 0.59 sec
+
+You can see the length requested is 0x30 bytes, but the size reported
+for confirmation is 0x20000 bytes (128 KB). This is not a bug. The
+erase minimum is affected by the flash part's sector erase size.
+    9.OS322:> smash -ii
+    Flash ID
+      000122d2 000122d2 M29F160FT M29F160FT (32-bit mode)
+The "FT" parts have smaller sectors at the top address. If we were
+to instead erase at the top of bank 7, the minimum sector size
+is different:
+    9.OS322:> smash erase bank 7 addr 7f000 len 30
+    Erase bank=7 addr=78000 len=8000
+    Proceed - are you sure? (y/n) y
+    Progress [..]
+    Erase complete in 0.26 sec
+Length 0x8000 is 32 KB.
+
+
+Clock
+-----
+The smash clock command may also be used to save and restore the Amiga
+system clock from KickSmash. This is not currently terribly useful because
+KickSmash does not have battery backup. It will lose the current time
+at a power cycle, unless it is also being powered by USB-C. In the
+future, the hostsmash utility will be able to set the KickSmash clock
+from your host PC's own system clock.
+
+The smash clock command has several options:
+    9.OS322:> smash clock help
+       load         load Amiga time from KS clock (-l)
+       loadifset    load Amiga time from KS clock if it is known (-k)
+       save         save Amiga time to KS clock (-s)
+       saveifnotset save Amiga time to KS clock if not already saved (-n)
+       show         show current KS clock (-S)
+
+If you've not done it before, you'll first need to set KickSmash time:
+    9.OS322:> smash clock save
+    04-May-24 04:34:58.856806
+from there, you can at any time enter:
+    9.OS322:> smash clock show
+    04-May-24 04:35:10.572053
+the KickSmash clock ticks at 36 MHz (sub-microsecond resolution). It
+should remain as accurate as the installed oscillator, which is typically
+around +/- 20 ppm (pulses per million). At 20 ppm, the worst case drift
+should be about 1.72 seconds per day.
+
+The smash clock load command will set the Amiga's time based on the
+KickSmash board's current time.  The loadifset command is similar, but
+will not generate an error message (and of course not perform the load)
+if the KickSmash clock has not been set.

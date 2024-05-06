@@ -1,0 +1,83 @@
+KickSmash Software installation
+-------------------------------
+
+Installing KickSmash board firmware
+    A brief recap from hw_install.txt is that you've successfully pulled the
+    KickSmash repository from github:
+        https://github.com/cdhooper/kicksmash32
+
+    At this point, if you built KickSmash yourself, you've likely already
+    built firmware in the fw directory and host (Linux) software in the sw
+    directory. You've also likely already programmed the firmware. If not,
+    please review that section from hw_install.txt.
+
+    Once your KickSmash has been programmed, you can apply a firmware
+    update without setting the DFU jumper again. The "reset dfu" command
+    may be used to tell KickSmash to enter DFU mode. Example:
+        ./hostsmash -d /dev/ttyACM0 -t
+        CMD> reset dfu
+        Resetting to DFU...
+
+    After several seconds, you should see the device appear on your host.
+            lsusb|grep DFU
+            Bus 001 Device 101: ID 0483:df11 STMicroelectronics STM Device in DFU Mode
+
+    You can then use "make dfu" in the fw to apply your updated firmware.
+
+Installing Amiga software
+    There is not yet an installer script or really any packaging
+    implemented for KickSmash Amiga software. Copy the following
+    utilities from the host's amiga build directory to your system
+    using whatever means you have available. You can place those
+    utilities in C: or in another directory you've added to your path.
+        smash
+        smashftp
+
+Installing Amiga software
+Amiga software
+    The amiga directory contains a Makefile which will build a few
+    AmigaOS programs:
+        1. smash
+        2. smashftp
+        3. smashfs
+    Ignore "smashfs" for now; it is an incomplete project. It will
+    eventually be a filesystem.
+
+    The smash utility can be used to communicate with your KickSmash
+    from AmigaOS. It supports a variety of options, including ones
+    which allow you to erase and program your flash. Example:
+        9.OS322:> smash write file 322.rom bank 3
+        Write bank=3 addr=0 len=80000 from file="322.rom"
+        Proceed - are you sure? (y/n) y
+        Progress [...                             ]
+    ...
+        Progress [................................]
+        Write complete in 63.67 sec
+        9.OS322:> smash -v -f 322.rom -b 3
+        Verify bank=3 addr=0 len=80000 matches file="322.rom"
+        Proceed - are you sure? (y/n) y
+          Verify [................................]
+        Verify complete in 2.39 sec
+
+    The smashftp utility can be used to transfer files to and from
+    your host. It requires your host to be running the hostsmash
+    utility with at least one volume exported. Example:
+        ./hostsmash -d /dev/ttyACM0 -m home: /home -m a: /amiga -m root: /
+    From there, you can start smashftp on the Amiga and access exported
+    volumes and files.
+        10.OS322:> smashftp
+        smashftp> list
+        root:                            Volume -------- 2024-05-03 09:32:25
+        a:                               Volume -------- 2024-05-03 09:32:25
+        home:                            Volume -------- 2024-05-03 09:32:25
+        smashftp> list a:smash
+        smash                             72796 ----rwed 2024-05-02 23:15:27
+        smashftp> get a:smash
+        Get a:smash as smash (72796 bytes)  53 KB/sec
+
+Once you have your software installed, you can follow one of these
+guides:
+    sw_smash.txt       Usage information on the smash utility.
+    sw_smashftp.txt    File transfer examples and help with smashftp.
+    sw_kicksmash.txt   The KickSmash firmware CLI.
+    sw_hostsmash.txt   The hostsmash host OS utility.
