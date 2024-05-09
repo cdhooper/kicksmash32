@@ -1,0 +1,771 @@
+The KickSmash firmware CLI
+--------------------------
+The KickSmash firmware runs on an STM32 CPU (STM32F107) and in addition
+to managing the active flash bank and allowing flash writes and other
+flash operations, it also provides other services including a message
+interface between the Amiga and the USB host.
+
+This document describes the KickSmash firmware and the various CLI
+commands available.
+
+
+All commands
+------------
+All commands provided by the KickSmash firmware:
+    ? [<cmd>]                             - display help
+    copy[bwlqoh] <saddr> <daddr> <len>    - copy memory
+    comp[bwlqoh] <addr1> <addr2> <len>    - compare memory
+    cpu regs|usb                          - CPU information
+    c[bwlqohS] <addr> <value...>          - change memory
+    delay<time> [s|ms|us]                 - delay for time
+    d[bwlqohRS] <addr> [<len>]            - display memory
+    echo <text>                           - display text
+    gpio [p<a-f><0-15>[=<x>]              - show or set GPIOs
+    ignore <cmd>                          - ignore result of command
+    help [<cmd>]                          - display help
+    history                               - show history
+    loop <count> <cmd>                    - execute command multiple times
+    map                                   - show memory map
+    patt[bwlqoh] <addr> <len> <pattern>   - pattern memory
+    test[bwlqoh] <addr> <len> <testtype>  - test memory
+    prom [erase|id|read|write|...]        - perform EEPROM operation
+    reset [dfu|amiga|prom]                - reset CPU
+    snoop                                 - snoop ROM
+    time cmd|now|watch>                   - measure or show time
+    usb disable|regs|reset                - show or change USB status
+    version                               - show version
+
+
+Amiga-centric commands
+----------------------
+reset
+    Reset a device or subsystem. The main use of the KickSmash reset command
+    is either to reset the Amiga or reset the KickSmash firmware.
+    Options
+        reset              - reset CPU
+        reset amiga        - reset Amiga using KBRST
+        reset amiga hold   - reset Amiga using KBRST, leaving it in reset
+        reset amiga long   - reset Amiga with a long reset (change ROM image)
+        reset dfu          - reset into DFU programming mode
+        reset prom         - reset ROM flash memory (forces Amiga reset as well)
+        reset usb          - reset and restart USB interface
+    Further details
+        reset
+            The reset command with no other options will reset the KickSmash
+            STM32 CPU. If you are connected by USB, the USB connection will
+            drop and must be re-connected after firmware finishes startup.
+            Reboot is very quick -- less than a second.
+        reset amiga
+            The Amiga will be reset without warning, similar to how the
+            keyboard will reset the machine when Control-Amiga-Amiga is
+            pressed.
+        reset amiga hold
+            The Amiga will be held in reset. This is useful if you intend
+            to program or otherwise interact with Kickstart ROM flash.
+            Use the "reset amiga" command to end the hold.
+        reset amiga long
+            Force a long reset of the Amiga. This will also trigger a ROM
+            bank switch if it has been configured (see the
+            "prom bank longreset" command).
+        reset dfu
+            This command may be used to reset the STM32 CPU and enter the
+            built-in DFU mode. DFU mode can be used to update KickSmash
+            firmware. Note that it can take several seconds for the STM32
+            to successfully enter USB DFU mode.
+        reset prom
+            This command will reset the Amiga and also put the Kickstart
+            ROM flash back in read mode. If, for some reason, the Amiga
+            crashes while a flash operation is taking place, the flash
+            may need to be returned to read mode from command mode. If
+            you notice the Amiga does not appear to be starting up after
+            a crash, this command may help.
+        reset usb
+            This is a debug command used to reset the USB core in the
+            STM32 CPU.
+    Example
+        CMD> reset amiga hold
+        Holding Amiga in reset
+        Amiga in reset
+        CMD> prom id
+        000122d2 000122d2 M29F160FT M29F160FT
+        CMD> ds prom 0
+        000000: f94e1411 d200f800 ffff0000 6f002f00 ..N. . .  .. / o
+        000010: 0a002f00 ffffffff 63657865 62696c2e  /  ....exec.lib
+        000020: 79726172 65786500 37342063 2030312e rary exec 47.10
+        000030: 2e313228 322e3130 29333230 4e000a0d (21.01.2023)   N
+        CMD> reset amiga
+        Resetting Amiga
+        CMD> Amiga out of reset
+prom
+    Options
+        prom bank <cmd>         - show or set PROM bank for AmigaOS
+        prom cmd <cmd> [<addr>] - send a 16-bit command to the EEPROM chip
+        prom id                 - report EEPROM chip vendor and id
+        prom erase chip|<addr>] - erase EEPROM chip or 128K sectors; [<len>]
+        prom log [<count>]      - show log of Amiga address accesses
+        prom mode 0|1|2|3       - set EEPROM access mode (0=32, 1=16lo, 2=16hi)
+        prom name [<name>]      - set or show name of this board
+        prom read <addr> <len>  - read binary data from EEPROM (to terminal)
+        prom service            - enter Amiga/USB message service mode
+        prom temp               - show STM32 die temperature
+        prom verify             - verify PROM is connected
+        prom write <addr> <len> - write binary data to EEPROM (from terminal)
+    Further details
+        prom bank
+            The prom bank command offers several options related to the
+            non-volatile Kickstart ROM bank configuration.
+            show
+                Show the configuration of the eight flash banks available
+                for Kickstart ROM storage. Format is similar to that of the
+                Amiga "smash bank show" command. See the example below.
+            name <bank> <name>
+                Change the name of the specified bank.
+            current <bank>
+                Immediately change the current Amiga Kickstart ROM bank.
+                This will likely crash your Amiga, so you'll probably need
+                to follow up with "reset amiga" afterward.
+            longreset <bank...>
+                Specifies the list of banks to sequence each time an Amiga
+                long reset is detected. Hold Control-Amiga-Amiga longer than
+                three seconds.
+            nextreset <bank>
+                At the next Amiga reset, change the Amiga Kickstart ROM bank.
+            poweron <bank>
+                Save in NVRAM the Kickstart ROM bank to use when the Amiga
+                does a cold power-on.
+            merge <first-bank> <last-bank>
+                Merge multiple banks into a single larger bank. Only certain
+                banks may be merged. These are:
+                    1 MB  Banks 0-1, 2-3, 4-5, 6-7
+                    2 MB  Banks 0-3, 4-7
+                    4 MB  Banks 0-7
+                See sw_smash.txt for more information.
+            unmerge <first-bank> <last-bank>
+                Separate previously merged Kickstart ROM banks.
+        prom cmd [<addr>]
+            This is a low-level interface to send commands directly to the
+            Kickstart ROM flash. The command will be prefixed by the flash
+            command unlock sequence. The lower 16 bits are sent to one chip
+            and the upper 16 bits are sent to the other chip.
+            The Amiga must be held in reset (see "reset amiga hold").
+        prom id
+            Query and report the vendor and device ID of the Kickstart ROM
+            flash parts. See the example below.
+            The Amiga must be held in reset (see "reset amiga hold").
+        prom erase chip
+            Erase all Kickstart ROM flash. The Amiga must be held in reset
+            (see "reset amiga hold").
+        prom erase <addr> [<len>]
+            Selectively erase all or part of the Kickstart ROM flash.
+            Use with caution. If you wish to erase only a particular bank,
+            you will need to select an appropriate base address and length
+            (nominally 0x80000 bytes).
+                  Bank  Base address     Bank  Base address
+                  0     0                4     200000
+                  1     80000            5     280000
+                  1     100000           6     300000
+                  1     180000           7     380000
+            The Amiga must be held in reset (see "reset amiga hold").
+        prom log [<count>]
+            Report the most recent Kickstart ROM addresses accessed by
+            the Amiga. These addresses are captured by DMA hardware in
+            the STM32 into a circular buffer and are continuously updated.
+            The optional <count> value is used to specify the number of
+            log entries to report. A <count> of 999 is special and may
+            be used to report message statistics. See the example below.
+        prom mode 0|1|2|3
+            Select which mode to use for accessing Kickstart ROM flash
+            from both the KickSmash firmware and the USB Host.
+                Mode 0 - 32-bit
+                Mode 1 - 16-bit low
+                Mode 2 - 16-bit high
+                Mode 3 - auto
+            Mode 3 is the default (automatically choose 32-bit or 16-bit
+            depending on the detected Amiga).
+            Mode 0 is 32-bit mode (A3000 and A4000)
+            Mode 1 is 16-bit mode (A500/A2000)
+                This mode might also be useful for programming individual
+                ROMs as it selects only the low flash part for programming
+                from the USB Host.
+            Mode 2 is 16-bit high mode (no Amiga).
+                This mode is only useful for programming individual
+                ROMs as it selects only the high flash part for programming
+                from the USB Host.
+            Usually, the prom mode does not need to be manually adjusted.
+            The exception is if you are programming Amiga ROMs using
+            hostsmash, and the distribution of those images are for the
+            two individual EPROM chips in an Amiga (lo and hi). In that
+            case, you can use the mode command to select a single flash
+            part at a time for programming. This may be easier than
+            figuring out how to correctly combine the two separate 16-bit
+            ROM images into a single 32-bit image that you can program.
+            See the "Writing to the Kickstart ROM flash" section in the
+            "sw_hostsmash.txt" document for more information.
+        prom name [<name>]
+            Save the name of this KickSmash into NVRAM. This name is
+            displayed by KickSmash firmware as it starts up and may also
+            be reported by the Amiga "smash -i" command. It will also
+            be displayed by hostsmash when connecting in service mode (-m).
+        prom read <addr> <len>
+            Enter binary mode, sending data from the specified flash
+            address. This command is used by the USB Host to read data
+            from flash in a CRC-protected manner. It's not useful for
+            an interactive user. See the "d prom" command elsewhere in
+            this document for an interactive method of reading flash.
+            The Amiga must be held in reset (see "reset amiga hold").
+        prom service
+            Enter binary service mode. This command is used by the USB
+            Host to receive from and respond to the Amiga through the
+            STM32 message interface. An Amiga program such as smashftp
+            may use this message interface to transfer files between
+            the Amiga and USB Host. The "hostsmash -m" command will
+            send this command to KickSmash.
+        prom temp
+            Display the STM32 internal temperature and on Rev 4 boards
+            the measured Amiga 5V rail voltage. See the example below.
+        prom verify
+            This is a debug command for standalone testing of STM32
+            GPIOs which interact with Kickstart ROM flash. It should
+            not be used when installed in an Amiga.
+        prom write <addr> <len>
+            Enter binary mode, sending receiving data to be written to
+            the specified flash address. This command is used by the USB
+            Host to write data to flash in a CRC-protected manner. It's
+            not useful for an interactive user. See the "c prom" command
+            elsewhere in this document for an interactive method of
+            writing flash.
+            The Amiga must be held in reset (see "reset amiga hold").
+    Examples
+        CMD> prom bank show
+        Bank  Name            Merge LongReset  PowerOn  Current  NextReset
+        0     KS 3.2                0          *
+        1     KS 3.2 backup                             *
+        2     DiagROM 1.3           1
+        3
+        4     2 MB Bank       -\
+        5                       |
+        6                       |
+        7                     -/
+
+        CMD> prom id
+        Fail: Amiga is not in reset
+        CMD> reset amiga hold
+        Holding Amiga in reset
+        Amiga in reset
+        CMD> prom id
+        000122d2 000122d2 M29F160FT M29F160FT
+
+        CMD> prom log 5
+        Ent ROMAddr AmigaAddr
+        207 20556   81558
+        208 20557   8155c
+        209 20558   81560
+        210 20559   81564
+        211 2055a   81568
+        CMD> prom log 999
+        T2C1=018a 20006f80
+        T5C1=018a 20007780
+        Wrap=120
+        Spin=0
+        KS Messages  Amiga=2         USB=0
+        Buf Messages  AtoU=0        UtoA=0
+        Message Prod  AtoU=0        UtoA=0
+        Message Cons  AtoU=0        UtoA=0
+
+        CMD> prom name
+        amiga1
+
+        CMD> prom temp
+        Vrefint=05e2 scale=7976  1.21 V
+          Vtemp=06d7 13965976    28.1 C
+             5V=0c10 24629888    4.92 V
+snoop
+    This command can capture and display Amiga ROM fetches in realtime.
+    Options
+        snoop        - capture and report ROM transactions
+        snoop addr   - hardware capture A0-A19
+        snoop lo     - hardware capture A0-A15 D0-D15
+        snoop hi     - hardware capture A0-A15 D16-D31
+
+    Running "snoop" with no options does rapidly polls address and data
+    pins and can report both the ROM address (not shifted) and data fetched.
+    The Amiga can fetch much faster than the STM32 can capture and print
+    data, so it's very likely that data can be missed.
+
+    The "snoop addr" command uses STM32 DMA hardware to capture all 20 bits
+    of the ROM address. Bursts of accesses can be completely captured, but
+    data can not be captured at the same time.
+
+    The "snoop lo" command uses STM32 DMA hardware to capture the low 16
+    bits of the address and the low 16 bits of the data.
+
+    The "snoop hi" command uses STM32 DMA hardware to capture the low 16
+    bits of the address and the high 16 bits of the data.
+
+    Examples
+        CMD> snoop
+         8bd[fffffeff]
+         8bd[ffffffff]
+         3fc07[f08e67e2]
+         8bd[ffff7edf]
+         3fc07[7eee67e2]
+         239ba[4a006716] 239bb[0029102e] 239cc[206e007c]
+         3fc07[400e6722]
+         208bf[41f900df]
+
+        CMD> snoop lo
+        Press any key to exit
+         06a7[2029] 780d[66e8] 780e[66e8] 780f[0600] 7810[6100] 7811[204b] 7812[fefe] 7813[fefe] 7814[2c6f] 06a2[6708] 06a3[6708] 7815[4a80] 7816[4cdf] 7817[584f] 7818[594f] 7819[6100]
+        ...
+
+
+Miscellaneous commands
+----------------------
+delay
+    Delay a specific period of time. This command is most useful in a
+    sequence of commands.
+    Example
+        CMD> time cmd delay 1
+        1000046 us
+        CMD> loop 3 time cmd delay 220 ms
+        220073 us
+        220073 us
+        220073 us
+        CMD> loop 3 time cmd delay $a s
+        49 us
+        1000051 us
+        2000054 us
+        CMD> time now ; delay 3 s ; time now
+        tick=0x2a36ecf13a uptime=2518196171 usec
+        tick=0x2a43ce4326 uptime=2521197465 usec
+echo
+    Displays the specified message
+    Example
+        CMD> echo This is a test
+        This is a test
+ignore
+    Execute a command, ignoring whether it succeeded or failed. This
+    command is useful when combined with the loop command to continuously
+    execute a command, even if it fails.
+    Example
+        CMD> loop 4 prom id
+        Fail: Amiga is not in reset
+        CMD> loop 4 ignore prom id
+        Fail: Amiga is not in reset
+        Fail: Amiga is not in reset
+        Fail: Amiga is not in reset
+        Fail: Amiga is not in reset
+help
+    Displays program help
+    Options
+        <cmd> - show help for a specific command
+    Example
+        CMD> help map
+        map - show memory map
+history
+    Show command history of the current session. This can also be
+    invoked by pressing ^Y.
+    Example:
+        CMD> history
+           0: snoop
+           1: snoop addr
+           2: snoop lo
+time
+    Perform time operations.
+    Options
+        time cmd <cmd> - measure command execution time
+        time now       - display the current time
+        time test      - test timers
+        time watch     - watch the timer to verify tick is working correctly
+
+    The "time cmd" command can be used to measure the time it takes to
+    execute a command.
+
+    The "time now" command will report the current time in both ticks and
+    microseconds since the last time KickSmash was power cycled or rebooted.
+
+    The "time test" command is used to verify the KickSmash timers are
+    working correctly.
+
+    The "time watch" command will monitor the STM32 timer interrupt and
+    print a "." each time the interrupt occurs (approximately once per
+    60 seconds).
+
+    Examples
+        CMD> time cmd echo This is some text to display.
+        This is some text to display.
+        944 us
+        CMD> time now
+        tick=0x333a7e5042 uptime=3055898454 usec
+        CMD> time test
+        PASS: timer_delay_ticks(0)     1 usec
+        PASS: timer_delay_ticks(100)   2 usec
+        PASS: timer_delay_usec(1)      3 usec
+        PASS: timer_delay_usec(10)     12 usec
+        PASS: timer_delay_usec(1000)   1002 usec
+        PASS: timer_delay_msec(1)      1003 usec
+        PASS: timer_delay_msec(10)     10003 usec
+        PASS: timer_delay_msec(1000)   1000003 usec
+
+version
+    Shows the version and release date of KickSmash firmware.
+    Examples
+        CMD> version
+        Version 0.1 built 2024-05-06 20:56:36
+
+
+Development debug commands
+--------------------------
+c
+    Change (write) data at the specified memory address. Spaces other
+    than physical memory may be specified by using either the keyword
+    prom or flash before the address.
+    Options
+        c[bwlqoh] [prom|flash] <addr> <value...>
+           b = 1 byte
+           w = word (2 bytes)
+           l = long (4 bytes)
+           q = quad (8 bytes)
+           o = oct (16 bytes)
+           h = hex (32 bytes)
+           S = swap bytes (endian)
+    The character which immediately follows the "c" (no space) sets the
+    data width. The "S" command suffix may optionally swap data endian.
+    Examples
+        CMD> dr 2000f000 1
+        b9c7b23a
+        CMD> cb 2000f000 1
+        CMD> dlr 2000f000 1
+        b9c7b201
+        CMD> cw 2000f000 a5a5
+        CMD> dlr 2000f000 1
+        b9c7a5a5
+        CMD> cl 2000f000 01020304
+        CMD> dlr 2000f000 1
+        01020304
+        CMD> clS 2000f000 01020304
+        CMD> dlr 2000f000 1
+        04030201
+d
+    Display memory at the specified address. The address must be specified.
+    Spaces other than physical memory may be specified by using either the
+    keyword prom or flash before the address.
+    Options
+        d[bwlqoh] [prom|flash] <addr> [<len>]
+           b = 1 byte
+           w = word (2 bytes)
+           l = long (4 bytes)
+           q = quad (8 bytes)
+           o = oct (16 bytes)
+           h = hex (32 bytes)
+           A = no ASCII
+           N = no output (only perform read)
+           R = raw output (no address or ASCII output)
+           S = swap bytes (endian)
+          SS = swap ASCII display (endian)
+    The character which immediately follows the "d" (no space) sets the
+    data width ("b", "w", "l", "q", "o", or "h") or enables other options
+    ("A", "N", "R", "S", or "SS").
+
+    If "A" is specified, no ASCII interpretation of the data will be shown.
+    If "N" is specified, then no output will be generated other than error
+        output relating to failure to read.
+    If "R" is specified, no address, ASCII dump, or formatting is shown.
+    If "S" is specified, byte swapping of data values is performed.
+    If "SS" is specified, byte swapping of only ASCII values is performed.
+    If the "prom" keyword is specified before the address, then the address
+    acts as an offset into the Kickstart ROM flash.
+    If the "flash" keyword is specified before the address, then the address
+    acts as an offset into the STM32 internal flash.
+
+    Examples
+        CMD> d prom 0
+        000000:Fail: Amiga is not in reset
+
+        Error reading 4 bytes at 000000
+        CMD> reset amiga hold
+        Holding Amiga in reset
+        Amiga in reset
+        CMD> d prom 0
+        000000: 11144ef9 00f800d2 0000ffff 002f006f .N... . ..  o /
+        000010: 002f000a ffffffff 65786563 2e6c6962   / ....cexebil.
+        000020: 72617279 00657865 63203437 2e313020 yrarexe 74 c 01.
+        000030: 2832312e 30312e32 30323329 0d0a004e .12(2.10)320N
+        CMD> dS prom 0
+        000000: f94e1411 d200f800 ffff0000 6f002f00 ..N. . .  .. / o
+        000010: 0a002f00 ffffffff 63657865 62696c2e  /  ....exec.lib
+        000020: 79726172 65786500 37342063 2030312e rary exec 47.10
+        000030: 2e313228 322e3130 29333230 4e000a0d (21.01.2023)   N
+        CMD> d flash 3e460 c0
+        3e460: 19460602 1793bafa 000000e0 00ff0100 ..F......    ..
+        3e470: ffffffff ffffffff 00000000 00000000 ........
+        3e480: 3320534b 0000322e 2e332074 00000032 KS 3.2  t 3.2
+        3e490: 3320534b 6220322e 756b6361 00000070 KS 3.2 backup
+        3e4a0: 00000000 00000000 00000000 00000000
+        3e4b0: 00000000 00000000 00000000 00000000
+        3e4c0: 00000000 00000000 00000000 00000000
+        3e4d0: 00000000 00000000 00000000 00000000
+        3e4e0: 00000000 00000000 00000000 00000000
+        3e4f0: 00000000 00000000 00000000 00000000
+        3e500: 00000000 00000000 00000000 696d6103             .ami
+        3e510: 00316167 00000000 00000000 00000000 ga1
+copy
+    Copy memory from one space/address to another space/address.
+    Options
+        copy[bwlqoh] <saddr> <daddr> <len>
+           b = 1 byte
+           w = word (2 bytes)
+           l = long (4 bytes)
+           q = quad (8 bytes)
+           o = oct (16 bytes)
+           h = hex (32 bytes)
+    The character which immediately follows the "d" (no space) sets the
+    data width ("b", "w", "l", "q", "o", or "h").
+
+    Example
+        CMD> d 2000f000 10
+        2000f000: 04030201 4d6396c5 e3e3e40d a9e2c082 ......cM .......
+        CMD> d prom 0 10
+        000000: 11144ef9 00f800d2 0000ffff 002f006f .N... . ..  o /
+        CMD> copy prom 0 2000f000 8
+        CMD> d 2000f000 10
+        2000f000: 11144ef9 00f800d2 e3e3e40d a9e2c082 .N... .  .......
+comp
+    Compare memory from one space/address with another space/address.
+    Options
+        compare requires three arguments: <addr1> <addr2> <len>
+        comp[bwlqoh] <addr> <addr> <len>
+           b = 1 byte
+           w = word (2 bytes)
+           l = long (4 bytes)
+           q = quad (8 bytes)
+           o = oct (16 bytes)
+           h = hex (32 bytes)
+    The character which immediately follows the "d" (no space) sets the
+    data width ("b", "w", "l", "q", "o", or "h").
+
+    Example
+        CMD> d prom 0 10
+        000000: 11144ef9 00f800d2 0000ffff 002f006f .N... . ..  o /
+        CMD> d 2000f000 10
+        2000f000: 11144ef9 00f800d2 e3e3e40d a9e2c082 .N... .  .......
+        CMD> comp prom 0 2000f000 10
+        mismatch 000008 ffff0000 != 2000f008 0de4e3e3
+        mismatch 00000c 6f002f00 != 2000f00c 82c0e2a9
+        2 mismatches
+patt
+    Write a specific data pattern to a space/address.
+    Options
+        patt[bwlqoh] <addr> <len> <pattern>
+           b = 1 byte
+           w = word (2 bytes)
+           l = long (4 bytes)
+           q = quad (8 bytes)
+           o = oct (16 bytes)
+           h = hex (32 bytes)
+           S = swap bytes (endian)
+           <pattern> may be one, zero, blip, rand, strobe, walk0, walk1, or a specific value
+    The character which immediately follows the "c" (no space) sets the
+    data width. The "S" command suffix may optionally swap data endian.
+
+    The <addr> value specifies the base address.
+    The <len> value specifies the length to pattern.
+    The <pattern> keyword specifies the type of data to fill.
+        one
+            All ones (0xff).
+        zero
+            All zeros (0x00).
+        blip
+            Cycle through several iterations of all bits one state,
+            with a single iteration where they all flip.
+        rand
+            Random numbers.
+        strobe
+            Just alternate between all on and all off.
+        walk0
+            Walking zeros pattern (fe fd fb f7...).
+        walk1
+            Walking ones pattern (01 02 04 08...).
+        <value>
+            Repeatedly write the same value.
+    Examples
+        CMD> dA 2000f000 10
+        2000f000: 11144ef9 00f800d2 e3e3e40d a9e2c082
+        CMD> patt 2000f000 8 one
+        CMD> dA 2000f000 10
+        2000f000: ffffffff ffffffff e3e3e40d a9e2c082
+        CMD> patt 2000f008 4 zero
+        CMD> dA 2000f000 10
+        2000f000: ffffffff ffffffff 00000000 a9e2c082
+        CMD> patt 2000f000 10 rand
+        CMD> dA 2000f000 10
+        2000f000: bf9bc2d7 3f4e357c f5717045 eba4e702
+        CMD> patt 2000f000 10 walk1
+        CMD> dA 2000f000 10
+        2000f000: 00000001 00000002 00000004 00000008
+        CMD> pattS 2000f000 10 walk1
+        CMD> dA 2000f000 10
+        2000f000: 01000000 02000000 04000000 08000000
+        CMD> pattw 2000f000 10 a1a2
+        CMD> dA 2000f000 10
+        2000f000: a1a2a1a2 a1a2a1a2 a1a2a1a2 a1a2a1a2
+test
+    Test memory.
+    Options
+        test[bwlqoh] <addr> <len> <mode>
+           b = 1 byte
+           w = word (2 bytes)
+           l = long (4 bytes)
+           q = quad (8 bytes)
+           o = oct (16 bytes)
+           h = hex (32 bytes)
+           <mode> may be one, zero, rand, walk0, walk1, or read
+    The character which immediately follows the "d" (no space) sets the
+    data width ("b", "w", "l", "q", "o", or "h").
+
+    Example
+        CMD> dA 2000f000 10
+        2000f000: f66bcd81 1676d3ee f295b01f d91f8e64
+        CMD> test 2000f000 10 rand
+        CMD> dA 2000f000 10
+        2000f000: 1f12cb87 832777ec a8035f75 13a9b1f2
+        CMD> testb 2000f000 10 walk1
+        CMD> dA 2000f000 10
+        2000f000: 01010101 01010101 01010101 01010101
+cpu
+    Perform STM32 CPU operations.
+    Options
+        cpu regs - show CPU registers
+    Example
+        CMD> cpu regs
+        R0=00000000 R3=00000000 R6=00000000  R9=00000000 R12=00000000 PC=00000000
+        R1=00000000 R4=00000000 R7=00000000 R10=00000000 PSR=00000000 SP=2000fe38
+        R2=00000000 R5=00000000 R8=00000000 R11=00000000 LRE=00000000 LR=00000000
+        SCB HFSR: 40000000
+        SCB CFSR: 00008200
+        SCB BFAR: 20010000
+        SCB MMFAR: 20010000
+gpio
+    Show or manipulate STM32 GPIO pins. This command allows the live state
+    of GPIOs to be monitored or changed. Pins may be specified by the STM32
+    physical pin name (e.g. PA0) and in specific cases by the board net
+    names to which the pin is connected (e.h. SKT_OE).
+    Options
+        gpio [p<a-f><0-15>[=<x>] - show or set GPIOs
+        gpio [name=value/mode/?] - display or set GPIOs
+    If no options are specified to this command, a complete display of
+    all STM32 GPIOs will be provided. A wildcard character "*" may be
+    used to select multiple GPIOs for display or group settings.
+
+    Examples
+        CMD> gpio pa0
+        PA0=Input PU (1) SKT_OE
+        CMD> gpio SKT_OE
+        PA0=Input PU (1) SKT_OE
+        CMD> gpio pa0=pd
+        PA0=Input PD (1) SKT_OE
+        CMD> gpio pa0=0
+        CMD> gpio pa0
+        PA0=O2 Output 2MHz (0) SKT_OE
+        CMD> gpio pc*
+        PC15=Input (1) A15
+        PC14=Input (1) A14
+        PC13=Input (1) A13
+        PC12=Input (1) A12
+        PC11=Input (1) A11
+        PC10=Input (1) A10
+        PC9=Input (1) A9
+        PC8=Input (1) A8
+        PC7=Input (1) A7
+        PC6=Input (1) A6
+        PC5=Input (1) A5
+        PC4=Input (1) A4
+        PC3=Input (1) A3
+        PC2=Input (1) A2
+        PC1=Input (1) A1
+        PC0=Input (1) A0
+map
+    Displays the base address of most major STM32 peripherals.
+    Example:
+        CMD> map
+            ADC1   40012400    GPIOA  40010800    TIM1   40012c00
+            APB1   40000000    GPIOB  40010c00    TIM2   40000000
+            APB2   40010000    GPIOC  40011000    TIM3   40000400
+            AFIO   40010000    GPIOD  40011400    TIM4   40000800
+            BKP    40006c00    GPIOE  40011800    TIM5   40000c00
+            DAC    40007400    IWDG   40003000    TIM8   40013400
+            DMA1   40020000    PWR    40007000    USART1 40013800
+            DMA2   40020400    RCC    40021000    USART3 40004800
+            EXTI   40010400    RTC    40002800    USB    50000000
+            FLASH  08000000    SCB    e000ed00    WWDG   40002c00
+            FPEC   40022000    SRAM   20000000
+usb
+    Display or affect the STM32 USB core state.
+    Options
+        usb disable - reset and disable USB
+        usb regs    - display USB device registers
+        usb reset   - reset and restart USB device
+        usb stats   - USB statistics
+
+    The "usb disable" command will turn off the STM32 USB core. You will
+    need to power cycle the STM32 to get it to respond to USB again.
+
+    The "usb reset" command will reset and re-initialize the STM32 USB core.
+
+    The "usb regs" command dumps the current state of all STM32 USB core
+    registers.
+
+    The "usb stats" command displays USB device statistics.
+
+    Example:
+        CMD> usb stats
+        interrupt=true
+        console_active=true
+        packet drops=0
+        byte drops=0
+        send timeouts=0
+
+
+Programming and inspecting Kickstart ROM banks
+----------------------------------------------
+From the KickSmash command line, the "d prom" and "c prom" commands may
+be used to display and modify Kickstart flash contents. These commands
+are not recommended for normal use, however.
+
+The Amiga must be in reset or the KickSmash must be outside of the
+Amiga in order to access the Kickstart flash. This is because the
+address lines to the flash are directly attached to the Amiga's bus.
+
+When it comes to programming a ROM image into Kickstart flash, you
+have the option of either programming Kickstart flash from running
+AmigaOS using the smash command line or programming Kickstart flash from
+an Amiga in reset using the hostsmash utility. See the "sw_smash.txt"
+document for information on how to program from AmigaOS or the
+"sw_hostsmash.txt" document for information on how to program from the
+USB Host.
+
+When it comes to describing the contents of the Kickstart flash banks,
+the "prom bank" command may be used for this regardless of whether
+the Amiga is in reset or not. Example output from the "prom bank show"
+command:
+    CMD> prom bank show
+    Bank  Name            Merge LongReset  PowerOn  Current  NextReset
+    0     KS 3.2                0          *
+    1     KS 3.2 backup                             *
+    2     DiagROM 1.3           1
+    3
+    4     2 MB Bank       -\
+    5                       |
+    6                       |
+    7                     -/
+
+There are 8 total banks available.
+Bank 0 is labeled "KS 3.2" and likely contains a Kickstart 3.2 ROM image.
+Bank 1 is probably a backup of that image.
+Bank 2 contains a DiagROM image.
+Bank 3 appears to be blank. It might not actually be blank. Labeling
+       banks with a name is optional.
+Bank 4 is a merge of banks 4 through bank 7. You would need other
+       hardware in the Amiga to make this functional (Romy) as well as
+       wire attachments to Romy's A20 and A21 address lines to the
+       KickSmash A18 and A19 address lines.

@@ -1,0 +1,530 @@
+The hostsmash utility
+---------------------
+The hostsmash utility runs on your USB Host. The supported platform
+is Linux, but MacOS may also work. It might also be possible to compile
+hostsmash under the Windows WSL.
+
+The hostsmash utility has three main functions:
+    * Connect to the KickSmash firmware CLI
+    * Program Kickstart ROM firmware stored in KickSmash flash
+    * Serve local file storage to the Amiga
+
+
+Connecting to the KickSmash firmware CLI
+----------------------------------------
+Connecting to the KickSmash CLI is the simplest function of the
+hostsmash utility. It is sometimes useful to connect with the KickSmash
+CLI in order to debug a problem or to manage reset of the Amiga.
+
+Once you were connected, your session will remain running until
+Control-X is pressed.
+    Example invocation:
+        % hostsmash -d /dev/ttyACM0 -t
+        << Type ^X to exit.  Opened /dev/ttyACM0 >>
+
+        CMD> version
+        Version 0.1 built 2024-05-06 20:56:36
+        CMD> reset amiga hold
+        Holding Amiga in reset
+        CMD>
+        CMD> reset amiga
+        Resetting Amiga
+        CMD> Amiga out of reset
+        ^X
+
+    Pressing Control-X exits the terminal session with KickSmash.
+
+    Command arguments
+        "-t" directs hostsmash to enter terminal mode.
+
+        "-d" is used to select which device the program should use for
+             communication. If you are not sure which device to use, you can
+             try viewing dmesg output:
+                % dmesg | tail -5
+                [2435455.175454] usb 1-6.1.5: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+                [2435455.175460] usb 1-6.1.5: Product: KickSmash Prg
+                [2435455.175465] usb 1-6.1.5: Manufacturer: eebugs
+                [2435455.175469] usb 1-6.1.5: SerialNumber: 1d905GK73B6519C
+                [2435455.185325] cdc_acm 1-6.1.5:1.0: ttyACM0: USB ACM device
+
+             If you are on MacOS, the ACM serial device will appear with a
+             different device name than Linux. Try: /dev/cu.usbmodem*
+
+        There are many commands available in the KickSmash CLI. See the
+        "sw_kicksmash.txt" for more information.
+
+Only one process at a time may be connected to KickSmash, regardless
+of whether the session is for programming Kickstart flash, is in
+terminal mode, or is serving file storage to the Amiga.
+
+
+Programming Kickstart ROM firmware
+----------------------------------
+In order to program the Kickstart ROM flash while KickSmash is inside
+the Amiga, the Amiga must first be put in reset. See the "Connecting
+to the KickSmash firmware CLI" section above.
+
+A minimal example to get started
+        % hostsmash -d /dev/ttyACM0 -b 0 -r test.rom -l 0x80000
+        100%
+        Read 0x80000 bytes from device and wrote to file test.rom
+
+    The above reads 512 KB from Kickstart ROM flash bank 0 and writes
+    that content to a file named test.rom.
+
+    The -d flag, as explained in the "Connecting to the KickSmash
+    firmware CLI" section above, specifies the USB device that should
+    be used to connect with KickSmash.
+
+    The -r flag specifies that the operation should be a read from
+    flash and write to a file. An argument is required, which is the
+    filename to write.
+
+    When reading from flash, it's necessary to supply the length of
+    data to read. This is done with the -l flag. The argument to -l
+    may be specified in decimal or hexadecimal.  0x80000 corresponds
+    to 512 KB, which is the standard size of a Kickstart ROM image.
+
+Reading from the Kickstart ROM flash
+    As seen in the example above, the -r option (--read) is used to
+    specify that hostsmash should read from the Kickstart ROM flash
+    and write that content to a file. You must specify the length to
+    read for this option. File transfer communication between the
+    hostsmash utility and Kicksmash is protected by a 32-bit CRC.
+
+Byte swapping (endian)
+    A problem with the example above is that the received file will
+    not have the same byte order as ROM images which are compatible
+    with the format distributed by Hyperion or those written by
+    copying the ROM area while running under AmigaOS.
+    Showing the first several bytes of the image downloaded above:
+            % od -An -t x1 test.rom -N 4
+             f9 4e 14 11
+    Where a ROM image in native endian format will have a header
+    as follows:
+            % od -An -t x1 322.rom -N 4
+             11 14 4e f9
+
+    When reading or writing Kickstart ROM images, the -s option may
+    be used to enable byte swapping mode. The argument to -s specifies
+    which swapping mode should be used. The following are available:
+        -s 3210     32-bit big-endian with little-endian swapping.
+                    This mode is useful for the Amiga 3000 and
+                    Amiga 4000 ROM images.
+        -s 0123     No byte swapping. This is the default.
+        -s 1032     Swap odd and even adjacent bytes. This mode may be
+                    useful when dealing with ROM images for the Amiga
+                    500 and 2000 computers. Not verified at this point.
+        -s 2301     Swap adjacent 16-bit words.
+
+    From the example above, you can see that "3210" should be the
+    proper swapping mode because
+        byte 0 is where byte 3 should be;
+        byte 1 is where byte 2 should be;
+        byte 2 is where byte 1 should be; and
+        byte 3 is where byte 0 should be.
+
+    Do the read again with correct endian conversion:
+        % hostsmash -d /dev/ttyACM0 -b 0 -r test.rom -l 0x80000 -s 3210
+        100%
+        Read 0x80000 bytes from device and wrote to file test.rom
+        % od -An -t x1 test.rom -N 4
+         11 14 4e f9
+    That's now the expected byte order.
+
+Verifying a read or write was successful
+    Substitute the -v option for the -r or -w option to verify a read or
+    write was successful.
+    Example
+        % hostsmash -d /dev/ttyACM0 -b 0 -v test.rom -s 3210
+        100%
+        Verify success
+
+    If a verify fails, you might see output such as the following:
+        % hostsmash -d /dev/ttyACM0 -b 2 -v test.rom -s 3210
+        100%
+        file   0x000008: ff ff 00 00 6f 00 2f 00 0a 00 2f 00 ff ff ff ff...
+        eeprom 0x100008: b0 9c f8 00 c4 9c f8 00 d8 9c f8 00 ec 9c f8 00...
+        489492 miscompares
+
+    If you really want to see all miscompares, you can do this by adding
+    the -A option. It's not advisable in the case of 489492 miscompares,
+    however.
+
+
+Writing to the Kickstart ROM flash
+    Writing to the Kickstart ROM flash follows the same general format
+    as reading or verifying. Specifying a length is optional, as it can
+    be derived from the file size.
+    Example
+        % echo "reset amiga hold" | hostsmash -d /dev/ttyACM0 -t
+        % hostsmash -d /dev/ttyACM0 -b 4 -e -l 0x80000
+        % hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111.rom -s 3210
+        Writing 0x080000 bytes to EEPROM starting at address 0x200000
+        100%
+        Wrote 0x80000 bytes to device from file test.rom
+        % echo "prom bank current 4;reset amiga" | hostsmash -d /dev/ttyACM0 -t
+    The above example puts the Amiga in reset, erases bank 4, programs
+    bank 4, then sets the current bank to 4 and resets the Amiga.
+
+    Depending on your OS distribution, you might receive a single .rom
+    image or a pair of .bin images for the Kickstart ROM. If you receive
+    a single .rom image, then it's likely in the format which will
+    require that you byte swap. Example:
+            hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111.rom -s 3210
+    If you instead receive a pair of bin files, programming is a little
+    more complicated in that case. You'll need to tell KickSmash to
+    individually enable each flash chip and program just that chip.
+    Example:
+        % echo "reset amiga hold;prom mode 0" | hostsmash -d /dev/ttyACM0 -t
+        % hostsmash -d /dev/ttyACM0 -b 4 -e -l 0x80000
+        % echo "prom mode 1" | hostsmash -d /dev/ttyACM0 -t
+        % hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111-lo.bin -l 0x40000
+        % echo "prom mode 2" | hostsmash -d /dev/ttyACM0 -t
+        % hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111-hi.bin -l 0x40000
+        % echo "prom mode 0;prom bank current 4;reset amiga" | hostsmash -d /dev/ttyACM0 -t
+    The above example puts the Amiga in reset and selects 32-bit mode.
+    It then erases bank 4. It next sets prom mode 1 which activates
+    only the low 16-bit flash, and programs that with the -lo.bin file.
+    It next sets prom mode 2 which activates only the high 16-bit flash,
+    and programs that with the -hi.bin file. The final command returns
+    the flash to 32-bit mode, sets the current bank to 4, and resets
+    the Amiga.
+
+Erasing a bank
+    If a bank had been written previously, it must first be erased
+    before it can be written again. Use the -e (--erase) command for this.
+    Example
+        % hostsmash -d /dev/ttyACM0 -b 4 -e -l 0x80000
+        Erase sector(s) from 0x200000 to 0x280000 -- are you sure? (y/n) y
+        Sector erase 200000 len 80000
+        005c005c .
+        11144ef9 .. 1 sec    Done
+    The -y option can be used to automatically answer "yes" to the prompt:
+        hostsmash -d /dev/ttyACM0 -b 4 -e -l 0x80000 -y
+        Erase sector(s) from 0x200000 to 0x280000: yes
+        Sector erase 200000 len 80000
+        005c005c
+        11144ef9 .. 1 sec    Done
+
+Writing multiple copies
+    The -f option can be used to repeatedly write the same image until
+    all Kickstart ROM flash has been filled. This option is not as useful
+    for KickSmash as it would be for a standard EEPROM such as the
+    MX29F1615. The reason is that KickSmash can limit address access of
+    the Amiga to a single flash bank, so there is no need to have shadow
+    copies in the rest of the flash. Regardless, this option is available.
+    Example:
+        % hostsmash -d /dev/ttyACM0 -a 0x200000 -w test.rom -f -s 3210
+        Writing 0x080000 bytes to EEPROM starting at address 0x200000
+        100%
+        Wrote 0x80000 bytes to device from file test.rom
+        Writing 0x080000 bytes to EEPROM starting at address 0x280000
+        100%
+        Wrote 0x80000 bytes to device from file test.rom
+        Writing 0x080000 bytes to EEPROM starting at address 0x300000
+        100%
+        Wrote 0x80000 bytes to device from file test.rom
+        Writing 0x080000 bytes to EEPROM starting at address 0x380000
+        100%
+        Wrote 0x80000 bytes to device from file test.rom
+    The above filled banks 4 through 7 with the same image. You could
+    just as well specify a bank number and even add the verify option:
+        % hostsmash -d /dev/ttyACM0 -b 4 -w test.rom -f -s 3210 -v
+        Writing 0x080000 bytes to EEPROM starting at address 0x200000
+        100%
+        Wrote 0x80000 bytes to device from file test.rom
+        100%
+        Verify success
+        Writing 0x080000 bytes to EEPROM starting at address 0x280000
+        100%
+        Wrote 0x80000 bytes to device from file test.rom
+        100%
+        Verify success
+        Writing 0x080000 bytes to EEPROM starting at address 0x300000
+        100%
+        Wrote 0x80000 bytes to device from file test.rom
+        100%
+        Verify success
+        Writing 0x080000 bytes to EEPROM starting at address 0x380000
+        100%
+        Wrote 0x80000 bytes to device from file test.rom
+        100%
+        Verify success
+
+
+Serving local file storage to the Amiga
+---------------------------------------
+An exciting feature of hostsmash is the ability to serve local files
+through the KickSmash board to the Amiga. This is currently completed
+using smashftp on the Amiga (see the "sw_smashftp.txt" document for
+more information), but could in the future also be used by a dedicated
+Amiga filesystem which knows how to talk with hostsmash.
+
+In order to support file access, the hostsmash utility runs in a
+service mode, which means it needs to stay connected to the KickSmash
+USB ACM device. While connected, no other use of that device is
+permitted (no -t terminal access or Kicksmash ROM read/write) is
+permitted from the host.
+
+To serve a local directory as an Amiga volume, use the -m (--mount)
+option. Example:
+        % hostsmash -d /dev/ttyACM0 . -M amiga: ../amiga
+        add volume amiga: = ../amiga
+        message mode
+        ID
+          Kicksmash 0.1 built 2024-05-06 20:56:36
+          USB 12091610  Serial "1d905GK73B6519C"  Name "amiga1"
+          Mode: 32-bit
+        got 4 bytes: len=0004 status=0000 0000 0300
+At this point, hostsmash is ready to serve files.
+
+Use smashftp on the Amiga to connect:
+        9.OS322:> smashftp
+        smashftp> ls -l
+        lrwxrwxrwx       13 2024-04-11 21:06:25 crc32.h -> ../fw/crc32.h
+        -rw-rw-rw-    10127 2024-05-04 23:06:19 sm_msg.c
+        -rw-rw-rw-     1158 2024-05-01 14:14:32 fs_hand.c
+        -rw-rw-rw-    14121 2024-05-04 23:21:25 sm_file.c
+        -rw-rw-rw-    23038 2024-05-05 22:46:23 readline.c
+        -rw-rw-rw-    32330 2024-05-05 22:49:07 smashftp_cli.c
+        -rw-rw-rw-     3054 2024-05-05 22:48:47 Makefile
+        -rw-rw-rw-     1065 2024-05-04 23:17:43 sm_file.h
+        -rw-rw-rw-     3844 2024-04-20 00:06:13 cpu_control.c
+        -rw-rw-rw-    77697 2024-05-05 22:49:02 smashftp.c
+        -rwxrwxrwx    76796 2024-05-05 22:50:10 smashftp
+        -rwxrwxrwx    65096 2024-05-05 22:50:09 smashfs
+        -rwxrwxrwx    73532 2024-05-05 23:04:52 smash
+        lrwxrwxrwx       13 2024-04-11 21:06:26 crc32.c -> ../fw/crc32.c
+        -rw-rw-rw-     1583 2024-05-02 15:15:35 smashftp.h
+        lrwxrwxrwx       17 2024-02-02 23:25:01 smash_cmd.h -> ../fw/smash_cmd.h
+        -rw-rw-rw-     1273 2024-05-04 22:55:07 sm_msg.h
+        -rw-rw-rw-     7495 2024-05-04 23:42:24 host_cmd.h
+        -rw-rw-rw-     1322 2024-04-21 22:14:32 readline.h
+        -rw-r--r--     1398 2024-05-05 17:54:10 smashftp_cli.h
+        -rw-rw-rw-   109905 2024-05-05 22:57:13 smash.c
+        -rw-rw-rw-     3047 2024-05-02 02:46:28 cpu_control.h
+
+    and get a file:
+        smashftp> get smash
+        Get smash as smash (73532 bytes)  52 KB/sec
+        smashftp> q
+        9.OS322:> list smash
+        smash                         73532 ----rwed Sunday    23:04:52
+        1 file - 71K bytes - 73 blocks used
+
+
+    Press ^C on the USB Host to stop running hostsmash.
+        fread(5, l=7d0)
+        fclose(5)
+        ^C
+        %
+
+You can export more than a single volume to the Amiga. If you use
+-m instead of -M, then the smashftp prompt will be presented with a
+volume directory instead of a default volume. For this example, we
+will create an additional volume pointing to the doc directory in
+the KickSmash repository.
+Example:
+        % hostsmash -d /dev/ttyACM1 . -m amiga: ../amiga -m hsdoc: ../doc
+        add volume amiga: = ../amiga
+        add volume hsdoc: = ../doc
+        message mode
+        ID
+          Kicksmash 0.1 built 2024-05-06 20:56:36
+          USB 12091610  Serial "1d905GK73B6519C"  Name "amiga1"
+          Mode: 32-bit
+        got 4 bytes: len=0004 status=0000 0000 0300
+
+Start smashftp again on the Amiga:
+        9.OS322:> smashftp
+        smashftp> ls -l
+        D---------        0 2024-05-08 02:03:32 hsdoc:
+        D---------        0 2024-05-08 02:03:32 amiga:
+        smashftp> cd hsdoc:
+        cwd=hsdoc:
+        smashftp> ls -l
+        -rw-rw-rw-     3653 2024-05-03 15:41:15 sw_install.txt
+        -rw-rw-rw-    12106 2024-05-08 01:42:21 sw_hostsmash.txt
+        -rw-rw-rw-     1834 2024-05-08 01:05:00 hw_build.txt
+        -rw-rw-rw-    31587 2024-05-07 01:36:20 sw_kicksmash.txt
+        -rw-rw-rw-    24636 2024-05-08 01:05:54 sw_smash.txt
+        -rw-rw-rw-    21521 2024-05-06 21:50:53 sw_smashftp.txt
+        -rw-rw-rw-     4678 2024-05-08 01:06:17 hw_install.txt
+        -rw-rw-rw-     6970 2024-05-03 22:44:40 hw_programming.txt
+
+you can return to the volume directory using "cd ::"
+        smashftp> cd ::
+        cwd=
+        smashftp> list
+        hsdoc:                           Volume ----rw-d 2024-05-08 02:04:44
+        amiga:                           Volume ----rw-d 2024-05-08 02:04:44
+        smashftp> q
+        9.OS322:>
+
+
+Hostsmash command arguments
+---------------------------
+This section documents all hostsmash command arguments, including
+environment variables.
+
+All hostsmash command options:
+    -A --all                show all verify miscompares
+    -a --addr <addr>        starting EEPROM address
+    -b --bank <num>         starting EEPROM address as multiple of file size
+    -D --delay <msec>       pacing delay between sent characters (ms)
+    -d --device <filename>  serial device to use (e.g. /dev/ttyACM0)
+    -e --erase              erase EEPROM (use -a <addr> for sector erase)
+    -f --fill               fill EEPROM with duplicates of the same image
+    -h --help               display usage
+    -i --identify           identify installed EEPROM
+    -l --len <num>          length in bytes
+    -m --mount <vol:> <dir> file serve directory path to Amiga volume
+    -r --read <filename>    read EEPROM and write to file
+    -s --swap <mode>        byte swap mode (2301, 3210, 1032, noswap=0123)
+    -v --verify <filename>  verify file matches EEPROM contents
+    -w --write <filename>   read file and write to EEPROM
+    -t --term               just act in terminal mode (CLI)
+    -y --yes                answer all prompts with 'yes'
+    TERM_DEBUG=`tty`        env variable for communication debug output
+    TERM_DEBUG_HEX=1        show debug output in hex instead of ASCII
+
+Nearly all the command arguments have been demonstrated in the document
+above. This section individually documents each.
+
+Terminal options
+    -t --term
+        Enter terminal mode with KickSmash. This is useful if you need
+        to send a direct command to the KickSmash firmware. A common
+        reason for this is either resetting the Amiga or leaving it in
+        reset for Kickstart ROM flash programming. Example:
+            % hostsmash -d /dev/ttyACM0 -t
+            << Type ^X to exit.  Opened /dev/ttyACM0 >>
+
+            CMD> ver
+            Version 0.1 built 2024-05-03 09:12:34
+            CMD> time now
+            tick=0x1bf55b53c9b6 uptime=426952960489 usec
+            CMD> reset amiga hold
+            Holding Amiga in reset
+            Amiga in reset
+            CMD> ^X
+            %
+
+Flash read/write options
+    -A --all
+        When the -v verify option is used to confirm the programmed ROM
+        image matches the file used to program, it will report a few
+        mismatches but then stop to not overwhelm. If display of every
+        mismatch is desired, use the -A option.
+    -a --addr <addr>
+        The base address into the start of flash may be specified as an
+        alternative to the flash bank. Flash banks are 512 KB in size
+        (0x80000 bytes). The size of the entire flash is 4 MB (0x400000
+        bytes).
+    -b --bank <num>
+        The -b option is a shortcut to specify the address (-a) at which
+        to start reading or writing. Each Kickstart ROM flash bank is
+        512 KB (0x80000 bytes).
+    -D --delay <msec>
+        This option should not be necessary as the STM32 should buffer
+        input data, but if you find that you are getting CRC errors,
+        it may be worth a try. The value specified is milliseconds
+        between each character.
+    -d --device <filename>
+        Select the USB ACM serial device which should be used for
+        communication with KickSmash.
+        For Linux, this is typically /dev/ttyACM*
+        For MacOS, this is typically /dev/cu.usbmodem*
+    -e --erase
+        Erase all or a portion of the Kickstart ROM flash.
+    -f --fill
+        When writing an image to Kickstart ROM flash, fill the remaining
+        area of flash with duplicate copies of the image.
+    -i --identify
+        Tell KickSmash to identify the specific flash part(s) installed
+        for Kickstart ROM flash.
+    -l --len <num>
+        Specify the length of data to read, write, verify, or erase
+        in bytes. A typical value here is 0x80000, which is 512 KB.
+    -r --read (filename)
+        Read Kickstart ROM flash and store it in a local file. Use with
+        the -a (address) or -b (bank) and -l (length) options to limit
+        which area to save. The hostsmash utility doesn't currently have
+        a way to determine bank size like the AmigaOS smash utility does.
+        This may be added in the future, but for now, you will need to
+        specify a length when reading from flash.
+    -s --swap <mode>
+        Perform byte swapping on the image being written to or read from
+        Kickstart ROM flash. A typical byte swap for an Amiga 3000
+        Kickstart ROM file is 3210. Example:
+            hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111.rom -s 3210
+    -v --verify <filename>
+        Verify that the specified file was successfully written to
+        Kickstart ROM flash. Use -v in place of -w or -r to confirm what
+        was read or written matches the file on disk. You may also add
+        the -v option to the -w command line so that a verify will
+        happen automatically after the write. If you do this, it is not
+        necessary to specify the filename for the verify.
+    -w --write <filename>
+        Write the specified file and write it to the Kickstart ROM flash.
+        Use with the -a (address) or -b (bank) options to specify the
+        area of flash to write.
+    -y --yes
+        Automatically answer "yes" to any prompts, such as whether or not
+        to execute a flash erase.
+
+File service options
+    -m --mount <vol:> <dir>
+        Export the specified directory as an Amiga volume and start
+        service mode. This option will remain connected to the KickSmash
+        board until ^C is pressed. Multiple volumes may be simultaneously
+        exported to the Amiga by specifying more -m flags.
+    -M --Mount <vol:> <dir>
+        Export the specified directory as an Amiga volume and start
+        service mode. This option operates in the same manner as the -m
+        option, but the default path to the Volume Directory is replaced
+        by this volume. It is recommended to use this option if you only
+        intend to export a single volume to the Amiga. There will then
+        be no need in smashftp to specify the exported volume name when
+        accessing files. Multiple of the -M option and -m option may
+        still be specified. Using "cd ::" in smashftp will always take
+        you to the Volume Directory.
+
+Debug options
+    -h --help
+        Display the list of hostsmash command options.
+    TERM_DEBUG
+        This environment variable is used to specify a filename.
+        If this environment variable is set, hostsmash will send a
+        copy of all USB ACM transferred content (anything the KickSmash
+        firmware outputs) to a file. This is useful to debug problems
+        interacting with KickSmash. You can also open a second terminal,
+        use the tty command to determine that terminal's tty, then in
+        your hostsmash window set TERM_DEBUG to that tty. From that
+        point forward, anything received from KickSmash will also be
+        sent to that tty. Example:
+            user1% tty
+            /dev/pts/4
+
+            user2% export TERM_DEBUG=/dev/pts/4
+            user2% hostsmash -d /dev/ttyACM0 -t
+            << Type ^X to exit.  Opened /dev/ttyACM0 >>
+            CMD> ver
+            Version 0.1 built 2024-05-08 23:42:16
+        Output from KickSmash, including the "CMD>" text will be
+        echoed to user1's terminal.
+    TERM_DEBUG_HEX
+        Output from KickSmash should be also dumped in hexadecimal.
+        This is useful if you are debugging binary data (such as
+        service messages) from the Amiga through KickSmash.
+
+
+Hostsmash future development
+----------------------------
+The message protocol between the Amiga and hostsmash was designed with
+the option of providing new services in the future. One such future
+service might be networking. It could either be implemented with a
+SANA-II interface which would use an existing network stack, or be
+implemented as a replacement for bsdsocket.library, similar to what
+WinUAE/FS-UAE implements.

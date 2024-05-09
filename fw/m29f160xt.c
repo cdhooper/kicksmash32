@@ -84,7 +84,7 @@ address_output(uint32_t addr)
  * -------------
  * Returns the current value present on the address pins.
  */
-uint32_t
+static uint32_t
 address_input(void)
 {
     uint32_t addr = GPIO_IDR(SOCKET_A0_PORT);
@@ -227,7 +227,7 @@ data_output(uint32_t data)
  * ----------
  * Returns the current value present on the data pins.
  */
-uint32_t
+static uint32_t
 data_input(void)
 {
     /*
@@ -1362,9 +1362,6 @@ ee_init(void)
     ticks_per_15_nsec  = timer_nsec_to_tick(15);
     ticks_per_20_nsec  = timer_nsec_to_tick(20);
     ticks_per_30_nsec  = timer_nsec_to_tick(30);
-
-    /* XXX: These values for bank override should come from NVRAM */
-    ee_address_override(0x7, 0);
 
     ee_set_mode(ee_mode);
 }

@@ -236,8 +236,12 @@ adc_show_sensors(void)
     print_reading(calc_vref, "V\n");
     printf("  Vtemp=%04x %8u   ", adc[1], adc[1] * scale);
     print_reading(calc_temp, "C\n");
+#if BOARD_REV >= 4
     printf("     5V=%04x %8u   ", adc[2], adc[2] * scale);
     print_reading(calc_v5, "V\n");
+#else
+    (void) calc_v5;
+#endif
 }
 
 /*
@@ -269,14 +273,18 @@ adc_poll(int verbose, int force)
     percent5 = avg_v5 * 100 / V5_EXPECTED_MV;
     if ((percent5 < 90) || (percent5 > 105)) {  // 4.5V - 5.25V
         if ((v5_stable == true) && verbose) {
+#if BOARD_REV >= 4
             printf("Amiga V5 not stable at ");
             print_reading(avg_v5, "V\n");
+#endif
         }
         v5_stable = false;
     } else {
         if ((v5_stable == false) && verbose) {
+#if BOARD_REV >= 4
             printf("Amiga V5 stable at ");
             print_reading(avg_v5, "V\n");
+#endif
         }
         v5_stable = true;
     }

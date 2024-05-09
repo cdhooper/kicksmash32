@@ -28,7 +28,7 @@ to remove shorts, improve soldering, or correct part orientation, it's
 much easier to do without the pin headers in place.
 
 You can choose to use machined pin (round) or Flip-Pins. Don't use standard
-Dupont-stype male headers. These are too thick (0.5mm+) and will damage
+Dupont-style male headers. These are too thick (0.5mm+) and will damage
 your ROM sockets. Machined pins are around 0.35mm, and Flip-Pins are around
 0.25mm. I like the Flip-Pins, but I've discovered they are much more
 difficult to install in the Amiga ROM sockets than machined pins.

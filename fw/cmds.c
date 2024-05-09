@@ -71,7 +71,18 @@ const char cmd_c_help[] =
 "   q = quad (8 bytes)\n"
 "   o = oct (16 bytes)\n"
 "   h = hex (32 bytes)\n"
-"   S = swap bytes (endian)";
+"   S = swap bytes (endian)"
+"  <addr> may be prefixed by one of:"
+#ifdef HAVE_SPACE_FILE
+" file"
+#endif
+#ifdef HAVE_SPACE_FLASH
+" flash"
+#endif
+#ifdef HAVE_SPACE_PROM
+" prom"
+#endif
+"";
 
 const char cmd_comp_help[] =
 "comp[bwlqoh] <addr> <addr> <len>\n"
@@ -102,8 +113,19 @@ const char cmd_d_help[] =
 "   A = no ASCII\n"
 "   N = no output (only perform read)\n"
 "   R = raw output (no address or ASCII output)\n"
-"   S = swap bytes (endian)\n"
-"  SS = swap ASCII display (endian)";
+"   S = swap bytes (endian)"
+"  SS = swap ASCII display (endian)\n"
+"  <addr> may be prefixed by one of:"
+#ifdef HAVE_SPACE_FILE
+" file"
+#endif
+#ifdef HAVE_SPACE_FLASH
+" flash"
+#endif
+#ifdef HAVE_SPACE_PROM
+" prom"
+#endif
+"";
 
 const char cmd_patt_help[] =
 "patt[bwlqoh] <addr> <len> <pattern>\n"
@@ -121,16 +143,16 @@ const char cmd_patt_patterns[] =
 "specific value\n";
 
 const char cmd_test_help[] =
-"test[bwlqoh] <addr> <len> <mode> [read|write]\n"
+"test[bwlqoh] <addr> <len> <mode>\n"
 "   b = 1 byte\n"
 "   w = word (2 bytes)\n"
 "   l = long (4 bytes)\n"
 "   q = quad (8 bytes)\n"
 "   o = oct (16 bytes)\n"
 "   h = hex (32 bytes)\n"
-"   <mode> may be one, zero, rand, walk0, or walk1\n";
+"   <mode> may be one, zero, rand, walk0, walk1, or read\n";
 const char cmd_test_patterns[] =
-    "<mode> may be one, zero, rand, walk0, or walk1\n";
+    "<mode> may be one, zero, rand, walk0, walk1, or read\n";
 
 const char cmd_time_help[] =
 "time cmd <cmd> - measure command execution time\n"
@@ -1575,7 +1597,6 @@ show_patterns:
             printf("\n");
             return (rc);
         }
-        (void) testmode;
         if (input_break_pending()) {
             printf("^C\n");
             return (RC_USR_ABORT);

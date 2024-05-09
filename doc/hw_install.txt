@@ -67,7 +67,7 @@ that system enough to confirm.
     not correct for this machine, or it was installed with incorrect
     byte swapping.
 
-    KicKSmash might be able to help you identify what is going wrong.
+    KickSmash might be able to help you identify what is going wrong.
     You can use the hostsmash utility to connect as you did before
     when testing the board standalone:
         ./hostsmash -d /dev/ttyACM0 -t

@@ -1,0 +1,3 @@
+Silkscreen text for bottom AMS1117 should be flipped 180 degrees
+
+Silkscreen text for bottom 5819 should be flipped 180 degrees

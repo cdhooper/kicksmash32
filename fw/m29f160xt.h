@@ -37,8 +37,6 @@ void     ee_update_bank_at_longreset(void);
 
 /* Bus functions for manipulating GPIOs */
 void     address_output_disable(void);
-uint32_t address_input(void);
-uint32_t data_input(void);
 void     data_output_disable(void);
 void     data_output(uint32_t data);
 void     data_output_enable(void);

@@ -130,7 +130,7 @@ and an example of KickSmash just being late with a reply:
 The above failure (which was forced by modifying smash utility source
 code to be extremely impatient) shows a number of reads of the ROM area
 before KickSmash begins to set up DMA. The ffffffff values represent
-when KickSmash firwmare has disabled the flash from responding to CPU
+when KickSmash firmware has disabled the flash from responding to CPU
 requests. The 02041017 and 01190117 are the sequence of magic data
 values which are provided in the header of every KickSmash message.
 Following that, you see the message length 03e8 (1000 bytes) and
@@ -161,7 +161,7 @@ You can also identify the installed flash parts with "identify identify":
 
 This is a major milestone because not only did your Amiga need to send
 a command to KickSmash, the two of them also needed to precisely coordinate
-on the flash command sequencew so that the Amiga could supply the flash
+on the flash command sequence so that the Amiga could supply the flash
 addresses and the STM32 CPU's DMA engines could supply synchronized unlock
 and command data to the flash parts.
 

@@ -59,11 +59,11 @@ const char cmd_gpio_help[] =
 
 const char cmd_prom_help[] =
 "prom bank <cmd>         - show or set PROM bank for AmigaOS\n"
-"prom cmd <cmd> [<addr>] - send a 16-bit command to the EEPROM chip\n"
+"prom cmd <cmd> [<addr>] - send a 32-bit command to both flash chips\n"
 "prom id                 - report EEPROM chip vendor and id\n"
 "prom erase chip|<addr>  - erase EEPROM chip or 128K sector; <len> optional\n"
 "prom log [<count>]      - show log of Amiga address accesses\n"
-"prom mode 0|1|2         - set EEPROM access mode (0=32, 1=16lo, 2=16hi)\n"
+"prom mode 0|1|2|3       - set EEPROM access mode (0=32, 1=16lo, 2=16hi)\n"
 "prom name [<name>]      - set or show name of this board\n"
 "prom read <addr> <len>  - read binary data from EEPROM (to terminal)\n"
 "prom service            - enter Amiga/USB message service mode\n"
@@ -299,7 +299,7 @@ cmd_prom_bank(int argc, char * const *argv)
                "  merge <start> <end>        Merge banks for larger ROMs\n"
                "  unmerge <start> <end>      Unmerge banks\n"
                "  name <bank> <text>         Set bank name (description)\n"
-               "  longreset <bank>[,<bank>]  Banks to sequence at long reset\n"
+               "  longreset <bank> [<bank>]  Banks to sequence at long reset\n"
                "  poweron <bank>             Default bank at poweron\n"
                "  current <bank>             Force new bank immediately\n"
                "  nextreset <bank>           Force new bank at next reset\n");

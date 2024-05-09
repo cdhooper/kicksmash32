@@ -420,6 +420,36 @@ flash_oe_input(void)
     return (GPIO_IDR(FLASH_OE_PORT) & FLASH_OE_PIN);
 }
 
+/*
+ * address_input
+ * -------------
+ * Returns the current value present on the address pins.
+ */
+static uint32_t
+address_input(void)
+{
+    uint32_t addr = GPIO_IDR(SOCKET_A0_PORT);
+    addr |= ((GPIO_IDR(SOCKET_A16_PORT) & 0x00f0) << (16 - 4));
+    return (addr);
+}
+
+/*
+ * data_input
+ * ----------
+ * Returns the current value present on the data pins.
+ */
+static uint32_t
+data_input(void)
+{
+    /*
+     * Board Rev 2+
+     *
+     * D0-D15  = PD0-PD15
+     * D16-D15 = PE0-PE15
+     */
+    return (GPIO_IDR(FLASH_D0_PORT) | (GPIO_IDR(FLASH_D16_PORT) << 16));
+}
+
 static void
 config_dma(uint32_t dma, uint32_t channel, uint to_periph, uint mode,
            volatile void *dst, volatile void *src, uint32_t wraplen)
@@ -1821,7 +1851,17 @@ address_log_replay(uint max)
     return (0);
 }
 
-
+/*
+ * bus_snoop
+ * ---------
+ * Capture bus address and/or data values which occur during Amiga
+ * fetches of Kickstart ROM.
+ *
+ * This function either uses DMA hardware to do captures or the CPU will
+ * directly poll GPIOs. The advantage of polling is that the full address
+ * and data values can be captured. The disadvantage of polling is that
+ * multiple fast accesses can be missed by software.
+ */
 void
 bus_snoop(uint mode)
 {
@@ -1882,25 +1922,23 @@ bus_snoop(uint mode)
         if (oe_input() == 0) {
             /* Capture address on falling edge of OE */
             if (last_oe == 1) {
-                uint32_t addr = address_input();
-                uint nprod = prod + 1;
+                uint32_t nprod = prod + 1;
                 if (nprod >= ARRAY_SIZE(cap_addr))
                     nprod = 0;
                 if (nprod != cons) {
                     /* FIFO has space, capture address */
-                    cap_addr[prod] = addr;
                     oprod = prod;
                     prod = nprod;
                     no_data = 0;
-                    continue;
                 }
                 last_oe = 0;
             }
+            cap_addr[oprod] = address_input();  // Capture address
+            cap_data[oprod] = data_input();     // Capture data
             continue;
         } else {
             /* Capture data on rising edge of OE */
             if (last_oe == 0) {
-                cap_data[oprod] = data_input();
                 last_oe = 1;
                 continue;
             }

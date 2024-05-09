@@ -4,3 +4,4 @@ and Amiga 4000 computer systems. Features include:
    * Out-of-system programming (USB-C) via a Linux command line utility
    * Up to 8 independent flash banks
    * Configurable ROM bank switching on long reboot or cold power-on
+   * Optional host file service to the Amiga over the USB-C link

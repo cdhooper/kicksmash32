@@ -15,7 +15,9 @@ generated.*.ld
 cscope.out
 .cscope_cmd.*
 objs/
-rev*/
+rev1/
+rev2/
+rev3/
 photos
 #fw/libopencm3/
 #fw/stutils/

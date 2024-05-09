@@ -560,7 +560,7 @@ prom_mode(uint mode)
 {
     ee_disable();
     if (mode != EE_MODE_AUTO)
-        ee_set_mode(ee_mode);
+        ee_set_mode(mode);
     if (config.ee_mode != mode) {
         config.ee_mode = mode;
         config_updated();

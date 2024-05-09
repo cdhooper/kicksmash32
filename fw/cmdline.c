@@ -59,7 +59,8 @@ static const cmd_t cmd_list[] = {
                         "[bwlqohS] <addr> <value...>", "change memory" },
     { cmd_delay,   "delay",   2, NULL, "<time> [s|ms|us]", "delay for time" },
     { cmd_d,       "d",       1, cmd_d_help,
-                        "[bwlqohRS] <addr> [<len>]", "display memory" },
+                        "[bwlqohRS] [prom|flash] <addr> [<len>]",
+                        "display memory" },
     { cmd_echo,    "echo",    0, NULL, " <text>", "display text" },
 #ifdef EMBEDDED_CMD
     { cmd_gpio,    "gpio",    1, cmd_gpio_help,
@@ -73,7 +74,7 @@ static const cmd_t cmd_list[] = {
 #ifdef EMBEDDED_CMD
     { cmd_map,     "map",     1, NULL, "", "show memory map" },
 #endif
-    { cmd_echo,    "print",   0, NULL, " <text>", "display text" },
+    { cmd_echo,    "print",   0, NULL, NULL, NULL },
 #ifndef EMBEDDED_CMD
     { cmd_echo,    "quit",    1, NULL, "", "exit program" },
 #endif

@@ -93,11 +93,11 @@ static char short_opts[] = {
 
 /* Program help text */
 static const char usage_text[] =
-"mxprog <opts> <dev>\n"
+"hostsmash <opts> <dev>\n"
 "    -A --all                show all verify miscompares\n"
 "    -a --addr <addr>        starting EEPROM address\n"
 "    -b --bank <num>         starting EEPROM address as multiple of file size\n"
-"    -D --delay              pacing delay between sent characters (ms)\n"
+"    -D --delay <msec>       pacing delay between sent characters (ms)\n"
 "    -d --device <filename>  serial device to use (e.g. /dev/ttyACM0)\n"
 "    -e --erase              erase EEPROM (use -a <addr> for sector erase)\n"
 "    -f --fill               fill EEPROM with duplicates of the same image\n"
@@ -116,9 +116,9 @@ static const char usage_text[] =
 "\n"
 "Example (including specific TTY to open):\n"
 #ifdef OSX
-"    mxprog -d /dev/cu.usbmodem* -i\n"
+"    hostsmash -d /dev/cu.usbmodem* -t\n"
 #else
-"    mxprog -d /dev/ttyACM0 -i\n"
+"    hostsmash -d /dev/ttyACM0 -t\n"
 #endif
 "";
 
@@ -136,7 +136,7 @@ static const char usage_text[] =
 #define MX_VENDOR 0x1209
 #define MX_DEVICE 0x1610
 
-#define EEPROM_SIZE_DEFAULT       0x200000    // 2MB
+#define EEPROM_SIZE_DEFAULT       0x400000    // 4 MB
 #define EEPROM_SIZE_NOT_SPECIFIED 0xffffffff
 #define BANK_NOT_SPECIFIED        0xffffffff
 #define ADDR_NOT_SPECIFIED        0xffffffff
@@ -707,8 +707,8 @@ th_serial_reader(void *arg)
         /*
          * Examples:
          *     export TERM_DEBUG
-         *     TERM_DEBUG=/dev/pts/4 mxprog -t
-         *     TERM_DEBUG=/tmp/term_debug mxprog -t -d /dev/ttyACM0
+         *     TERM_DEBUG=/dev/pts/4 hostsmash -t
+         *     TERM_DEBUG=/tmp/term_debug hostsmash -t -d /dev/ttyACM0
          */
         log_fp = fopen(log_file, "w");
         if (log_fp == NULL)
@@ -1050,7 +1050,7 @@ check_rc(uint pos)
  *
  * SENDER
  *     The <status> byte is whether a failure occurred reading the data.
- *     If the sender is mxprog, then it could also be user abort.
+ *     If the sender is hostsmash, then it could also be user abort.
  *     <data> is 256 bytes (or less if the remaining transfer length is
  *     less than that amount. <CRC> is a 32-bit CRC over the previous
  *     (up to) 256 bytes of data.
@@ -1180,7 +1180,7 @@ discard_input(int timeout)
  *
  * SENDER
  *     The <status> byte is whether a failure occurred reading the data.
- *     If the sender is mxprog, then it could also be user abort.
+ *     If the sender is hostsmash, then it could also be user abort.
  *     <data> is 256 bytes (or less if the remaining transfer length is
  *     less than that amount. <CRC> is a 32-bit CRC over the previous
  *     (up to) 256 bytes of data.
@@ -1696,8 +1696,11 @@ eeprom_write(const char *filename, uint addr, uint len)
     FILE       *fp;
     uint8_t    *filebuf;
     char        cmd[64];
+#undef SUPPORTS_PROM_STATUS
+#ifdef SUPPORTS_PROM_STATUS
     char        cmd_output[64];
     int         rxcount;
+#endif
     int         tcount = 0;
 
     filebuf = malloc(len);
@@ -1731,6 +1734,7 @@ eeprom_write(const char *filename, uint addr, uint len)
     }
     printf("Wrote 0x%x bytes to device from file %s\n", len, filename);
 
+#ifdef SUPPORTS_PROM_STATUS
     snprintf(cmd, sizeof (cmd) - 1, "prom status");
     cmd[sizeof (cmd) - 1] = '\0';
     if (send_cmd(cmd))
@@ -1743,6 +1747,7 @@ eeprom_write(const char *filename, uint addr, uint len)
     } else {
         printf("Status: %.*s", rxcount, cmd_output);
     }
+#endif
 
     free(filebuf);
     return (0);
@@ -4350,7 +4355,7 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
         if (baseaddr == ADDR_NOT_SPECIFIED)
             baseaddr = 0x000000;  // Start of EEPROM
 
-        if (lstat(filename, &statbuf))
+        if (stat(filename, &statbuf))
             errx(EXIT_FAILURE, "Failed to stat %s", filename);
 
         if (len == EEPROM_SIZE_NOT_SPECIFIED) {
@@ -4383,7 +4388,7 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
 }
 
 /*
- * main() is the entry point of the mxprog utility.
+ * main() is the entry point of the hostsmash utility.
  *
  * @param [in] argc     - Count of user arguments.
  * @param [in] argv     - Array of user arguments.
