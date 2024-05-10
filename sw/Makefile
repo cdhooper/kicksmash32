@@ -7,6 +7,8 @@ CFLAGS  := -O0 -g -pthread -Wall -Wpedantic
 LDFLAGS := -O0 -g -lpthread
 UNAME_S := $(shell uname -s)
 
+QUIET := @
+
 #
 # Allowing links opens security risk for remote mounts because anything
 # the user running hostsmash can access may then be potentially linked
@@ -56,13 +58,16 @@ $(OBJDIR)/hostsmash.o: | $(USB_HDR)
 $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(OBJS)) Makefile
 
 $(PROG): $(OBJS)
-	$(CC) $(LDFLAGS) $(OBJS) -o $@
+	@echo Building $@
+	$(QUIET)$(CC) $(LDFLAGS) $(OBJS) -o $@
 
 $(OBJS): Makefile | $(OBJDIR)
-	$(CC) $(CFLAGS) -c $(filter %.c,$^) -o $@
+	@echo Building $@
+	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -o $@
 
 $(OBJDIR):
-	mkdir $@
+	@echo Creating $@
+	$(QUIET)mkdir $@
 
 $(USB_HDR):
 	echo "You must install the libusb development package"
@@ -71,4 +76,5 @@ $(USB_HDR):
 	exit 1
 
 clean:
-	rm -rf $(PROG) $(OBJDIR)
+	@echo Cleaning
+	$(QUIET)rm -rf $(PROG) $(OBJDIR)

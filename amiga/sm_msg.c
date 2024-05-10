@@ -314,6 +314,6 @@ smash_err(uint status)
         str = ks_status_s[ks_status_v];
     else if (msg_status_v < ARRAY_SIZE(msg_status_s))
         str = msg_status_s[msg_status_v];
-    sprintf(buf, "%u %s", status, str);
+    sprintf(buf, "%d %s", status, str);
     return (buf);
 }

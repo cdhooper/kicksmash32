@@ -769,3 +769,44 @@ Bank 4 is a merge of banks 4 through bank 7. You would need other
        hardware in the Amiga to make this functional (Romy) as well as
        wire attachments to Romy's A20 and A21 address lines to the
        KickSmash A18 and A19 address lines.
+
+
+Standalone testing
+------------------
+When KickSmash first powers up, it first determines whether it is
+installed in an Amiga or is running standalone. If standalone, then
+KickSmash will perform pin tests to check for shorted or floating
+pins. Before installing in your Amiga, it is recommended that you
+first connect to your USB Host to program an initial Kickstart image
+in flash bank 0. First connect in terminal mode:
+    hostsmash -d /dev/ttyACM0 -t
+and press return. You will see KickSmash startup messages such as
+the following:
+    Kicksmash 32 Version 0.1 built 2024-05-08 23:31:27
+    CPUID=411fc231 Dev=0418 Rev=1001 (compile: STM32F107xC BOARD=4)
+    Hardware: STM32F1    Connectivity revision Z
+    HCLK=72 MHz  APB1=36 MHz  APB2=72 MHz
+    NRST pin reset
+
+If you see additional output suggesting a test failure, then you
+should first investigate that before installing the board in your
+Amiga. Example failure message:
+    FAIL pin short tests
+      PD14 D14=0 caused PD15 D15=0
+      PD15 D15=0 caused PD14 D14=0
+      PD14 D14=1 caused PD15 D15=1
+      PD15 D15=1 caused PD14 D14=1
+
+The above error output indicates:
+    when D14 is driven low, it causes D15 to go low
+    when D15 is driven low, it causes D14 to go low
+    when D14 is driven high, it causes D15 to go high
+    when D15 is driven high, it causes D14 to go high
+
+From that, you can probably conclude that these two pins are shorted
+together. The short could be at the STM32 CPU, at the flash parts,
+or at the buffer chips. Looking at the KickSmash schematics, the
+pins are adjacent at the STM32 U1 and at the buffer chip U5. They are
+not adjacent at the flash part U2. So in this case, check both the
+STM32 on the top of the PCB and the buffer chip on the bottom of the
+PCB or shorts between those pins.

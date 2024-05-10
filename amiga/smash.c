@@ -1,6 +1,6 @@
 /*
  * smash
- * ------
+ * -----
  * Utility to perform various operations with Kicksmash installed in
  * an Amiga.
  *
@@ -14,7 +14,7 @@
  * THE AUTHOR ASSUMES NO LIABILITY FOR ANY DAMAGE ARISING OUT OF THE USE
  * OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
  */
-const char *version = "\0$VER: smash 0.1 ("__DATE__") © Chris Hooper";
+const char *version = "\0$VER: smash 0.2 ("__DATE__") © Chris Hooper";
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1989,6 +1989,10 @@ ask_again:
     printf("%s - are you sure? (y/n) ", prompt);
     fflush(stdout);
     while ((ch = getchar()) != EOF) {
+        if (is_user_abort()) {
+            printf("^C\n");
+            return (FALSE);
+        }
         if ((ch == 'y') || (ch == 'Y'))
             return (TRUE);
         if ((ch == 'n') || (ch == 'N'))
@@ -2366,6 +2370,9 @@ cmd_readwrite(int argc, char *argv[])
     uint        writemode = 0;
     uint        verifymode = 0;
     uint        readmode = 0;
+    uint        dot_count = 1;
+    uint        dot_iters = 1;
+    uint        dot_max;
     uint8_t    *buf;
     uint8_t    *vbuf = NULL;
 
@@ -2641,10 +2648,15 @@ usage:
     start_addr = addr;
     start_len = len;
 
+    dot_max = (len + MAX_CHUNK - 1) / MAX_CHUNK;
+    while (dot_max > 50) {
+        dot_max >>= 1;
+        dot_iters <<= 1;
+    }
     if (readmode || writemode) {
+        dot_count = 0;
         if (!file_is_stdio) {
-            printf("Progress [%*s]\rProgress [",
-                   (len + MAX_CHUNK - 1) / MAX_CHUNK, "");
+            printf("Progress [%*s]\rProgress [", dot_max, "");
             fflush(stdout);
         }
         while (len > 0) {
@@ -2695,9 +2707,15 @@ usage:
                     }
                 }
             }
-            if (!file_is_stdio) {
+            if ((!file_is_stdio) && (++dot_count == dot_iters)) {
+                dot_count = 0;
                 printf(".");
                 fflush(stdout);
+            }
+            if (is_user_abort()) {
+                printf("^C\n");
+                rc = 2;
+                goto fail_end;
             }
 
             len  -= xlen;
@@ -2711,11 +2729,11 @@ usage:
     time_rw_end = smash_time();
 
     if (verifymode && (rc == 0)) {
+        dot_count = 0;
         if (!file_is_stdio) {
             if ((rc == 0) && (readmode || writemode))
                 printf("]\n");
-            printf("  Verify [%*s]\r  Verify [",
-                   (len + MAX_CHUNK - 1) / MAX_CHUNK, "");
+            printf("  Verify [%*s]\r  Verify [", dot_max, "");
             fflush(stdout);
         }
 
@@ -2881,6 +2899,9 @@ cmd_erase(int argc, char *argv[])
     uint        flash_end_bsize;
     uint        mode = 0;
     uint        tlen = 0;
+    uint        dot_count = 1;
+    uint        dot_iters = 1;
+    uint        dot_max;
     int         arg;
     int         pos;
 
@@ -3053,8 +3074,12 @@ usage:
         return (1);
     }
 
-    printf("Progress [%*s]\rProgress [",
-           (len + MAX_CHUNK - 1) / MAX_CHUNK, "");
+    dot_max = (len + MAX_CHUNK - 1) / MAX_CHUNK;
+    while (dot_max > 50) {
+        dot_max >>= 1;
+        dot_iters <<= 1;
+    }
+    printf("Progress [%*s]\rProgress [", dot_max, "");
     fflush(stdout);
 
     time_start = smash_time();
@@ -3070,6 +3095,11 @@ usage:
             printf("\nKicksmash failure %d (%s)\n", rc, smash_err(rc));
             break;
         }
+        if (is_user_abort()) {
+            printf("^C\n");
+            rc = 2;
+            break;
+        }
 
         tlen += xlen;
         len  -= xlen;
@@ -3081,13 +3111,16 @@ usage:
         if (tlen >= MAX_CHUNK) {
             while (tlen >= MAX_CHUNK) {
                 tlen -= MAX_CHUNK;
-                printf(".");
+                if (++dot_count == dot_iters) {
+                    dot_count = 0;
+                    printf(".");
+                }
             }
             fflush(stdout);
         }
     }
     if (rc == 0) {
-        if (tlen > 0)
+        if ((tlen > 0) && (++dot_count == dot_iters))
             printf(".");
         printf("]\n");
         time_end = smash_time();

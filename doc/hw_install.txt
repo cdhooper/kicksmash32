@@ -4,19 +4,19 @@ KickSmash hardware install
 KickSmash has so far only been tested in Amiga 3000 desktop systems.
 I do not anticipate any problems with Amiga 3000T, 4000 desktop, and
 4000T systems, and will be testing with some of these very soon.
-KickSmash might also work with the Amiga 1200, but I've investigated
+KickSmash might also work with the Amiga 1200, but I've not investigated
 that system enough to confirm.
 
 1. Turn off your computer
-   It had to be said.
+    It had to be said.
 
 2. Locate and attach a wire for the KBRST pin
-   For the Amiga 3000, I recommend soldering or clipping a wire to pin
-   1 or pin 3 of U713. You can also attach to pin 6 of RP701 if you
-   want to be more discrete. I usually solder this side and then run a
-   wire to a Dupont connector for attaching to the KickSmash.
-   For the Amiga 4000, I recommend using U141 pin 1 or pin 3, or attach
-   to one side (NOT the 5V side) of R120.
+    For the Amiga 3000, I recommend soldering or clipping a wire to pin
+    1 or pin 3 of U713. You can also attach to pin 6 of RP701 if you
+    want to be more discrete. I usually solder this side and then run a
+    wire to a Dupont connector for attaching to the KickSmash.
+    For the Amiga 4000, I recommend using U141 pin 1 or pin 3, or attach
+    to one side (NOT the 5V side) of R120.
 
 3. Remove your old Kickstart ROMs
     It's best to use a chip extractor. If you must use a flat edge

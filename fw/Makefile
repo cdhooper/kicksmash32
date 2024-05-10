@@ -13,6 +13,8 @@ SRCS   := main.c clock.c gpio.c printf.c timer.c uart.c usb.c version.c \
 OBJDIR := objs
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
 
+QUIET  := @
+
 # libopencm3 is a git submodule in the current directory
 OPENCM3_DIR := libopencm3
 OPENCM3_HEADER := $(OPENCM3_DIR)/include/libopencm3/stm32/rcc.h
@@ -133,30 +135,38 @@ flashbmp: $(BINARY).flashbmp
 GENERATED_BINARIES=$(BINARY).elf $(BINARY).bin $(BINARY).hex $(BINARY).srec $(BINARY).list $(BINARY).map
 
 $(OBJDIR)/%.bin: $(OBJDIR)/%.elf
-	$(OBJCOPY) -Obinary $< $@
+	@echo Building $@
+	$(QUIET)$(OBJCOPY) -Obinary $< $@
 
 $(OBJDIR)/%.hex: $(OBJDIR)/%.elf
-	$(OBJCOPY) -Oihex $< $@
+	@echo Building $@
+	$(QUIET)$(OBJCOPY) -Oihex $< $@
 
 $(OBJDIR)/%.srec: $(OBJDIR)/%.elf
-	$(OBJCOPY) -Osrec $< $@
+	@echo Building $@
+	$(QUIET)$(OBJCOPY) -Osrec $< $@
 
 $(OBJDIR)/%.list: $(OBJDIR)/%.elf
-	$(OBJDUMP) -S $< > $@
+	@echo Building $@
+	$(QUIET)$(OBJDUMP) -S $< > $@
 
 $(OBJDIR)/%.map: $(OBJDIR)/%.elf
 
 $(OBJDIR)/%.elf: $(OBJS) $(LDSCRIPT) | $(OPENCM3_LIB)
-	$(LD) $(TGT_LDFLAGS) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
+	@echo Building $@
+	$(QUIET)$(LD) $(TGT_LDFLAGS) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
 
 $(OBJDIR)/%.o: %.c
-	$(CC) $(TGT_CFLAGS) $(CFLAGS) $(TGT_CPPFLAGS) $(CPPFLAGS) -o $@ -c $(*).c
+	@echo Building $@
+	$(QUIET)$(CC) $(TGT_CFLAGS) $(CFLAGS) $(TGT_CPPFLAGS) $(CPPFLAGS) -o $@ -c $(*).c
 
 $(OBJDIR)/%.o: %.cxx
-	$(CXX) $(TGT_CXXFLAGS) $(CXXFLAGS) $(TGT_CPPFLAGS) $(CPPFLAGS) -o $@ -c $(*).cxx
+	@echo Building $@
+	$(QUIET)$(CXX) $(TGT_CXXFLAGS) $(CXXFLAGS) $(TGT_CPPFLAGS) $(CPPFLAGS) -o $@ -c $(*).cxx
 
 $(OBJDIR)/%.o: %.cpp
-	$(CXX) $(TGT_CXXFLAGS) $(CXXFLAGS) $(TGT_CPPFLAGS) $(CPPFLAGS) -o $@ -c $(*).cpp
+	@echo Building $@
+	$(QUIET)$(CXX) $(TGT_CXXFLAGS) $(CXXFLAGS) $(TGT_CPPFLAGS) $(CPPFLAGS) -o $@ -c $(*).cpp
 
 $(OBJDIR)/%.size: $(OBJDIR)/%.elf
 	@echo "Output code size:"
@@ -179,8 +189,8 @@ $(OBJDIR):
 
 $(OPENCM3_DIR) $(OPENCM3_HEADER):
 	@echo Cloning $@
-	git submodule update --init --recursive
-	make -C $(OPENCM3_DIR) -j8
+	$(QUIET)git submodule update --init --recursive
+	$(QUIET)make -C $(OPENCM3_DIR) -j8
 
 $(OPENCM3_LIB): | $(OPENCM3_DIR)
 
@@ -194,7 +204,8 @@ $(OPENCM3_LIB): | $(OPENCM3_DIR)
 		$(OBJDIR)/$*.elf
 
 clean:
-	$(RM) $(GENERATED_BINARIES) generated.* $(OBJS) $(OBJS:%.o=%.d)
+	@echo Cleaning
+	$(QUIET)$(RM) $(GENERATED_BINARIES) generated.* $(OBJS) $(OBJS:%.o=%.d)
 
 # Dependencies
 -include $(OBJS:.o=.d)
