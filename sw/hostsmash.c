@@ -200,7 +200,6 @@ typedef struct handle_ent handle_ent_t;
 typedef struct handle_ent {
     handle_t      he_handle;   // Reference handle for Amiga interface
     char         *he_name;     // Name of file's path relative to parent
-    char         *he_hpath;    // Host file path relative to volume root
     int           he_fd;       // Open file number
     uint          he_type;     // One of HM_TYPE_*
     uint          he_mode;     // Open mode
@@ -209,7 +208,6 @@ typedef struct handle_ent {
     DIR          *he_dir;      // Open directory pointer
     amiga_vol_t  *he_avolume;  // Volume descriptor for this handle
     handle_ent_t *he_volume;   // Volume for this file
-    handle_ent_t *he_parent;   // Relative parent of this file
     handle_ent_t *he_next;     // Next in list of all handles
 } handle_ent_t;
 
@@ -2132,7 +2130,6 @@ handle_new(const char *name, handle_ent_t *parent, uint type, uint mode)
     node->he_mode    = mode;
     node->he_count   = 1;
     node->he_entnum  = 0;
-    node->he_parent  = parent;
     node->he_next    = handle_list_head;
     handle_list_head = node;
 
@@ -2142,11 +2139,8 @@ handle_new(const char *name, handle_ent_t *parent, uint type, uint mode)
     } else if (parent != NULL) {
         node->he_volume  = parent->he_volume;
         node->he_avolume = parent->he_avolume;
-#if 0
-    } else {
-        /* This is the case when referencing the Volume Directory */
-        printf("handle %u parent is null\n", handle);
-#endif
+
+        /* Parent can be NULL if referencing the Volume Directory */
     }
 
     return (node);
@@ -2201,6 +2195,7 @@ handle_get_name(const char *name)
     return (NULL);
 }
 
+#if 0
 static void
 handle_list_show(void)
 {
@@ -2250,16 +2245,37 @@ handle_list_show(void)
                node->he_dir ? "Y" : " ", node->he_name);
     }
 }
+#endif
 
 static void
 volume_add(const char *volume_name, const char *local_path, uint is_default)
 {
     handle_ent_t *handle;
     amiga_vol_t  *node = malloc(sizeof (amiga_vol_t));
+    char *vpos;
+    char volnamebuf[128];
+    uint volnamelen = strlen(volume_name);
 
-    handle = handle_new(volume_name, NULL, HM_TYPE_VOLUME, HM_MODE_READ);
+    if (volnamelen > sizeof (volnamebuf) - 2)
+        errx(EXIT_FAILURE, "Volume name '%s' too long\n", volume_name);
+    if (strchr(volume_name, '/') != NULL)
+        errx(EXIT_FAILURE, "Volume name '%s' may not contain '/'\n",
+             volume_name);
+    vpos = strchr(volume_name, ':');
+    if ((vpos != NULL) && ((vpos - volume_name) < volnamelen - 1)) {
+        errx(EXIT_FAILURE, "Volume name '%s' only have ':' at end\n",
+             volume_name);
+    }
+    strcpy(volnamebuf, volume_name);
+    if (vpos == NULL) {
+        /* Append colon */
+        volnamebuf[volnamelen++] = ':';
+        volnamebuf[volnamelen] = '\0';
+    }
 
-    node->av_volume    = volume_name;
+    handle = handle_new(volnamebuf, NULL, HM_TYPE_VOLUME, HM_MODE_READ);
+
+    node->av_volume    = strdup(volnamebuf);
     node->av_path      = local_path;
     node->av_handle    = handle;
     node->av_next      = amiga_vol_head;
@@ -2276,7 +2292,7 @@ volume_add(const char *volume_name, const char *local_path, uint is_default)
         handle_default = handle->he_handle;
     }
 
-    printf("add volume %s = %s\n", volume_name, local_path);
+    printf("add volume %s = %s\n", volnamebuf, local_path);
 }
 
 static amiga_vol_t *
@@ -2698,6 +2714,8 @@ mem16_swap(void *buf, uint len)
     }
 }
 
+#define SEND_MSG_MAX 2000
+
 /*
  * send_msg
  * --------
@@ -2707,8 +2725,47 @@ static uint
 send_msg(void *buf, uint len, uint *status)
 {
     uint rc;
+    uint8_t msgbuf[SEND_MSG_MAX];
+    uint sendlen = len;
+    uint bodylen;
+    uint pos;
+
     mem16_swap(buf, len);
-    rc = send_ks_cmd(KS_CMD_MSG_SEND, buf, len, NULL, 0, status, NULL, 0);
+    if (sendlen > SEND_MSG_MAX)
+        sendlen = SEND_MSG_MAX;
+    rc = send_ks_cmd(KS_CMD_MSG_SEND, buf, sendlen, NULL, 0, status, NULL, 0);
+    if (rc == 0) {
+        pos = sendlen;
+        if (pos < len) {
+            /*
+             * Remaining payload will be sent as additional messages,
+             * waiting for sufficient space available before each one.
+             * Need to repeat a minimal header for each additional packet.
+             */
+            memcpy(msgbuf, buf, sizeof (km_msg_hdr_t));
+            bodylen = pos - sizeof (km_msg_hdr_t);
+        }
+        while (pos < len) {
+            if (bodylen > len - pos)
+                bodylen = len - pos;
+            memcpy(msgbuf + sizeof (km_msg_hdr_t),
+                   (uint8_t *)buf + pos, bodylen);
+            sendlen = bodylen + sizeof (km_msg_hdr_t);
+            rc = send_ks_cmd(KS_CMD_MSG_SEND, msgbuf, sendlen, NULL, 0,
+                             status, NULL, 0);
+            if (rc != 0) {
+                printf("send msg failed at %x of %x\n", pos, len);
+                break;
+            }
+            pos += bodylen;
+#undef DEBUG_SEND_MSG
+#ifdef DEBUG_SEND_MSG
+            printf("send %x (body=%x) pos=%x of %x\n",
+                   sendlen, bodylen, pos, len);
+#endif
+        }
+    }
+
     mem16_swap(buf, len);
     return (rc);
 }
@@ -2796,7 +2853,10 @@ get_relative_path(handle_ent_t **parent, const char *name, char *pathbuf)
             uint len = colon - nstart + 1;
             memcpy(pathname, nstart, colon - nstart + 1);
             pathname[len] = '\0';
+#undef REL_PATH_DEBUG
+#ifdef REL_PATH_DEBUG
             printf("find vol name %s\n", pathname);
+#endif
             *parent = handle_get_name(pathname);
             if (*parent != NULL) {
                 nptr += len;
@@ -2830,7 +2890,9 @@ get_relative_path(handle_ent_t **parent, const char *name, char *pathbuf)
                     tptr = pathname;
                     goto get_rel_restart;
                 }
+#ifdef REL_PATH_DEBUG
                 printf("Seek vol name %s\n", pathname);
+#endif
                 *parent = handle_get_name(pathname);
                 if (*parent == NULL)
                     return (1);
@@ -2844,24 +2906,32 @@ get_rel_next:
                 continue;
             } else if ((*nptr == '/') && (tptr == pathname)) {
                 /* Consume leading / */
+#ifdef REL_PATH_DEBUG
                 printf("saw /\n");
+#endif
                 goto get_rel_next;
             } else if ((tptr > pathname) && (tptr[-1] == '.') &&
                        ((tptr == pathname + 1) || (tptr[-2] == '/'))) {
                 /* Consume ./ meaning "same directory" */
+#ifdef REL_PATH_DEBUG
                 printf("saw ./\n");
+#endif
                 tptr--;
                 goto get_rel_next;
             } else if ((tptr > pathname) && (tptr[-1] == '/') &&
                                                (*nptr == '/')) {
                 /* Consume // meaning "up a directory" for Amiga */
+#ifdef REL_PATH_DEBUG
                 printf("saw //\n");
+#endif
                 goto get_rel_trim_dotdot;
             } else if ((tptr > pathname + 1) &&
                        (tptr[-1] == '.') && (tptr[-2] == '.') &&
                        ((tptr == pathname + 2) || (tptr[-3] == '/'))) {
                 /* Consume .. and previous path element */
+#ifdef REL_PATH_DEBUG
                 printf("saw ..\n");
+#endif
                 tptr -= 2;
 get_rel_trim_dotdot:
                 if ((tptr > pathname) && (--tptr > pathname)) {
@@ -2881,9 +2951,11 @@ get_rel_trim_dotdot:
     }
     *tptr = '\0';
 
-printf("returning '%s'\n", pathname);
     strcpy(pathbuf, pathname);
-printf("got relative path %s from '%s' and '%s'\n", pathbuf, name, *parent ? (*parent)->he_name : "NULL");
+#ifdef REL_PATH_DEBUG
+    printf("got relative path %s from '%s' and '%s'\n",
+           pathbuf, name, *parent ? (*parent)->he_name : "NULL");
+#endif
     return (0);
 }
 
@@ -3145,13 +3217,16 @@ sm_fopen(hm_fopenhandle_t *hm, uint *status)
     int           fd;
     struct stat   st;
 
-    printf("fopen(%s) in %x\n", hm_name, hm->hm_handle);
-handle_list_show();
+    printf("fopen(%s) in %d\n", hm_name, hm->hm_handle);
 
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     hm->hm_hdr.km_status = KM_STATUS_OK;
 
-printf("parent handle=%d type=%x path=%s\n", hm->hm_handle, phandle ? phandle->he_type: 0, phandle ? phandle->he_name : NULL);
+#ifdef FOPEN_DEBUG
+    printf("parent handle=%d type=%x path=%s\n",
+           hm->hm_handle, phandle ? phandle->he_type: 0,
+           phandle ? phandle->he_name : NULL);
+#endif
     if (get_relative_path(&phandle, hm_name, name)) {
         printf("fopen(%s) relative path failed\n", hm_name);
 reply_open_fail:
@@ -3185,7 +3260,6 @@ reply_open_fail:
 printf("host_path=%s\n", host_path);
 
     if (hm_mode & HM_MODE_WRITE) {
-        printf("write mode\n");
         hm_type = SWAP16(hm->hm_type);
     }
     if ((hm_mode & ~HM_MODE_DIR) & HM_MODE_READ) {
@@ -3292,13 +3366,13 @@ sm_fclose(hm_fopenhandle_t *hm, uint *status)
 
 #define DEBUG_CLOSE
 #ifdef DEBUG_CLOSE
-    printf("fclose(%x)\n", hm->hm_handle);
+    printf("fclose(%d)\n", hm->hm_handle);
 #endif
     hm->hm_hdr.km_status = KM_STATUS_OK;
     hm->hm_hdr.km_op |= KM_OP_REPLY;
 
     if (handle == NULL) {
-        printf("Handle %x not open for close\n", hm->hm_handle);
+        printf("Handle %d not open for close\n", hm->hm_handle);
         hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
     }
@@ -3354,9 +3428,9 @@ sm_fread(hm_freadwrite_t *hm, uint *status)
 
     hm->hm_hdr.km_op |= KM_OP_REPLY;
 
-    printf("fread(%x, l=%x)\n", hm->hm_handle, hm_length);
+    printf("fread(%d, l=%x)\n", hm->hm_handle, hm_length);
     if (handle == NULL) {
-        printf("handle get %x failed\n", hm->hm_handle);
+        printf("handle get %d failed\n", hm->hm_handle);
 reply_read_fail:
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
@@ -3642,18 +3716,18 @@ dir_read_common:
 }
 
 static uint
-sm_fwrite(hm_freadwrite_t *hm, uint *status)
+sm_fwrite(hm_freadwrite_t *hm, uint rxlen, uint *status)
 {
     uint             rc;
     uint             hm_length = SWAP32(hm->hm_length);
     handle_ent_t    *handle    = handle_get(hm->hm_handle);
     char            *ndata     = (char *)(hm + 1);
 
-    printf("fwrite(%x, l=%x)\n", hm->hm_handle, hm->hm_length);
+    printf("fwrite(%d, l=%x)\n", hm->hm_handle, hm_length);
     hm->hm_hdr.km_op |= KM_OP_REPLY;
 
     if (handle == NULL) {
-        printf("handle get %x failed\n", hm->hm_handle);
+        printf("handle get %d failed\n", hm->hm_handle);
 reply_write_fail:
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
@@ -3680,11 +3754,65 @@ reply_write_fail:
         goto reply_write_fail;
     }
 
-#if 0
-    printf("write %d len=%u\n", handle->he_fd, hm_length);
-#endif
+    if (rxlen >= sizeof (hm_freadwrite_t))
+        rxlen -= sizeof (hm_freadwrite_t);
+    else
+        rxlen = 0;
 
-    rc = write(handle->he_fd, ndata, hm_length);
+    if (rxlen < hm_length) {
+        /* More data pending */
+        uint8_t *rdata = malloc(hm_length + sizeof (km_msg_hdr_t));
+        uint8_t  rxdata[4096];
+        uint     rdatapos = rxlen;
+        uint     timeout = 0;
+
+        if (rdata == NULL) {
+            hm->hm_hdr.km_status = KM_STATUS_FAIL;
+            return (send_msg(hm, sizeof (*hm), status));
+        }
+        memcpy(rdata, ndata, rxlen);
+        ndata = (char *) ((km_msg_hdr_t *) rxdata + 1);
+        while (rdatapos < hm_length) {
+            uint rxmax = hm_length - rdatapos + sizeof (km_msg_hdr_t);
+            rc = recv_msg(rxdata, rxmax, status, &rxlen);
+            if (rc != RC_SUCCESS)
+                break;
+            if (rxlen == 0) {
+                if (++timeout < 20)
+                    continue;
+                printf("fwrite(%d) data timeout at pos=%x\n",
+                       hm->hm_handle, rdatapos);
+                rc = RC_FAILURE;
+                break;
+            }
+            timeout = 0;
+            if (rxlen >= sizeof (km_msg_hdr_t))
+                rxlen -= sizeof (km_msg_hdr_t);
+            else
+                rxlen = 0;
+            if (((km_msg_hdr_t *)rxdata)->km_tag != hm->hm_hdr.km_tag) {
+                printf("tag mismatch: %04x != expected %04x\n",
+                       ((km_msg_hdr_t *)rxdata)->km_tag, hm->hm_hdr.km_tag);
+                rc = RC_FAILURE;
+                break;
+            }
+#if 0
+printf("km_op=%x km_status=%x km_tag=%x rlen=%x ",
+((km_msg_hdr_t *)rxdata)->km_op,
+((km_msg_hdr_t *)rxdata)->km_status,
+((km_msg_hdr_t *)rxdata)->km_tag, rxlen);
+            printf("rdatapos=%x rxlen=%x\n", rdatapos, rxlen);
+#endif
+            memcpy(rdata + rdatapos, ndata, rxlen);
+            rdatapos += rxlen;
+        }
+        if (rc == RC_SUCCESS) {
+            rc = write(handle->he_fd, rdata, hm_length);
+        }
+        free(rdata);
+    } else {
+        rc = write(handle->he_fd, ndata, hm_length);
+    }
     if (rc < 0) {
         printf("write rc=%d errno=%d\n", rc, errno);
         rc = errno_to_km_status();
@@ -3700,11 +3828,11 @@ static uint
 sm_fseek(hm_fseek_t *hm, uint *status)
 {
     handle_ent_t *handle = handle_get(hm->hm_handle);
-    printf("fseek(%x, o=%lx)\n", hm->hm_handle,
+    printf("fseek(%d, o=%lx)\n", hm->hm_handle,
            ((uint64_t) hm->hm_offset_hi << 32) | hm->hm_offset_lo);
     hm->hm_hdr.km_status = KM_STATUS_OK;
     if (handle == NULL) {
-        printf("handle get %x failed\n", hm->hm_handle);
+        printf("handle get %d failed\n", hm->hm_handle);
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
@@ -3851,7 +3979,7 @@ sm_fdelete(hm_fhandle_t *hm, uint *status)
     char          buf[KS_PATH_MAX];
     struct stat   st;
 
-    printf("fdelete(%s) in %x\n", hm_name, hm->hm_handle);
+    printf("fdelete(%s) in %d\n", hm_name, hm->hm_handle);
 
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     hm->hm_hdr.km_status = KM_STATUS_OK;
@@ -3997,7 +4125,7 @@ sm_fpath(hm_fhandle_t *hm, uint *status)
     char          pathlen;
     uint          rc;
 
-    printf("fpath(%x)\n", hm->hm_handle);
+    printf("fpath(%d)\n", hm->hm_handle);
     hm->hm_hdr.km_status = KM_STATUS_OK;
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     if (handle == NULL) {
@@ -4130,7 +4258,7 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
             rc = sm_fread((hm_freadwrite_t *)rxdata, &status);
             break;
         case KM_OP_FWRITE:
-            rc = sm_fwrite((hm_freadwrite_t *)rxdata, &status);
+            rc = sm_fwrite((hm_freadwrite_t *)rxdata, rxlen, &status);
             break;
         case KM_OP_FSEEK:
             rc = sm_fseek((hm_fseek_t *)rxdata, &status);
@@ -4179,6 +4307,7 @@ handle_atou_messages(void)
      */
     while (1) {
         rc = recv_msg(rxdata, sizeof (rxdata), &status, &rxlen);
+
         if (rc != 0) {
             printf("KS recv_msg failure: %d (%s)\n", rc, smash_err(rc));
             return (rc);
@@ -4207,11 +4336,10 @@ run_message_mode(void)
     uint curtick = 10;
     uint fstick = 0;
     uint count;
-    uint16_t *msg;
     uint16_t app_state = MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_LOOPBACK;
     smash_msg_info_t mi;
 
-    printf("message mode\n");
+    printf("Message mode\n");
     app_state_send[0] = SWAP16(0xffff);     // Affect all bits
     app_state_send[1] = SWAP16(app_state);  // Message service up
 
@@ -4229,10 +4357,6 @@ run_message_mode(void)
         printf("KS Set App State failed: %d (%s)\n", rc, smash_err(rc));
         return;
     }
-
-    msg = (uint16_t *)(buf + 8);
-    printf("got %u bytes: len=%04x status=%04x %04x %04x\n",
-           rxlen, msg[0], msg[1], msg[2], msg[3]);
 
     rc = send_ks_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, &status, NULL, 0);
     if (rc == 0)

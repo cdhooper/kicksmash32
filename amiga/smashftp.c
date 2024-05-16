@@ -56,7 +56,7 @@ extern struct iob ** __iob;
 typedef unsigned char  uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned long  uint32_t;
-typedef struct { unsigned long hi; unsigned long lo;} uint64_t;
+typedef struct { unsigned long hi; unsigned long lo; } uint64_t;
 #define __packed
 #else
 struct ExecBase *DOSBase;
@@ -107,55 +107,6 @@ is_user_abort(void)
         return (1);
     return (0);
 }
-
-#ifdef LS_DUMP_READ
-#define DUMP_MEMORY
-#endif
-#ifdef DUMP_MEMORY
-static char
-printable_ascii(uint8_t ch)
-{
-    if (ch >= ' ' && ch <= '~')
-        return (ch);
-    if (ch == '\t' || ch == '\r' || ch == '\n' || ch == '\0')
-        return (' ');
-    return ('.');
-}
-
-static void
-dump_memory(void *buf, uint len, uint dump_base)
-{
-    uint pos;
-    uint strpos;
-    char str[20];
-    uint32_t *src = buf;
-
-    len = (len + 3) / 4;
-    if (dump_base != VALUE_UNASSIGNED)
-        printf("%05x:", dump_base);
-    for (strpos = 0, pos = 0; pos < len; pos++) {
-        uint32_t val = src[pos];
-        printf(" %08x", val);
-        str[strpos++] = printable_ascii(val >> 24);
-        str[strpos++] = printable_ascii(val >> 16);
-        str[strpos++] = printable_ascii(val >> 8);
-        str[strpos++] = printable_ascii(val);
-        if ((pos & 3) == 3) {
-            str[strpos] = '\0';
-            strpos = 0;
-            printf(" %s\n", str);
-            if ((dump_base != VALUE_UNASSIGNED) && ((pos + 1) < len)) {
-                dump_base += 16;
-                printf("%05x:", dump_base);
-            }
-        }
-    }
-    if ((pos & 3) != 0) {
-        str[strpos] = '\0';
-        printf("%*s%s\n", (4 - (pos & 3)) * 5, "", str);
-    }
-}
-#endif
 
 static uint64_t
 smash_time(void)
@@ -279,7 +230,7 @@ msleep(uint msec)
 }
 
 __stdargs int
-usleep (useconds_t usec)
+usleep(useconds_t usec)
 {
     return (msleep(usec / 1000));
 }
@@ -342,7 +293,7 @@ amiga_perms_from_host(uint host_perms)
     /*
      * Only the base R W E D bits are set = 1 to disable.
      * The rest of the Amiga bits are set = 1 to enable.
-
+     *
      * There are not enough UNIX mode bits to support AMIGA_PERMS_ARCHIVE.
      *
      * Will Map:
@@ -393,45 +344,44 @@ cmd_cd(int argc, char * const *argv)
     const char   *nwd;
     char         *name;
 
+    nwd = argv[1];
+
     if (argc == 1) {
         /* Return to top level (volume directory) */
-        handle = 0;
-        name = "";
-        goto finish_good;
+        nwd = "::";
     }
-    nwd = argv[1];
-    rc = sm_open(cwd_handle, nwd, HM_MODE_READDIR, &type, 0, &handle);
+    rc = sm_fopen(cwd_handle, nwd, HM_MODE_READDIR, &type, 0, &handle);
     if (rc != KM_STATUS_OK) {
-        printf("%s not found\n", nwd);
+        printf("Failed to open %s: %s\n", nwd, smash_err(rc));
         return (RC_FAILURE);
     }
     if (type == HM_TYPE_LINK) {
         /* Need to follow link to determine if it's a directory */
-        sm_close(handle);
+        sm_fclose(handle);
         strcpy(nbuf, nwd);
         strcat(nbuf, "/.");
-        rc = sm_open(cwd_handle, nbuf, HM_MODE_READDIR, &type, 0, &handle);
+        rc = sm_fopen(cwd_handle, nbuf, HM_MODE_READDIR, &type, 0, &handle);
         if (rc != KM_STATUS_OK)
-            printf("Could not follow link %s\n", nbuf);
+            printf("Could not follow link %s: %s\n", nbuf, smash_err(rc));
         return (RC_FAILURE);
     }
     if ((type != HM_TYPE_DIR) && (type != HM_TYPE_VOLUME) &&
         (type != HM_TYPE_VOLDIR)) {
         printf("%s is not a directory (%x)\n", nwd, type);
-        sm_close(handle);
+        sm_fclose(handle);
         return (RC_FAILURE);
     }
 
-    if ((rc = sm_path(handle, &name)) != 0) {
-        printf("sm_path(%s) failed: %s\n", nwd, smash_err(rc));
-        sm_close(handle);
+    if ((rc = sm_fpath(handle, &name)) != 0) {
+        printf("sm_fpath(%s) failed: %s\n", nwd, smash_err(rc));
+        sm_fclose(handle);
         return (RC_FAILURE);
     }
     strcpy(nbuf, name);
     name = nbuf;
-finish_good:
+
     if (cwd_handle != 0xffffffff)
-        sm_close(cwd_handle);
+        sm_fclose(cwd_handle);
     if (cwd != NULL)
         free(cwd);
     cwd = strdup(name);
@@ -476,7 +426,7 @@ is_chmod_mode(const char *str, uint *add, uint *subtract)
     if (*str == '\0')
         return (RC_FAILURE);
 
-    /* Check for [ugoa]=[rwexd] */
+    /* Check for [ugoa][=+-][rwexd] */
     for (ptr = str; *ptr != '\0'; ptr++) {
         if (*ptr == 'u') {
             ugomask |= FIBF_READ | FIBF_WRITE | FIBF_EXECUTE | FIBF_DELETE;
@@ -504,7 +454,7 @@ is_chmod_mode(const char *str, uint *add, uint *subtract)
                   FIBF_OTR_DELETE;
     }
     if ((*ptr == SAW_PLUS) || (*ptr == SAW_MINUS) || (*ptr == SAW_EQUALS)) {
-        /* Possibly [ugoa]=[rwexd] */
+        /* Possibly [ugoa][=+-][rwexd] */
         if (ptr == str)
             str++;  // For the benefit of later "hsparwed" and 4755 code
         equalsplusminus = *ptr;
@@ -525,7 +475,7 @@ is_chmod_mode(const char *str, uint *add, uint *subtract)
             }
         }
         if ((*ptr == '\0') && (ptr != str)) {
-            /* Got [ugoa]=[rwexd] */
+            /* Got [ugoa][=+-][rwexd] */
 mode_is_good:
             if (mask == 0) {
                 return (0);
@@ -600,12 +550,14 @@ mode_is_good:
 rc_t
 cmd_chmod(int argc, char * const *argv)
 {
-    // if there is a match of anything in "hsparwed" for the
-    // first arg, then operate in SetProtect mode where this
-    // sets all file permissions.
-    //
-    // If it instead has chmod syntax like 4755 or u+rw, then
-    // default to chmod syntax  [ugoa][+-=][rexwd] [+-=][hsparewd x]
+    /*
+     * If there is a match of anything in "hsparwed" for the
+     * first arg, then operate in SetProtect mode where this
+     * sets all file permissions.
+     *
+     * If it instead has chmod syntax like 4755 or u+rw, then
+     * default to chmod syntax  [ugoa][+-=][rexwd] [+-=][hsparewd x]
+     */
     uint          do_remote = 0;
     uint          add      = 0;
     uint          subtract = 0;
@@ -641,22 +593,22 @@ cmd_chmod(int argc, char * const *argv)
             uint          rlen;
             uint          type;
             hm_fdirent_t *dent;
-            rc = sm_open(cwd_handle, name, HM_MODE_READDIR, &type, 0, &handle);
+            rc = sm_fopen(cwd_handle, name, HM_MODE_READDIR, &type, 0, &handle);
             if (rc != KM_STATUS_OK) {
-                printf("Failed to open %s\n", name);
+                printf("Failed to open %s: %s\n", name, smash_err(rc));
                 rc = RC_FAILURE;
                 continue;
             }
-            rc2 = sm_read(handle, DIRBUF_SIZE, (void **) &dent, &rlen);
+            rc2 = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen);
             if (rlen == 0) {
                 printf("Failed to stat remote file %s: %s\n",
                        name, smash_err(rc2));
                 rc = RC_FAILURE;
-                sm_close(handle);
+                sm_fclose(handle);
                 continue;
             }
             perms = dent->hmd_aperms;
-            sm_close(handle);
+            sm_fclose(handle);
         } else {
             BPTR lock = Lock(name, ACCESS_READ);
             if (lock == 0) {
@@ -674,13 +626,13 @@ cmd_chmod(int argc, char * const *argv)
             perms = fib.fib_Protection;
         }
 
-        perms ^= 0x0000000f;  // RWED are inverted for permission
+        perms ^= 0x0000000f;  // Amiga RWED are inverted for permission
         perms &= ~subtract;
         perms |= add;
         perms ^= 0x0000000f;
 
         if (do_remote) {
-            rc2 = sm_set_perms(cwd_handle, name, perms);
+            rc2 = sm_fsetprotect(cwd_handle, name, perms);
             if (rc2 != KM_STATUS_OK) {
                 printf("Failed to set protection on %s: %s\n",
                        name, smash_err(rc2));
@@ -840,19 +792,19 @@ is_remote_dir(const char *name)
     uint     type;
     char     nbuf[256];
 
-    rc = sm_open(cwd_handle, name, HM_MODE_READDIR, &type, 0, &handle);
+    rc = sm_fopen(cwd_handle, name, HM_MODE_READDIR, &type, 0, &handle);
     if (rc != KM_STATUS_OK)
         return (0);
-    sm_close(handle);
+    sm_fclose(handle);
 
     if (type == HM_TYPE_LINK) {
         /* Need to follow link to determine if it's a directory */
         strcpy(nbuf, name);
         strcat(nbuf, "/.");
-        rc = sm_open(cwd_handle, nbuf, HM_MODE_READDIR, &type, 0, &handle);
+        rc = sm_fopen(cwd_handle, nbuf, HM_MODE_READDIR, &type, 0, &handle);
         if (rc != KM_STATUS_OK)
             return (0);
-        sm_close(handle);
+        sm_fclose(handle);
         return (0);
     }
     if ((type == HM_TYPE_DIR) ||
@@ -913,7 +865,7 @@ get_file(const char *src, const char *dst)
     uint     rlen;
     uint     fileperms;
     uint     filemtime;
-    uint     buflen = 2000;
+    uint     buflen = 32768;
     handle_t handle;
     uint8_t *data;
     uint64_t pos = 0;
@@ -924,13 +876,13 @@ get_file(const char *src, const char *dst)
     hm_fdirent_t *dent;
     struct DateStamp datestamp;
 
-    rc = sm_open(cwd_handle, src, HM_MODE_READDIR, &type, 0, &handle);
+    rc = sm_fopen(cwd_handle, src, HM_MODE_READDIR, &type, 0, &handle);
     if (rc != KM_STATUS_OK) {
-        printf("Failed to open remote file %s for stat\n", src);
+        printf("Failed to open %s for stat: %s\n", src, smash_err(rc));
         return (RC_FAILURE);
     }
 
-    rc = sm_read(handle, DIRBUF_SIZE, (void **) &dent, &rlen);
+    rc = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen);
     if (rlen == 0) {
         printf("Failed to stat remote file %s: %s\n", src, smash_err(rc));
         return (RC_FAILURE);
@@ -939,7 +891,7 @@ get_file(const char *src, const char *dst)
     filesize = ((uint64_t) dent->hmd_size_hi << 32) | dent->hmd_size_lo;
     fileperms = dent->hmd_aperms;
     filemtime = dent->hmd_mtime;
-    sm_close(handle);
+    sm_fclose(handle);
 
     if (is_user_abort()) {
         printf("^C\n");
@@ -952,15 +904,15 @@ get_file(const char *src, const char *dst)
         printf("(%u KB) ", (uint) ((filesize + 512) >> 10));
     fflush(stdout);
 
-    rc = sm_open(cwd_handle, src, HM_MODE_READ, &type, 0, &handle);
+    rc = sm_fopen(cwd_handle, src, HM_MODE_READ, &type, 0, &handle);
     if (rc != KM_STATUS_OK) {
-        printf("Failed to open remote %s for read\n", src);
+        printf("Failed to open %s for read: %s\n", src, smash_err(rc));
         return (RC_FAILURE);
     }
     fp = fopen(dst, "w");
     if (fp == NULL) {
-        printf("Failed to open local %s for write\n", dst);
-        sm_close(handle);
+        printf("Failed to open %s for write\n", dst);
+        sm_fclose(handle);
         return (RC_FAILURE);
     }
 
@@ -970,10 +922,10 @@ get_file(const char *src, const char *dst)
         if (is_user_abort()) {
             printf("^C\n");
             fclose(fp);
-            sm_close(handle);
+            sm_fclose(handle);
             return (RC_USR_ABORT);
         }
-        rc = sm_read(handle, buflen, (void **) &data, &rlen);
+        rc = sm_fread(handle, buflen, (void **) &data, &rlen);
         if (rlen == 0) {
             printf("Failed to read %s at pos %x: %s\n",
                    src, (uint) pos, smash_err(rc));
@@ -996,7 +948,7 @@ get_file(const char *src, const char *dst)
         printf("%u usec  ", diff);
     printf(" %u KB/sec\n", calc_kb_sec(diff, filesize));
     fclose(fp);
-    sm_close(handle);
+    sm_fclose(handle);
 
     if (SetProtection(dst, fileperms) == 0)
         printf("Failed to set protection on %s\n", dst);
@@ -1015,8 +967,7 @@ get_files(const char *src, const char *dst)
     rc_t     rc;
     handle_t handle;
     uint     type;
-    uint     dst_is_dir = 0;
-    char    *dstbuf = NULL;
+    uint     recursive = 0;
 
     if ((dst == NULL) || (strcmp(dst, ".") == 0)) {
         /* Need to trim dst file name from src name */
@@ -1039,47 +990,22 @@ get_files(const char *src, const char *dst)
                 break;
     }
 
-    rc = sm_open(cwd_handle, src, HM_MODE_READ, &type, 0, &handle);
+    rc = sm_fopen(cwd_handle, src, HM_MODE_READ, &type, 0, &handle);
     if (rc != KM_STATUS_OK) {
-        printf("Could not locate %s\n", src);
+        printf("Failed to open %s: %s\n", src, smash_err(rc));
         return (RC_FAILURE);
     }
     if (type != HM_TYPE_FILE) {
-        printf("Can not yet get non-file: %s\n", src);
-        sm_close(handle);
+        printf("Can not yet get non-file: %s (%x)\n", src, type);
+        sm_fclose(handle);
         return (RC_FAILURE);
     }
-    if (((type == HM_TYPE_DIR) || (type == HM_TYPE_VOLDIR)) && !dst_is_dir) {
-        printf("Source %s is a directory but destination %s does not exist\n",
-               src, dst);
-        sm_close(handle);
-        return (RC_FAILURE);
-    }
-    if (is_dir(dst) || (strcmp(dst, ".") == 0)) {
-        uint dstlen = strlen(dst);
-        uint alloclen = dstlen + strlen(src) + 2;
-        dstbuf = malloc(alloclen);
-        if (dstbuf == NULL) {
-            printf("malloc(%u) failure\n", alloclen);
-            sm_close(handle);
-            return (RC_FAILURE);
-        }
-        strcpy(dstbuf, dst);
-        if ((dstlen > 0) && (dstbuf[dstlen - 1] != '/') &&
-                            (dstbuf[dstlen - 1] != ':')) {
-            dstbuf[dstlen++] = '/';
-        }
-        strcpy(dstbuf + dstlen, src);
-        dst = dstbuf;
-        dst_is_dir = 1;
-    }
-//  printf("src='%s' dst='%s'\n", src, dst);
 
-    if (dst_is_dir) {
+    if (is_dir(dst) || (strcmp(dst, ".") == 0)) {
         /* Single or multiple file get */
-        uint  dstlen  = strlen(dst) + 1;
+        uint  dstlen  = strlen(dst);
         char *dstpath = malloc(dstlen + 256);
-        uint  srclen  = strlen(src) + 1;
+        uint  srclen  = strlen(src);
         char *srcpath = malloc(srclen + 256);
         char *srcname = (char *)src;
         if ((dstpath == NULL) || (srcpath == NULL)) {
@@ -1088,37 +1014,55 @@ get_files(const char *src, const char *dst)
                 free(dstpath);
             if (srcpath != NULL)
                 free(srcpath);
-            if (dstbuf != NULL)
-                free(dstbuf);
             return (RC_FAILURE);
         }
         memcpy(dstpath, dst, dstlen);
-        dstpath[dstlen++] = '/';
+        if (dstlen > 0) {
+            if ((dstpath[dstlen - 1] != ':') && (dstpath[dstlen - 1] != '/'))
+                dstpath[dstlen++] = '/';
+        }
         dstpath[dstlen] = '\0';
 
         memcpy(srcpath, src, srclen);
+        srcpath[srclen] = '\0';
 #if 0
-        srcpath[srclen++] = '/';
-        srcpath[srclen] = '\0';
+        if (src_is_dir) {
+            srcpath[srclen++] = '/';
+            srcpath[srclen] = '\0';
 
-        srcname = dir_next(handle, dirbuf);
-        strcpy(srcpath + srclen, srcname);
-#else
-        srcpath[srclen] = '\0';
+            srcname = dir_next(handle, dirbuf);
+            strcpy(srcpath + srclen, srcname);
+        } else
 #endif
         // Assume single file for now
+        if (!recursive) {
+            char *ptr;
+            for (ptr = srcname; *ptr != '\0'; ptr++)
+                ;
+            for (--ptr; ptr > srcname; ptr--) {
+                if ((ptr[-1] == '/') || (ptr[-1] == ':'))
+                    break;
+            }
+            if (srcname < ptr)
+                srcname = ptr;
+            strcpy(dstpath + dstlen, srcname);
+        }
         strcpy(dstpath + dstlen, srcname);
+
         rc = get_file(srcpath, dstpath);
         free(dstpath);
         free(srcpath);
-        sm_close(handle);
+        sm_fclose(handle);
     } else {
         /* Simple file get */
-        sm_close(handle);
+        sm_fclose(handle);
+        if ((type == HM_TYPE_DIR) || (type == HM_TYPE_VOLDIR)) {
+            printf("Source %s is a directory but destination %s "
+                   "does not exist\n", src, dst);
+            return (RC_FAILURE);
+        }
         rc = get_file(src, dst);
     }
-    if (dstbuf != NULL)
-        free(dstbuf);
     return (rc);
 }
 
@@ -1570,7 +1514,7 @@ lls_show(const char *name, uint flags)
 
     lock = Lock(name, ACCESS_READ);
     if (lock == 0) {
-        printf("Could not locate %s\n", name);
+        printf("Failed to open %s\n", name);
         return (RC_FAILURE);
     }
     if (Examine(lock, &fib) == 0) {
@@ -1774,7 +1718,7 @@ ls_show(const char *name, uint flags)
 
     /* Open directory */
 try_open_again:
-    rc = sm_open(cwd_handle, name, open_mode, &type, 0, &handle);
+    rc = sm_fopen(cwd_handle, name, open_mode, &type, 0, &handle);
 
     if ((handle == 0) && ((open_mode & HM_MODE_DIR) == 0)) {
         // XXX: is this a wildcard? might need to open as dir so
@@ -1787,18 +1731,18 @@ try_open_again:
         goto try_open_again;
     }
     if (rc != KM_STATUS_OK) {
-        printf("Could not locate %s\n", name);
+        printf("Failed to open %s: %s\n", name, smash_err(rc));
         return (RC_FAILURE);
     }
     if (((type != HM_TYPE_DIR) && (type != HM_TYPE_VOLDIR)) &&
         ((open_mode & HM_MODE_DIR) == 0)) {
 //      printf("not a dir (%u)\n", type);
-        sm_close(handle);
+        sm_fclose(handle);
         open_mode = HM_MODE_READDIR;
         goto try_open_again;
     }
     while (1) {
-        rc = sm_read(handle, DIRBUF_SIZE, (void **) &data, &rlen);
+        rc = sm_fread(handle, DIRBUF_SIZE, (void **) &data, &rlen);
         if ((rlen == 0) && (rc != KM_STATUS_EOF)) {
             printf("Dir read failed: %s\n", smash_err(rc));
             goto ls_fail;
@@ -1815,7 +1759,7 @@ try_open_again:
 
             if (is_user_abort()) {
                 printf("^C\n");
-                sm_close(handle);
+                sm_fclose(handle);
                 return (RC_USR_ABORT);
             }
         }
@@ -1825,7 +1769,7 @@ try_open_again:
         }
     }
 ls_fail:
-    sm_close(handle);
+    sm_fclose(handle);
     if (rc == 0)
         return (RC_SUCCESS);
     else
@@ -1949,7 +1893,8 @@ lmkdir_work(const char *name, uint flag_path)
             if (lock != 0)
                 printf(": object exists");
             printf("\n");
-            UnLock(lock);
+            if (lock != 0)
+                UnLock(lock);
         }
         return (rc);
     }
@@ -2011,9 +1956,9 @@ cmd_ln(int argc, char * const *argv)
     }
     if (do_remote) {
         uint linktype = flag_hard_link ? HM_TYPE_HLINK : HM_TYPE_LINK;
-        rc = sm_create(cwd_handle, name, name_tgt, linktype);
+        rc = sm_fcreate(cwd_handle, name, name_tgt, linktype, 0);
         if (rc != RC_SUCCESS) {
-            printf("Failed to link %s to existing %s (%s)\n",
+            printf("Failed to link %s to existing %s: %s\n",
                    name, name_tgt, smash_err(rc));
         }
     } else {
@@ -2024,7 +1969,7 @@ cmd_ln(int argc, char * const *argv)
         } else {
             dest = (BPTR) name_tgt;
             if (dest == 0) {
-                printf("Failed to locate %s\n", name_tgt);
+                printf("Failed to open %s\n", name_tgt);
                 return (RC_FAILURE);
             }
         }
@@ -2193,7 +2138,7 @@ mkdir_work(const char *name, uint flag_path)
 {
     rc_t rc;
 
-    rc = sm_create(cwd_handle, name, "", HM_TYPE_DIR);
+    rc = sm_fcreate(cwd_handle, name, "", HM_TYPE_DIR, 0);
     if (rc != RC_SUCCESS) {
         if (flag_path) {
             char *tname = strdup(name);
@@ -2216,14 +2161,14 @@ mkdir_work(const char *name, uint flag_path)
             }
             free(tname);
             if (rc == RC_SUCCESS) {
-                rc = sm_create(cwd_handle, name, "", HM_TYPE_DIR);
+                rc = sm_fcreate(cwd_handle, name, "", HM_TYPE_DIR, 0);
                 if (rc != RC_SUCCESS)
                     return (rc);
                 return (RC_SUCCESS);
             }
         }
         if (rc != RC_SUCCESS) {
-            printf("Failed to create %s (%s)\n", name, smash_err(rc));
+            printf("Failed to create %s: %s\n", name, smash_err(rc));
         }
         return (rc);
     }
@@ -2327,7 +2272,7 @@ cmd_mv(int argc, char * const *argv)
         return (RC_USER_HELP);
     }
     if (do_remote) {
-        return (sm_rename(cwd_handle, name_old, name_new));
+        return (sm_frename(cwd_handle, name_old, name_new));
     } else {
         if (Rename(name_old, name_new) == 0) {
             printf("Failed to rename %s to %s\n", name_old, name_new);
@@ -2366,7 +2311,7 @@ put_file(const char *src, const char *dst)
     uint     rc;
     uint     rlen;
     uint     type;
-    uint     buflen = 1800;
+    uint     buflen = 32768;
     char    *bufptr;
     char    *bufdata;
     FILE    *fp;
@@ -2377,7 +2322,7 @@ put_file(const char *src, const char *dst)
     struct FileInfoBlock fib;
 
     if (get_file_fib(src, &fib)) {
-        printf("Failed to open local %s for STAT\n", src);
+        printf("Failed to open %s for STAT\n", src);
         return (RC_FAILURE);
     }
 
@@ -2385,14 +2330,14 @@ put_file(const char *src, const char *dst)
 
     fp = fopen(src, "r");
     if (fp == NULL) {
-        printf("Failed to open local %s for read\n", dst);
+        printf("Failed to open %s for read\n", dst);
         return (RC_FAILURE);
     }
 
-    rc = sm_open(cwd_handle, dst, HM_MODE_WRITE | HM_MODE_CREATE,
+    rc = sm_fopen(cwd_handle, dst, HM_MODE_WRITE | HM_MODE_CREATE,
                  &type, fib.fib_Protection, &handle);
     if (rc != KM_STATUS_OK) {
-        printf("Failed to open remote %s for write\n", src);
+        printf("Failed to open %s for write: %s\n", src, smash_err(rc));
         fclose(fp);
         return (RC_FAILURE);
     }
@@ -2401,7 +2346,7 @@ put_file(const char *src, const char *dst)
         printf("Failed to allocate %u bytes\n",
                buflen + sizeof (hm_freadwrite_t));
         fclose(fp);
-        sm_close(handle);
+        sm_fclose(handle);
         return (RC_FAILURE);
     }
     printf("Put %s as %s ", src, dst);
@@ -2417,19 +2362,9 @@ put_file(const char *src, const char *dst)
         if (is_user_abort()) {
             printf("^C\n");
             fclose(fp);
-            sm_close(handle);
+            sm_fclose(handle);
             return (RC_USR_ABORT);
         }
-#if 0
-        rc = sm_read(handle, buflen, (void **) &data, &rlen);
-        if (rlen == 0) {
-            printf("Failed to read %s at pos %x: %s\n",
-                   src, (uint) pos, smash_err(rc));
-            break;
-        }
-        if (flag_debug)
-            printf("got %u bytes\n", rlen);
-#endif
         rlen = buflen;
         if (rlen > filesize - pos)
             rlen = filesize - pos;
@@ -2440,9 +2375,10 @@ put_file(const char *src, const char *dst)
             rc = RC_FAILURE;
             break;
         }
-        rc = sm_write(handle, bufptr, bytes);
+        rc = sm_fwrite(handle, bufptr, bytes);
         if (rc != KM_STATUS_OK) {
-            printf("Remote write %s failed at pos %x\n", dst, (uint) pos);
+            printf("Remote write %s failed at pos %x: %s\n",
+                   dst, (uint) pos, smash_err(rc));
             rc = RC_FAILURE;
             break;
         }
@@ -2456,7 +2392,7 @@ put_file(const char *src, const char *dst)
         printf("%u usec  ", diff);
     printf(" %u KB/sec\n", calc_kb_sec(diff, filesize));
     fclose(fp);
-    sm_close(handle);
+    sm_fclose(handle);
     return (rc);
 }
 
@@ -2608,9 +2544,9 @@ rm_object(const char *name, uint rm_type)
     handle_t handle;
 
     if (rm_type != RM_TYPE_ANY) {
-        rc = sm_open(cwd_handle, name, HM_MODE_READDIR, &type, 0, &handle);
+        rc = sm_fopen(cwd_handle, name, HM_MODE_READDIR, &type, 0, &handle);
         if (rc != KM_STATUS_OK) {
-            printf("%s not found\n", name);
+            printf("Failed to open %s: %s\n", name, smash_err(rc));
             return (RC_FAILURE);
         }
 
@@ -2618,19 +2554,19 @@ rm_object(const char *name, uint rm_type)
             ((type == HM_TYPE_DIR) || (type == HM_TYPE_VOLUME) ||
              (type == HM_TYPE_VOLDIR))) {
             printf("%s is not a file (%x)\n", name, type);
-            sm_close(handle);
+            sm_fclose(handle);
             return (RC_FAILURE);
         }
         if ((rm_type == RM_TYPE_DIR) &&
             (type != HM_TYPE_DIR) && (type != HM_TYPE_VOLUME) &&
             (type != HM_TYPE_VOLDIR)) {
             printf("%s is not a directory (%x)\n", name, type);
-            sm_close(handle);
+            sm_fclose(handle);
             return (RC_FAILURE);
         }
-        sm_close(handle);
+        sm_fclose(handle);
     }
-    return (sm_delete(cwd_handle, name));
+    return (sm_fdelete(cwd_handle, name));
 }
 
 rc_t
@@ -2735,7 +2671,7 @@ main(int argc, char *argv[])
     if (cwd != NULL)
         free(cwd);
     if (cwd_handle != 0xffffffff)
-        sm_close(cwd_handle);
+        sm_fclose(cwd_handle);
     if (save_currentdir != 0) {
         BPTR old_lock = CurrentDir(save_currentdir);
         UnLock(old_lock);

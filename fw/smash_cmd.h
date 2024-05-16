@@ -279,11 +279,9 @@
  * an artifact of how the STM32 DMA works with GPIO ports. The USB host is
  * responsible for byte swapping messages, both for receive and transmit.
  * A message payload includes the following header structure:
- *      uint32_t km_handler;   // Amiga-side handler
  *      uint8_t  km_op;        // Operation to perform (KM_OP_*)
  *      uint8_t  km_status;    // Status reply
- *      uint8_t  km_tag;       // Sequence number
- *      uint8_t  km_unused;    // Reserved
+ *      uint16_t km_tag;       // Sequence number
  * All header fields except the status reply are preserved from a request
  * message to the reply message.
  */

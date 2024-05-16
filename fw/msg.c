@@ -1452,10 +1452,21 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     }
                 }
             }
-            if (rc != 0)
+            if (rc != 0) {
                 ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
-            else
+            } else {
+#if 0
+                uint16_t space_avail;
+                if ((cmd & KS_MSG_ALTBUF) == 0)
+                    space_avail = SPACE_AVAIL_ATOU;
+                else
+                    space_avail = SPACE_AVAIL_UTOA;
+                ks_reply(0, KS_STATUS_OK, sizeof (space_avail), &space_avail,
+                         0, NULL);
+#else
                 ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+#endif
+            }
             break;
         }
         case KS_CMD_MSG_RECEIVE: {
@@ -2368,6 +2379,14 @@ msg_usb_service(void)
             }
         }
     }
+}
+
+void
+msg_shutdown(void)
+{
+    timer_disable_irq(TIM5, TIM_DIER_CC1IE);
+    dma_disable_channel(DMA1, DMA_CHANNEL5);  // TIM2
+    dma_disable_channel(DMA2, DMA_CHANNEL5);  // TIM5
 }
 
 void

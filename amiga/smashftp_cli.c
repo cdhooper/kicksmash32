@@ -115,6 +115,10 @@ static const cmd_t cmd_list[] = {
 static const char *do_not_eval_cmds[] = {
     "get",
     "put",
+    "chmod",
+    "protect",
+    "lchmod",
+    "lprotect",
 };
 
 static uint

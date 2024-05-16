@@ -16,6 +16,7 @@ int      address_log_replay(uint max);
 void     bus_snoop(uint mode);
 void     msg_poll(void);
 void     msg_init(void);
+void     msg_shutdown(void);
 void     msg_mode(uint mode);
 void     msg_usb_service(void);
 

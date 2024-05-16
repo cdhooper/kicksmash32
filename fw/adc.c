@@ -137,6 +137,12 @@ adc_init(void)
     adc_start_conversion_regular(adcbase);
 }
 
+void
+adc_shutdown(void)
+{
+    dma_disable_channel(DMA1, DMA_CHANNEL1);
+}
+
 static void
 print_reading(int value, char *suffix)
 {

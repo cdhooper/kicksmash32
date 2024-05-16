@@ -17,6 +17,7 @@
 
 #include <stdio.h>
 #include <exec/execbase.h>
+#include <memory.h>
 #include "crc32.h"
 #include "sm_msg.h"
 #include "smash_cmd.h"
@@ -31,6 +32,50 @@ uint smash_cmd_shift = 2;
 extern uint flag_debug;
 
 static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
+
+static char
+printable_ascii(uint8_t ch)
+{
+    if (ch >= ' ' && ch <= '~')
+        return (ch);
+    if (ch == '\t' || ch == '\r' || ch == '\n' || ch == '\0')
+        return (' ');
+    return ('.');
+}
+
+void
+dump_memory(void *buf, uint len, uint dump_base)
+{
+    uint pos;
+    uint strpos;
+    char str[20];
+    uint32_t *src = buf;
+
+    len = (len + 3) / 4;
+    if (dump_base != DUMP_VALUE_UNASSIGNED)
+        printf("%05x:", dump_base);
+    for (strpos = 0, pos = 0; pos < len; pos++) {
+        uint32_t val = src[pos];
+        printf(" %08x", val);
+        str[strpos++] = printable_ascii(val >> 24);
+        str[strpos++] = printable_ascii(val >> 16);
+        str[strpos++] = printable_ascii(val >> 8);
+        str[strpos++] = printable_ascii(val);
+        if ((pos & 3) == 3) {
+            str[strpos] = '\0';
+            strpos = 0;
+            printf(" %s\n", str);
+            if ((dump_base != DUMP_VALUE_UNASSIGNED) && ((pos + 1) < len)) {
+                dump_base += 16;
+                printf("%05x:", dump_base);
+            }
+        }
+    }
+    if ((pos & 3) != 0) {
+        str[strpos] = '\0';
+        printf("%*s%s\n", (4 - (pos & 3)) * 5, "", str);
+    }
+}
 
 /*
  * send_cmd_core
@@ -253,12 +298,245 @@ send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
     return (rc);
 }
 
-
 void
 msg_init(void)
 {
     cpu_control_init();
 }
+
+static uint
+recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
+{
+    uint rc;
+    rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
+    while (rc == KS_STATUS_NODATA) {
+        cia_spin(CIA_USEC(400));
+        rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
+        if (timeout_ms-- == 0)
+            break;
+    }
+    if (rc == KS_CMD_MSG_SEND)
+        rc = KM_STATUS_OK;
+    if (rc != KM_STATUS_OK) {
+        printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
+        if (flag_debug)
+            dump_memory(buf, 0x40, DUMP_VALUE_UNASSIGNED);
+    }
+    return (rc);
+}
+
+
+/*
+ * host_tag_alloc
+ * --------------
+ * Allocate and return a new host message tag. See host_tag_free().
+ */
+uint
+host_tag_alloc(void)
+{
+    /* XXX: Fake "allocator" for now */
+    static uint16_t tag = 0;
+    return (tag++);
+}
+
+/*
+ * host_tag_free
+ * -------------
+ * Deallocate the specified host message tag.
+ */
+void
+host_tag_free(uint tag)
+{
+    /* XXX: Fake "allocator" for now */
+    (void) tag;
+}
+
+#define SEND_MSG_MAX 2000
+
+/*
+ * host_send_msg
+ * -------------
+ * Send a message to the USB Host.
+ *
+ * smsg is the message to send.
+ * slen is the length of the message to send.
+ * rdata will be assigned a pointer to the received data. The caller is
+ *     is not responsible for allocating or freeing the returned buffer.
+ * rlen will be assigned the length of the received message.
+ */
+uint
+host_send_msg(void *smsg, uint len)
+{
+    uint8_t savebuf[sizeof (km_msg_hdr_t)];
+    uint32_t rbuf[16];
+    uint sendlen = len;
+    uint pos;
+    uint rc;
+
+    if (sendlen > SEND_MSG_MAX)
+        sendlen = SEND_MSG_MAX;
+
+    rc = send_cmd(KS_CMD_MSG_SEND, smsg, sendlen, rbuf, sizeof (rbuf), NULL);
+    if ((rc == 0) && (sendlen < len)) {
+        uint timeout = 0;
+        pos = sendlen - sizeof (km_msg_hdr_t);
+
+        while (pos < len - sizeof (km_msg_hdr_t)) {
+            if (sendlen > len - pos)
+                sendlen = len - pos;
+
+            memcpy(savebuf, smsg + pos, sizeof (km_msg_hdr_t));
+            memcpy(smsg + pos, smsg, sizeof (km_msg_hdr_t));
+
+#undef DEBUG_SEND_MSG
+#ifdef DEBUG_SEND_MSG
+            printf("send %x pos=%x of %x\n", sendlen, pos, len);
+#endif
+            rc = send_cmd(KS_CMD_MSG_SEND, smsg + pos, sendlen, NULL, 0, NULL);
+            memcpy(smsg + pos, savebuf, sizeof (km_msg_hdr_t));
+// XXX: If we get KS_STATUS_BADLEN, this means that there wasn't enough
+//      space available in the KS buffer. Try again.
+
+            if (rc == KS_STATUS_BADLEN) {
+                if (timeout++ < 10) {
+                    cia_spin(CIA_USEC(1000));
+                    continue;
+                }
+                printf("send msg buffer timeout at pos=%x of %x: %s\n",
+                       pos, len, smash_err(rc));
+                break;
+            }
+            if (rc != 0) {
+                printf("send msg failed at pos=%x of %x: %s\n",
+                       pos, len, smash_err(rc));
+                break;
+            }
+            timeout = 0;
+            pos += sendlen - sizeof (km_msg_hdr_t);
+        }
+    }
+    if (rc != 0) {
+        printf("Send message l=%u failed: %d (%s)\n",
+               len, rc, smash_err(rc));
+        if (flag_debug)
+            dump_memory(rbuf, sizeof (rbuf), DUMP_VALUE_UNASSIGNED);
+    }
+    return (rc);
+}
+
+/*
+ * host_recv_msg
+ * -------------
+ * Receive a single message from the USB host, returning a pointer to the
+ * buffer containing the message content.
+ *
+ * tag is the unique message tag for this transaction; see host_tag_alloc().
+ * rdata is a pointer which will be assigned the address where the received
+ *     message will be returned.
+ * rlen is a pointer to the received data length which will be returned.
+ */
+uint
+host_recv_msg(uint tag, void **rdata, uint *rlen)
+{
+    static uint8_t buf[4200];
+    km_msg_hdr_t *msg = (km_msg_hdr_t *)buf;
+    uint rc;
+    uint rxlen;
+    uint count;
+
+    for (count = 0; count < 50; count++) {
+        rc = recv_msg(buf, sizeof (buf), &rxlen, 1000);
+        if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF))
+            return (rc);
+        if (tag == msg->km_tag) {
+            /* Got desired message */
+            if (rxlen > sizeof (buf)) {
+                printf("BUG: Rx message op=%x stat=%x too large (%u > %u)\n",
+                       msg->km_op, msg->km_status, rxlen, sizeof (buf));
+                rxlen = sizeof (buf);
+            }
+            *rlen = rxlen;
+            *rdata = buf;
+            if (rc == KM_STATUS_OK)
+                rc = msg->km_status;
+            return (rc);
+        }
+        // XXX: Need to save this message as it's not for the current caller
+        printf("Discarded message op=%02x status=%02x tag=%04x (want %04x)\n",
+               msg->km_op, msg->km_status, msg->km_tag, tag);
+    }
+    printf("Message receive timeout\n");
+    return (KM_STATUS_FAIL);
+}
+
+/*
+ * host_recv_msg_cont
+ * ------------------
+ * Continue the previous message receive, stripping the header and just
+ * copying data to the specified buffer.
+ *
+ * tag is the unique message tag for this transaction; see host_tag_alloc().
+ *     It should be the same tag which was used to receive the lead message.
+ * buf is a pointer to the buffer for the remaining message payload.
+ * buf_len is the number of bytes to receive, across however many messages
+ *     is takes to receive them.
+ */
+uint
+host_recv_msg_cont(uint tag, void *buf, uint buf_len)
+{
+    uint8_t *rdata;
+    uint     rcvlen;
+    uint     cur_len = 0;
+    uint     rc;
+
+    while (cur_len < buf_len) {
+        rc = host_recv_msg(tag, (void **) &rdata, &rcvlen);
+        if (rc == KM_STATUS_EOF)
+            rc = KM_STATUS_OK;
+        if (rc != KM_STATUS_OK) {
+            printf("next pkt failed at %u of %u: %s\n",
+                   cur_len, buf_len, smash_err(rc));
+            return (rc);
+        }
+        if (rcvlen + cur_len > buf_len + sizeof (km_msg_hdr_t)) {
+            printf("next pkt bad rcvlen %x\n", rcvlen);
+            return (KM_STATUS_FAIL);
+        }
+        if (rcvlen >= sizeof (km_msg_hdr_t))
+            rcvlen -= sizeof (km_msg_hdr_t);
+        else
+            rcvlen = 0;
+
+        memcpy(buf + cur_len, rdata + sizeof (km_msg_hdr_t), rcvlen);
+        cur_len += rcvlen;
+    }
+    return (KM_STATUS_OK);
+}
+
+/*
+ * host_msg
+ * --------
+ * Send a message and wait for a single reply message. This function will
+ * only return the first message of a multiple message reply. If there is
+ * further data pending, use host_recv_msg_cont() to receive the remaining
+ * message data.
+ *
+ * smsg is the message to send.
+ * slen is the length of the message to send.
+ * rdata will be assigned a pointer to the received data. The caller is
+ *     is not responsible for allocating or freeing the returned buffer.
+ * rlen will be assigned the length of the received message.
+ */
+uint
+host_msg(void *smsg, uint slen, void **rdata, uint *rlen)
+{
+    km_msg_hdr_t *smsg_h = (km_msg_hdr_t *) smsg;
+    uint rc = host_send_msg(smsg, slen);
+    if (rc != 0)
+        return (rc);
+    return (host_recv_msg(smsg_h->km_tag, rdata, rlen));
+}
+
 
 static const char *const ks_status_s[] = {
     "OK",                               // KS_STATUS_OK
@@ -273,15 +551,15 @@ static const char *const ks_status_s[] = {
 STATIC_ASSERT(ARRAY_SIZE(ks_status_s) == (KS_STATUS_LAST_ENT >> 8));
 
 static const char *const km_status_s[] = {
-    "OK",
-    "FAIL",
-    "EOF",
-    "UNKCMD",
-    "PERM",
-    "INVALID",
-    "NOTEMPTY",
-    "NOEXIST",
-    "EXIST"
+    "OK",                               // KM_STATUS_OK
+    "FAIL",                             // KM_STATUS_FAIL
+    "EOF",                              // KM_STATUS_EOF
+    "UNKCMD",                           // KM_STATUS_UNKCMD
+    "PERM",                             // KM_STATUS_PERM
+    "INVALID",                          // KM_STATUS_INVALID
+    "NOTEMPTY",                         // KM_STATUS_NOTEMPTY
+    "NOEXIST",                          // KM_STATUS_NOEXIST
+    "EXIST"                             // KM_STATUS_EXIST
 };
 STATIC_ASSERT(ARRAY_SIZE(km_status_s) == KM_STATUS_LAST_ENTRY);
 
@@ -293,7 +571,10 @@ static const char *const msg_status_s[] = {
     "Msg Invalid data",                 // MSG_STATUS_BAD_DATA
     "Msg Program/erase timeout",        // MSG_STATUS_PRG_TMOUT
     "Msg Program/erase failure",        // MSG_STATUS_PRG_FAIL
+    "Msg Insufficient memory",          // MSG_STATUS_NO_MEM
 };
+STATIC_ASSERT(ARRAY_SIZE(msg_status_s) ==
+              (MSG_STATUS_FAIL - MSG_STATUS_LAST_ENTRY));
 
 /*
  * smash_err

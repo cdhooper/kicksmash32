@@ -6,11 +6,11 @@
  *
  * ---------------------------------------------------------------------
  *
- * Smash FTP command.
+ * Smash FTP commands.
  */
 
-#ifndef _FTP_H
-#define _FTP_H
+#ifndef _SMASHFTP_H
+#define _SMASHFTP_H
 
 rc_t cmd_cd(int argc, char * const *argv);
 rc_t cmd_chmod(int argc, char * const *argv);
@@ -41,5 +41,4 @@ rc_t parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr);
 extern const char cmd_time_help[];
 extern const char cmd_version_help[];
 
-#endif /* _FTP_H */
-
+#endif /* _SMASHFTP_H */

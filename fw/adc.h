@@ -13,6 +13,7 @@
 #define _ADC_H
 
 void adc_init(void);
+void adc_shutdown(void);
 void adc_show_sensors(void);
 void adc_poll(int verbose, int force);
 

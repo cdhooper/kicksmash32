@@ -48,7 +48,7 @@
 #define HM_TYPE_LINK        0x0003  // Symbolic (soft) link
 #define HM_TYPE_HLINK       0x0004  // Hard link
 #define HM_TYPE_BDEV        0x0005  // Block device
-#define HM_TYPE_CDEV        0x0006  // Block device
+#define HM_TYPE_CDEV        0x0006  // Character device
 #define HM_TYPE_FIFO        0x0007  // FIFO
 #define HM_TYPE_SOCKET      0x0008  // Socket
 #define HM_TYPE_WHTOUT      0x0009  // Whiteout entry

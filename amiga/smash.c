@@ -43,7 +43,7 @@ extern struct iob ** __iob;
 typedef unsigned char  uint8_t;
 typedef unsigned short uint16_t;
 typedef unsigned long  uint32_t;
-typedef struct { unsigned long hi; unsigned long lo;} uint64_t;
+typedef struct { unsigned long hi; unsigned long lo; } uint64_t;
 #define __packed
 #else
 struct ExecBase *DOSBase;
@@ -258,50 +258,6 @@ long_to_short(const char *ptr, long_to_short_t *ltos, uint ltos_count)
         if (strcmp(ptr, ltos[cur].long_name) == 0)
             return (ltos[cur].short_name);
     return (ptr);
-}
-
-static char
-printable_ascii(uint8_t ch)
-{
-    if (ch >= ' ' && ch <= '~')
-        return (ch);
-    if (ch == '\t' || ch == '\r' || ch == '\n' || ch == '\0')
-        return (' ');
-    return ('.');
-}
-
-static void
-dump_memory(void *buf, uint len, uint dump_base)
-{
-    uint pos;
-    uint strpos;
-    char str[20];
-    uint32_t *src = buf;
-
-    len = (len + 3) / 4;
-    if (dump_base != VALUE_UNASSIGNED)
-        printf("%05x:", dump_base);
-    for (strpos = 0, pos = 0; pos < len; pos++) {
-        uint32_t val = src[pos];
-        printf(" %08x", val);
-        str[strpos++] = printable_ascii(val >> 24);
-        str[strpos++] = printable_ascii(val >> 16);
-        str[strpos++] = printable_ascii(val >> 8);
-        str[strpos++] = printable_ascii(val);
-        if ((pos & 3) == 3) {
-            str[strpos] = '\0';
-            strpos = 0;
-            printf(" %s\n", str);
-            if ((dump_base != VALUE_UNASSIGNED) && ((pos + 1) < len)) {
-                dump_base += 16;
-                printf("%05x:", dump_base);
-            }
-        }
-    }
-    if ((pos & 3) != 0) {
-        str[strpos] = '\0';
-        printf("%*s%s\n", (4 - (pos & 3)) * 5, "", str);
-    }
 }
 
 /*
@@ -579,7 +535,7 @@ smash_identify(void)
     if (rc != 0) {
         printf("Reply message failure: %d (%s)\n", (int) rc, smash_err(rc));
         if (flag_debug)
-            dump_memory(&id, rlen, VALUE_UNASSIGNED);
+            dump_memory(&id, rlen, DUMP_VALUE_UNASSIGNED);
         return (rc);
     }
     if (flag_quiet == 0) {
@@ -643,7 +599,7 @@ smash_test_pattern(void)
     if (rc != 0) {
         printf("Reply message failure: %d (%s)\n", (int) rc, smash_err(rc));
         if (flag_debug)
-            dump_memory(reply_buf, rlen, VALUE_UNASSIGNED);
+            dump_memory(reply_buf, rlen, DUMP_VALUE_UNASSIGNED);
         show_test_state("Test pattern", rc);
         return (rc);
     }
@@ -655,7 +611,7 @@ smash_test_pattern(void)
     if (start == ARRAY_SIZE(reply_buf)) {
         printf("No test pattern marker [%08x] in reply\n", test_pattern[0]);
 fail:
-        dump_memory(reply_buf, sizeof (reply_buf), VALUE_UNASSIGNED);
+        dump_memory(reply_buf, sizeof (reply_buf), DUMP_VALUE_UNASSIGNED);
         show_test_state("Test pattern", 1);
         return (1);
     }
@@ -677,7 +633,7 @@ fail:
     if (err_count > 6)
         goto fail;
     if (flag_debug > 1)
-        dump_memory(reply_buf, sizeof (reply_buf), VALUE_UNASSIGNED);
+        dump_memory(reply_buf, sizeof (reply_buf), DUMP_VALUE_UNASSIGNED);
     show_test_state("Test pattern", 0);
     return (0);
 }
@@ -732,11 +688,11 @@ fail_handle_debug:
             for (pos = 0; pos < nums; pos++)
                 if (rxp[pos] != txp[pos])
                     break;
-            dump_memory(tx_buf, nums, VALUE_UNASSIGNED);
+            dump_memory(tx_buf, nums, DUMP_VALUE_UNASSIGNED);
             if (pos < nums) {
                 printf("--- Tx above  Rx below --- ");
                 printf("First diff at 0x%x of 0x%x\n", pos, nums);
-                dump_memory(rx_buf, rlen, VALUE_UNASSIGNED);
+                dump_memory(rx_buf, rlen, DUMP_VALUE_UNASSIGNED);
             } else {
                 printf("Tx and Rx buffers (len=0x%x) match\n", nums);
             }
@@ -805,7 +761,7 @@ smash_test_loopback_perf(void)
         } else {
             printf("FAIL: %d (%s)\n", rc, smash_err(rc));
             if (flag_debug) {
-                dump_memory(buf, lb_size, VALUE_UNASSIGNED);
+                dump_memory(buf, lb_size, DUMP_VALUE_UNASSIGNED);
             }
             goto cleanup;
         }
@@ -848,7 +804,7 @@ recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
     if (rc != 0) {
         printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
         if (flag_debug)
-            dump_memory(buf, 0x40, VALUE_UNASSIGNED);
+            dump_memory(buf, 0x40, DUMP_VALUE_UNASSIGNED);
     }
     return (rc);
 }
@@ -868,7 +824,7 @@ recv_msg_loopback(void *buf, uint len, uint *rlen, uint which_buf)
     if (rc != 0) {
         printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
         if (flag_debug)
-            dump_memory(buf, 0x40, VALUE_UNASSIGNED);
+            dump_memory(buf, 0x40, DUMP_VALUE_UNASSIGNED);
     }
     return (rc);
 }
@@ -888,7 +844,7 @@ send_msg_loopback(void *buf, uint len, uint which_buf)
         printf("Send message buf%s l=%u failed: %d (%s)\n",
                which_buf ? " alt" : "", len, rc, smash_err(rc));
         if (flag_debug)
-            dump_memory(rbuf, sizeof (rbuf), VALUE_UNASSIGNED);
+            dump_memory(rbuf, sizeof (rbuf), DUMP_VALUE_UNASSIGNED);
     }
     return (rc);
 }
@@ -1157,7 +1113,6 @@ fail:
                    calc_kb_sec(time_w[1], 2 * 10 * 0x100),
                    calc_kb_sec(time_r[0], 2 * 10 * 0x30),
                    calc_kb_sec(time_r[1], 2 * 10 * 0x100));
-//          printf(" w1=%u w2=%u r1=%u r2=%u\n", time_w[0], time_w[1], time_r[0], time_r[1]);
             return (0);
         }
     } else {
@@ -1601,7 +1556,7 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
         if (flag_debug) {
             printf("Flash ID: %svalid\n", rc1 ? "in" : "");
             if (flag_debug > 1)
-                dump_memory(data, sizeof (data) / 2, VALUE_UNASSIGNED);
+                dump_memory(data, sizeof (data) / 2, DUMP_VALUE_UNASSIGNED);
         }
     }
     if (rc1 == 0) {
@@ -3214,7 +3169,7 @@ get_ks_clock(uint *sec, uint *usec)
     if (rc != 0) {
         printf("Get clock failed: %d (%s)\n", rc, smash_err(rc));
         if (flag_debug)
-            dump_memory(clock, sizeof (clock), VALUE_UNASSIGNED);
+            dump_memory(clock, sizeof (clock), DUMP_VALUE_UNASSIGNED);
         *sec = 0;
         *usec = 0;
     } else {

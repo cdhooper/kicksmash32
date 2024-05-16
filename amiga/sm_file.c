@@ -13,173 +13,65 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include "cpu_control.h"
+#include <exec/memory.h>
+#include <inline/exec.h>
 #include "smash_cmd.h"
 #include "host_cmd.h"
 #include "sm_msg.h"
 #include "sm_file.h"
 
-#define VALUE_UNASSIGNED 0xffffffff
+extern struct ExecBase *SysBase;
 
-#ifndef RC_SUCCESS
-#define RC_SUCCESS 0
-#define RC_FAILURE 1
-#endif
+extern uint     flag_debug;
 
-#ifndef UNUSED
-#define UNUSED(x) (void)(x)
-#endif
+static uint     sm_mbuf_size = 0;
+static uint8_t *sm_mbuf      = NULL;
 
-extern struct ExecBase *DOSBase;
-extern uint flag_debug;
-
-static char
-printable_ascii(uint8_t ch)
-{
-    if (ch >= ' ' && ch <= '~')
-        return (ch);
-    if (ch == '\t' || ch == '\r' || ch == '\n' || ch == '\0')
-        return (' ');
-    return ('.');
-}
-
-static void
-dump_memory(void *buf, uint len, uint dump_base)
-{
-    uint pos;
-    uint strpos;
-    char str[20];
-    uint32_t *src = buf;
-
-    len = (len + 3) / 4;
-    if (dump_base != VALUE_UNASSIGNED)
-        printf("%05x:", dump_base);
-    for (strpos = 0, pos = 0; pos < len; pos++) {
-        uint32_t val = src[pos];
-        printf(" %08x", val);
-        str[strpos++] = printable_ascii(val >> 24);
-        str[strpos++] = printable_ascii(val >> 16);
-        str[strpos++] = printable_ascii(val >> 8);
-        str[strpos++] = printable_ascii(val);
-        if ((pos & 3) == 3) {
-            str[strpos] = '\0';
-            strpos = 0;
-            printf(" %s\n", str);
-            if ((dump_base != VALUE_UNASSIGNED) && ((pos + 1) < len)) {
-                dump_base += 16;
-                printf("%05x:", dump_base);
-            }
-        }
-    }
-    if ((pos & 3) != 0) {
-        str[strpos] = '\0';
-        printf("%*s%s\n", (4 - (pos & 3)) * 5, "", str);
-    }
-}
-
-static uint
-recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
-{
-    uint rc;
-    rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
-    while (rc == KS_STATUS_NODATA) {
-        cia_spin(CIA_USEC(100));
-        rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
-        if (timeout_ms-- == 0)
-            break;
-    }
-    if (rc == KS_CMD_MSG_SEND)
-        rc = RC_SUCCESS;
-    if (rc != RC_SUCCESS) {
-        printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
-        if (flag_debug)
-            dump_memory(buf, 0x40, VALUE_UNASSIGNED);
-    }
-    return (rc);
-}
-
-
-// relocate to host_cmd.c
-static uint
-host_tag_alloc(void)
-{
-    /* XXX: Fake "allocator" for now */
-    static uint16_t tag = 0;
-    return (tag++);
-}
-
-static void
-host_tag_free(uint tag)
-{
-    /* XXX: Fake "allocator" for now */
-    UNUSED(tag);
-}
-
-// relocate to host_cmd.c
-uint host_send_msg(void *msg, uint len);
-
+/*
+ * sm_fopen
+ * --------
+ * Open the specified file, returning a file handle.
+ *
+ * parent_handle is the parent directory for file names which do not
+ *     specify an absolute path to the file. If the file name begins
+ *     with "::" then it is a fully specified absolute path; the
+ *     parent handle will be ignored in that case. If the file name
+ *     begins with ":" then the parent handle will be used only to
+ *     reference the appropriate volume as a starting point. If the
+ *     parent handle has a value of 0, the Volume Directory will be
+ *     used as the file name starting point. If the parent handle has
+ *     a value of -1 (0xffffffff), the default volume will be used as
+ *     the file name starting point. If hostsmash is not started with
+ *     a -M option, then the Volume Directory will be used as the
+ *     default volume.
+ * name specifies the file name path to open.
+ * mode is a combination of HM_MODE_*
+ *      HM_MODE_READ opens the file or directory for read access
+ *      HM_MODE_WRITE opens the file for write access
+ *      HM_MODE_RDWR opens the file for read and write access
+ *      HM_MODE_APPEND opens the file for write access, appending to
+ *              existing content.
+ *      HM_MODE_CREATE opens a file for write, creating the file if it
+ *              does not already exist. create_perms are then applied
+ *              to the file's permissions. These permissions are
+ *              specified as Amiga fib_Protection bits (FIBF_READ, etc).
+ *      HM_MODE_TRUNC opens a file for write, truncating all content
+ *              beyond the current seek position.
+ *      HM_MODE_DIR opens a directory or file for read of file STAT
+ *              information. See the hm_fdirent_t data structure for
+ *              data format returned from reads.
+ *      HM_MODE_READDIR is a short-hand for HM_MODE_READ and HM_MODE_DIR.
+ * hm_type is a pointer to the file type which was successfully opened. It
+ *      will be one of HM_TYPE_*.
+ * create_perms are the permissions to apply to the created file (see
+ *      HM_MODE_CREATE above). See sm_fsetprotect() for more information
+ *      on file permissions.
+ * handle is a pointer to the new file handle which will be returned if
+ *     the open is successful.
+ */
 uint
-host_send_msg(void *smsg, uint slen)
-{
-    uint32_t rbuf[16];
-    uint rc = send_cmd(KS_CMD_MSG_SEND, smsg, slen, rbuf, sizeof (rbuf), NULL);
-    if (rc != 0) {
-        printf("Send message l=%u failed: %d (%s)\n",
-               slen, rc, smash_err(rc));
-        if (flag_debug)
-            dump_memory(rbuf, sizeof (rbuf), VALUE_UNASSIGNED);
-    }
-    return (rc);
-}
-
-uint
-host_recv_msg(uint tag, void **rdata, uint *rlen)
-{
-    static uint8_t buf[4200];
-    km_msg_hdr_t *msg = (km_msg_hdr_t *)buf;
-    uint rc;
-    uint rxlen;
-    uint count;
-
-    for (count = 0; count < 50; count++) {
-        rc = recv_msg(buf, sizeof (buf), &rxlen, 1000);
-        if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF))
-            return (rc);
-        if (tag == msg->km_tag) {
-            /* Got desired message */
-            if (rxlen > sizeof (buf)) {
-                printf("BUG: Rx message op=%x stat=%x too large (%u > %u)\n",
-                       msg->km_op, msg->km_status, rxlen, sizeof (buf));
-                rxlen = sizeof (buf);
-            }
-            *rlen = rxlen;
-            *rdata = buf;
-            return (KM_STATUS_OK);
-        }
-        if (rc == KM_STATUS_EOF)
-            return (rc);
-        // XXX: Need to save this message as it's not for the current caller
-        printf("Discarded message op=%02x status=%02x tag=%04x\n",
-               msg->km_op, msg->km_status, msg->km_tag);
-        Delay(1);
-    }
-    printf("Message receive timeout\n");
-    return (KM_STATUS_FAIL);
-}
-
-uint
-host_msg(void *smsg, uint slen, void **rdata, uint *rlen)
-{
-    km_msg_hdr_t *smsg_h = (km_msg_hdr_t *) smsg;
-    uint rc = host_send_msg(smsg, slen);
-    if (rc != 0)
-        return (rc);
-    return (host_recv_msg(smsg_h->km_tag, rdata, rlen));
-}
-
-uint
-sm_open(handle_t parent_handle, const char *name, uint mode, uint *type,
-        uint create_perms, handle_t *handle)
+sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
+         uint create_perms, handle_t *handle)
 {
     uint msglen;
     uint rc;
@@ -206,56 +98,66 @@ sm_open(handle_t parent_handle, const char *name, uint mode, uint *type,
     msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_handle        = parent_handle;  // parent directory handle
     msg->hm_mode          = mode;           // open mode
+    msg->hm_type          = 0;              // unused
     msg->hm_aperms        = create_perms;   // Amiga permissions
 
     strcpy((char *)(msg + 1), name);  // Name follows message header
 
     rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
-    if (rc == RC_SUCCESS) {
-        rc = rdata->hm_hdr.km_status;
+    if (rc == KM_STATUS_OK)
         *handle = rdata->hm_handle;
-    }
-    if (type != NULL)
-        *type = rdata->hm_type;
-    host_tag_free(rdata->hm_hdr.km_tag);
+
+    if (hm_type != NULL)
+        *hm_type = rdata->hm_type;
+    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }
 
+/*
+ * sm_fclose
+ * ---------
+ * Close a previously opened file handle.
+ *
+ * handle is the remote file handle: see sm_fopen().
+ */
 uint
-sm_close(handle_t handle)
+sm_fclose(handle_t handle)
 {
     uint rc;
     uint rlen;
     hm_fopenhandle_t *rdata;
     hm_fopenhandle_t msg;
+
     msg.hm_hdr.km_op     = KM_OP_FCLOSE;
     msg.hm_hdr.km_status = 0;
     msg.hm_hdr.km_tag    = host_tag_alloc();
     msg.hm_handle        = handle;
 
-    if (host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen) == RC_SUCCESS)
-        rc = RC_SUCCESS;
-    else
-        rc = RC_FAILURE;
-    host_tag_free(rdata->hm_hdr.km_tag);
+    rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
+    host_tag_free(msg.hm_hdr.km_tag);
+
+    if (sm_mbuf != NULL) {
+        free(sm_mbuf);
+        sm_mbuf = NULL;
+    }
     return (rc);
 }
 
 /*
- * sm_read
- * -------
+ * sm_fread
+ * --------
  * Returns data contents from the USB host's file handle, which could
  * be from the contents of a file or directory entries.
  *
- * handle is the remote file handle: see sm_open().
+ * handle is the remote file handle: see sm_fopen().
  * readsize is the maximum size of data to acquire.
  * data is a pointer which is returned by this function.
  *      Note that data is from a static buffer not allocated by the caller.
  * rlen is the size of the received content (pointed to by data).
  */
 uint
-sm_read(handle_t handle, uint readsize, void **data, uint *rlen)
+sm_fread(handle_t handle, uint readsize, void **data, uint *rlen)
 {
     uint rc;
     hm_freadwrite_t msg;
@@ -268,19 +170,15 @@ sm_read(handle_t handle, uint readsize, void **data, uint *rlen)
     msg.hm_handle        = handle;
     msg.hm_length        = readsize;
 
-    if (host_msg(&msg, sizeof (msg), (void **) &rdata, &rcvlen) == RC_SUCCESS) {
-        rc = RC_SUCCESS;
-    } else {
-        rc = RC_FAILURE;
-        goto sm_read_fail;
-    }
-    rc = rdata->hm_hdr.km_status;
-//  printf("read km_status=%d rlen=%x\n", rc, rcvlen);
+    rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rcvlen);
+
+//  printf("read rc=%d rlen=%x\n", rc, rcvlen);
     if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF)) {
         rcvlen = 0;
         goto sm_read_fail;
     }
 
+// printf("sm_fread(%x) rawlen=%x", readsize, rcvlen);
     if (rcvlen > readsize + sizeof (msg)) {
         printf("bad rcvlen %x\n", rcvlen);
         rcvlen = readsize + sizeof (msg);
@@ -292,19 +190,55 @@ sm_read(handle_t handle, uint readsize, void **data, uint *rlen)
         rcvlen = 0;
     *data = (void *) (rdata + 1);
 
+    if (rcvlen != rdata->hm_length) {
+        /* More packets are inbound */
+        uint total_len = rdata->hm_length;
+        uint tag = msg.hm_hdr.km_tag;
+
+//      printf("got %x of %x\n", cur_len, total_len);
+        if ((sm_mbuf == NULL) || (total_len >= sm_mbuf_size))  {
+            if (sm_mbuf != NULL)
+                free(sm_mbuf);
+            sm_mbuf      = malloc(total_len);
+            sm_mbuf_size = total_len;
+        }
+        if (sm_mbuf == NULL) {
+            printf("malloc(%u) failed\n", total_len);
+            rc = MSG_STATUS_NO_MEM;
+            goto sm_read_fail;
+        }
+        memcpy(sm_mbuf, (rdata + 1), rcvlen);
+        rc = host_recv_msg_cont(tag, sm_mbuf + rcvlen, total_len - rcvlen);
+        if (rc != KM_STATUS_OK)
+            goto sm_read_fail;
+        rcvlen = total_len;
+        *data = (void *) sm_mbuf;
+    }
 sm_read_fail:
     if (rlen != NULL)
         *rlen = rcvlen;
-    if ((rc != RC_SUCCESS) && flag_debug)
-        dump_memory(rdata, rcvlen, VALUE_UNASSIGNED);
+    if ((rc != KM_STATUS_OK) && flag_debug)
+        dump_memory(rdata, rcvlen, DUMP_VALUE_UNASSIGNED);
 
-    // XXX: In the future, only free the tag once all data is received
     host_tag_free(msg.hm_hdr.km_tag);
     return (rc);
 }
 
+/*
+ * sm_fwrite
+ * ---------
+ * Sends data to be written to the USB host's specified file handle.
+ *
+ * handle is the remote file handle: see sm_fopen().
+ * buf is the data to be written, following uninitialized space reserved
+ *     for a hm_freadwrite_t message header (12 bytes). This may be a bir
+ *     odd for a file API, but it helps reduce the number of data copies
+ *     for a message to be sent.
+ * buflen is the number of bytes to write, which does not include the
+ *     space reserved for the message header.
+ */
 uint
-sm_write(handle_t handle, void *buf, uint buflen)
+sm_fwrite(handle_t handle, void *buf, uint buflen)
 {
     hm_freadwrite_t *msg = buf;
     hm_freadwrite_t *rdata;
@@ -319,15 +253,21 @@ sm_write(handle_t handle, void *buf, uint buflen)
     msg->hm_length        = buflen;
 
     rc = host_msg(msg, msglen, (void **) &rdata, &rcvlen);
-    if (rc == RC_SUCCESS)
-        rc = rdata->hm_hdr.km_status;
-
     host_tag_free(msg->hm_hdr.km_tag);
     return (rc);
 }
 
+/*
+ * sm_fpath
+ * --------
+ * Provides the path name to access the specified handle.
+ *
+ * handle is the remote file handle: see sm_fopen().
+ * name is a pointer which will be assigned by this function to
+ *     point to the full file path of the specified file.
+ */
 uint
-sm_path(handle_t handle, char **name)
+sm_fpath(handle_t handle, char **name)
 {
     uint rc;
     uint rlen;
@@ -340,17 +280,24 @@ sm_path(handle_t handle, char **name)
     msg.hm_handle        = handle;
 
     rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
-    if (rc == RC_SUCCESS) {
+    if (rc == KM_STATUS_OK)
         *name = (char *)(rdata + 1);
-        rc = rdata->hm_hdr.km_status;
-    }
 
-    host_tag_free(rdata->hm_hdr.km_tag);
+    host_tag_free(msg.hm_hdr.km_tag);
     return (rc);
 }
 
+/*
+ * sm_fdelete
+ * ----------
+ * Remove a file on the USB Host.
+ *
+ * handle is the remote parent directory handle: see sm_fopen().
+ * name is the filename to delete. If the name refers to a directory,
+ *     that directory must be empty or the deletion will fail.
+ */
 uint
-sm_delete(handle_t handle, const char *name)
+sm_fdelete(handle_t handle, const char *name)
 {
     uint rc;
     uint namelen = strlen(name) + 1;
@@ -361,13 +308,13 @@ sm_delete(handle_t handle, const char *name)
 
     if (namelen > 2000) {
         printf("Path \"%s\" too long\n", name);
-        return (RC_FAILURE);
+        return (KM_STATUS_FAIL);
     }
     msglen = sizeof (*msg) + namelen;
     msg = malloc(msglen);
     if (msg == NULL) {
-        printf("Failed to allocate %u bytes\n", msglen);
-        return (RC_FAILURE);
+        printf("malloc(%u) fail\n", msglen);
+        return (MSG_STATUS_NO_MEM);
     }
 
     msg->hm_hdr.km_op     = KM_OP_FDELETE;
@@ -376,24 +323,31 @@ sm_delete(handle_t handle, const char *name)
     msg->hm_handle        = handle;
     strcpy((char *)(msg + 1), name);  // Name follows message header
 
-    if (host_msg(msg, msglen, (void **) &rdata, &rlen) == RC_SUCCESS) {
-        rc = RC_SUCCESS;
-        if (rdata->hm_hdr.km_status != KM_STATUS_OK) {
-            printf("Failed to delete %s (%x)\n", name, rdata->hm_hdr.km_status);
-            rc = RC_FAILURE;
-        }
-    } else {
-        rc = RC_FAILURE;
-        printf("Failed to delete %s\n", name);
-    }
+    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    if (rc != KM_STATUS_OK)
+        printf("Failed to delete %s: %s\n", name, smash_err(rc));
 
-    host_tag_free(rdata->hm_hdr.km_tag);
+    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }
 
+/*
+ * sm_frename
+ * ----------
+ * Rename or move a file on the USB Host. The old and new file name
+ * path may be relative to the handle or specify an abolute path.
+ * Absolute paths may cross volume boundaries, so long as the USB
+ * Host permits the move. Unix hosts may reject moves across different
+ * filesystems.
+ *
+ * handle is the remote parent directory handle for both the old name
+ * and the new name: see sm_fopen().
+ * name_old is the filename to be renamed.
+ * name_new is the filename to be renamed.
+ */
 uint
-sm_rename(handle_t handle, const char *name_old, const char *name_new)
+sm_frename(handle_t handle, const char *name_old, const char *name_new)
 {
     uint rc;
     uint len_from  = strlen(name_old) + 1;
@@ -406,14 +360,15 @@ sm_rename(handle_t handle, const char *name_old, const char *name_new)
 
     if (len_total > 2000) {
         printf("Path \"%s\" plus \"%s\" too long\n", name_old, name_new);
-        return (RC_FAILURE);
+        return (MSG_STATUS_BAD_LENGTH);
     }
     msglen = sizeof (*msg) + len_total;
     msg = malloc(msglen);
     if (msg == NULL) {
-        printf("Failed to allocate %u bytes\n", msglen);
-        return (RC_FAILURE);
+        printf("malloc(%u) fail\n", msglen);
+        return (MSG_STATUS_NO_MEM);
     }
+
     msg->hm_hdr.km_op     = KM_OP_FRENAME;
     msg->hm_hdr.km_status = 0;
     msg->hm_hdr.km_tag    = host_tag_alloc();
@@ -421,31 +376,68 @@ sm_rename(handle_t handle, const char *name_old, const char *name_new)
     strcpy((char *)(msg + 1), name_old);  // From name follows message header
     strcpy((char *)(msg + 1) + len_from, name_new);  // To name follows that
 
-    if ((rc = host_msg(msg, msglen, (void **) &rdata, &rlen)) == RC_SUCCESS) {
-        rc = RC_SUCCESS;
-        if (rdata->hm_hdr.km_status != KM_STATUS_OK) {
-            printf("Failed to rename %s to %s (%x)\n",
-                   name_old, name_new, rdata->hm_hdr.km_status);
-            rc = RC_FAILURE;
-        }
-    } else {
-        rc = RC_FAILURE;
-        printf("Failed to rename %s to %s\n", name_old, name_new);
+    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    if (rc != KM_STATUS_OK) {
+        printf("Failed to rename %s to %s: %s\n",
+               name_old, name_new, smash_err(rc));
     }
 
-    host_tag_free(rdata->hm_hdr.km_tag);
+    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }
 
+/*
+ * sm_fcreate
+ * ----------
+ * Create the specified directory, file, or special file.
+ *
+ * parent_handle is the parent directory for file names which do not
+ *     specify an absolute path to the file. If the file name begins
+ *     with "::" then it is a fully specified absolute path; the
+ *     parent handle will be ignored in that case. If the file name
+ *     begins with ":" then the parent handle will be used only to
+ *     reference the appropriate volume as a starting point. If the
+ *     parent handle has a value of 0, the Volume Directory will be
+ *     used as the file name starting point. If the parent handle has
+ *     a value of -1 (0xffffffff), the default volume will be used as
+ *     the file name starting point. If hostsmash is not started with
+ *     a -M option, then the Volume Directory will be used as the
+ *     default volume.
+ * name specifies the file name path to create.
+ * tgt_name is only used in the case of creating a symbolic link. It
+ *     refers to the name of an existing file to which the new link
+ *     should point. There are some special limitations when creating
+ *     a symbolic link. One is that name must refer to a path which
+ *     is relative to tgt_name. The other is that name must not
+ *     already exist. Symbolic link creation may be disabled during
+ *     the USB host software compile.
+ * hm_type is the file type to create. It will be one of HM_TYPE_*.
+ *     HM_TYPE_FILE   is a regular file
+ *     HM_TYPE_DIR    is a Directory.
+ *     HM_TYPE_LINK   is a Symbolic (soft) Link. This type may be
+ *                       specifically disabled on the host.
+ *     HM_TYPE_HLINK  is a Hard Link. This type may be spoecifically
+ *                       disabled on the host.
+ *     HM_TYPE_BDEV   is a Block device.
+ *     HM_TYPE_CDEV   is a Character device.
+ *     HM_TYPE_FIFO   is a FIFO (also known as a pipe).
+ *     HM_TYPE_SOCKET is a TCP socket.
+ *     HM_TYPE_WHTOUT is a whiteout entry for overlay filesystems. This
+ *                       type may not be implemented on the Host.
+ *     HM_TYPE_VOLUME is not permitted as it refers to a drive volume.
+ *     HM_TYPE_VOLDIR is not permitted as it refers to the volume directory.
+ * create_perms are the Amiga protection bits to apply to the created
+ *     file (FIBF_READ, etc). See sm_fsetprotect() for more information
+ *     on file permissions.
+ */
 uint
-sm_create(handle_t parent_handle, const char *name, const char *tgt_name,
-          uint hm_type)
+sm_fcreate(handle_t parent_handle, const char *name, const char *tgt_name,
+           uint hm_type, uint create_perms)
 {
     uint rc;
     uint msglen;
     uint rlen;
-    uint create_perms = 0;
     uint namelen = strlen(name) + 1;
     uint tgtlen = strlen(tgt_name) + 1;
     hm_fopenhandle_t *msg;
@@ -453,13 +445,13 @@ sm_create(handle_t parent_handle, const char *name, const char *tgt_name,
 
     if (namelen + tgtlen > 2000) {
         printf("Path \"%s\" too long\n", name);
-        return (RC_FAILURE);
+        return (MSG_STATUS_BAD_LENGTH);
     }
     msglen = sizeof (*msg) + namelen + tgtlen;
     msg = malloc(msglen);
     if (msg == NULL) {
-        printf("Failed to allocate %u bytes\n", msglen);
-        return (RC_FAILURE);
+        printf("malloc(%u) fail\n", msglen);
+        return (MSG_STATUS_NO_MEM);
     }
 
     msg->hm_hdr.km_op     = KM_OP_FCREATE;
@@ -474,19 +466,49 @@ sm_create(handle_t parent_handle, const char *name, const char *tgt_name,
     strcpy((char *)(msg + 1) + namelen, tgt_name);  // Symlink target follows
 
     rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
-    if (rc == RC_SUCCESS) {
-        rc = rdata->hm_hdr.km_status;
-    } else {
-        printf("Failed to create %s\n", name);
-    }
+    if (rc != KM_STATUS_OK)
+        printf("Failed to create %s: %s\n", name, smash_err(rc));
 
-    host_tag_free(rdata->hm_hdr.km_tag);
+    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }
 
+/*
+ * sm_fsetprotect
+ * --------------
+ * Set access permissions and other attributes on the specified file.
+ *
+ * parent_handle is the parent directory handle of the file. If the
+ *     file name specifies a fully qualified path (beginning with a
+ *     volume name), then a value of 0 or -1 may be specified here.
+ *     See sm_fopen() for more information on the parent handle.
+ * name specifies the file name to which permissions should be applied.
+ *     The file must already exist.
+ * perms are the Amiga protection bits to apply to the specified file.
+ *     FIBF_DELETE      file may be deleted by Owner. Note that this
+ *                      permission may not be applicable to remote Unix
+ *                      USB Hosts, as the permission to delete there is
+ *                      specified in the parent directory permissions.
+ *     FIBF_EXECUTE     file may be executed by Owner
+ *     FIBF_WRITE       file may be written by Owner
+ *     FIBF_READ        file may be read by Owner
+ *     FIBF_ARCHIVE     file has been archived (not implemented by the
+ *                      current USB Host software).
+ *     FIBF_PURE        file is a module which should be kept resident.
+ *     FIBF_SCRIPT      file is an Executable script
+ *     FIBF_HOLD        file is Reentrant and re-executable
+ *     FIBF_GRP_DELETE  file may be deleted by Group users (see FIBF_DELETE).
+ *     FIBF_GRP_EXECUTE file may be executed by Group users.
+ *     FIBF_GRP_WRITE   file may be written by Group users.
+ *     FIBF_GRP_READ    file may be read by Group users.
+ *     FIBF_OTR_DELETE  file may be deleted by Other users (see FIBF_DELETE).
+ *     FIBF_OTR_EXECUTE file may be executed by Other users.
+ *     FIBF_OTR_WRITE   file may be written by Other users.
+ *     FIBF_OTR_READ    file may be read by Other users.
+ */
 uint
-sm_set_perms(handle_t parent_handle, const char *name, uint perms)
+sm_fsetprotect(handle_t parent_handle, const char *name, uint perms)
 {
     uint rc;
     uint msglen;
@@ -497,13 +519,13 @@ sm_set_perms(handle_t parent_handle, const char *name, uint perms)
 
     if (namelen > 2000) {
         printf("Path \"%s\" too long\n", name);
-        return (RC_FAILURE);
+        return (MSG_STATUS_BAD_LENGTH);
     }
     msglen = sizeof (*msg) + namelen;
     msg = malloc(msglen);
     if (msg == NULL) {
-        printf("Failed to allocate %u bytes\n", msglen);
-        return (RC_FAILURE);
+        printf("malloc(%u) fail\n", msglen);
+        return (MSG_STATUS_NO_MEM);
     }
 
     msg->hm_hdr.km_op     = KM_OP_FSETPERMS;
@@ -511,16 +533,16 @@ sm_set_perms(handle_t parent_handle, const char *name, uint perms)
     msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_handle        = parent_handle;  // parent directory handle
     msg->hm_mode          = 0;              // unused
+    msg->hm_type          = 0;              // unused
     msg->hm_aperms        = perms;          // Amiga permissions
 
-    if (host_msg(msg, msglen, (void **) &rdata, &rlen) == RC_SUCCESS) {
-        rc = rdata->hm_hdr.km_status;
-    } else {
-        rc = KM_STATUS_FAIL;
-        printf("Failed to set perms 0x%x for %s\n", perms, name);
+    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    if (rc != KM_STATUS_OK) {
+        printf("Failed to set perms 0x%x for %s: %s\n",
+               perms, name, smash_err(rc));
     }
 
-    host_tag_free(rdata->hm_hdr.km_tag);
+    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }

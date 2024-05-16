@@ -616,7 +616,11 @@ cmd_reset(int argc, char * const *argv)
     if (argc < 2) {
         printf("Resetting...\n");
         uart_flush();
-        timer_delay_msec(1);
+        usb_shutdown();
+        usb_signal_reset_to_host(1);
+        timer_delay_msec(30);
+        msg_shutdown();
+        adc_shutdown();
         reset_cpu();
         return (RC_FAILURE);
     } else if (strcmp(argv[1], "dfu") == 0) {
@@ -625,6 +629,8 @@ cmd_reset(int argc, char * const *argv)
         usb_shutdown();
         usb_signal_reset_to_host(1);
         timer_delay_msec(30);
+        msg_shutdown();
+        adc_shutdown();
         reset_dfu();
         return (RC_SUCCESS);
     } else if (strcmp(argv[1], "usb") == 0) {
