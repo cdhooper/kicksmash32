@@ -31,6 +31,7 @@
 #include "m29f160xt.h"
 #include "msg.h"
 #include "config.h"
+#include "pin_tests.h"
 
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/stm32/gpio.h>
@@ -68,8 +69,8 @@ const char cmd_prom_help[] =
 "prom read <addr> <len>  - read binary data from EEPROM (to terminal)\n"
 "prom service            - enter Amiga/USB message service mode\n"
 "prom temp               - show STM32 die temperature\n"
-"prom verify             - verify PROM is connected\n"
-"prom write <addr> <len> - write binary data to EEPROM (from terminal)";
+"prom write <addr> <len> - write binary data to EEPROM (from terminal)\n"
+"prom test               - test pins (standalone board only)";
 
 const char cmd_reset_help[] =
 "reset              - reset CPU\n"
@@ -520,13 +521,10 @@ cmd_prom(int argc, char * const *argv)
         op_mode = OP_SERVICE;
     } else if (strcmp("temp", arg) == 0) {
         return (cmd_prom_temp(argc - 1, argv + 1));
-    } else if (strcmp("verify", arg) == 0) {
-        int verbose = 1;
-        if ((argc > 1) && (argv[1][0] == 'v'))
-            verbose++;
-        return (prom_verify(verbose));
     } else if (strcmp("write", arg) == 0) {
         op_mode = OP_WRITE;
+    } else if (strcmp("test", arg) == 0) {
+        return (pin_tests());
     } else {
         printf("error: unknown prom operation %s\n", arg);
         return (RC_USER_HELP);

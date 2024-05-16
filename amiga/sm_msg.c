@@ -43,6 +43,16 @@ printable_ascii(uint8_t ch)
     return ('.');
 }
 
+/*
+ * dump_memory
+ * -----------
+ * Display hex and ASCII dump of data at the specified memory location.
+ *
+ * buf is address of the data.
+ * len is the number of bytes to display.
+ * dump_base is either an address/offset of DUMP_VALUE_UNASSIGNED if
+ *     it should not be printed.
+ */
 void
 dump_memory(void *buf, uint len, uint dump_base)
 {
@@ -80,8 +90,20 @@ dump_memory(void *buf, uint len, uint dump_base)
 /*
  * send_cmd_core
  * -------------
+ * Sends a message to KickSmash. This is done by generating a "magic"
+ * sequence of reads at the ROM address, followed by the CRC-protected
+ * message.
+ *
  * This function assumes interrupts and cache are already disabled
  * by the caller.
+ *
+ * cmd is the message command to send.
+ * arg is a pointer to optional data to send.
+ * arglen is the length of optional data to send.
+ * reply is a pointer to a buffer for optional reply data.
+ *     If reply is NULL, reply data will be received and discarded.
+ * replylen is the length of the reply buffer.
+ *
  */
 uint
 send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
@@ -278,6 +300,15 @@ scc_cleanup:
  *     Additional data (if any)
  *     CRC (32 bits)
  *        CRC is over all content except magic (includes length and command)
+ *
+ * cmd is the message command to send.
+ * arg is a pointer to optional data to send.
+ * arglen is the length of optional data to send.
+ * reply is a pointer to a buffer for optional reply data.
+ *     If reply is NULL, reply data will be received and discarded.
+ * replymax is the length of the reply buffer.
+ * replyalen is the actual length of reply data received, filled in
+ *     by this function.
  */
 uint
 send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
@@ -298,12 +329,29 @@ send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
     return (rc);
 }
 
+/*
+ * msg_init
+ * --------
+ * Initializes the KickSmash message interface.
+ */
 void
 msg_init(void)
 {
     cpu_control_init();
 }
 
+/*
+ * recv_msg
+ * --------
+ * Receives a message from the remote USB Host via KickSmash.
+ * buf is a pointer to a buffer where the received message will be stored.
+ * len is the length of the receive message buffer.
+ * rlen is the actual received message length, filled in by this function.
+ * timeout_ms is the number of milliseconds to wait for a message to
+ *     arrive before returning with a timeout failure.
+ *
+ * This function will return KS_STATUS_NODATA on timeout.
+ */
 static uint
 recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
 {
@@ -343,6 +391,8 @@ host_tag_alloc(void)
  * host_tag_free
  * -------------
  * Deallocate the specified host message tag.
+ *
+ * tag is the message tag to deallocate.
  */
 void
 host_tag_free(uint tag)
@@ -356,13 +406,16 @@ host_tag_free(uint tag)
 /*
  * host_send_msg
  * -------------
- * Send a message to the USB Host.
+ * Send a message to the USB Host. If the message is larger than the
+ * maximum message size (SEND_MAX_MAX), it will be automatically broken
+ * and streamed in units of the maximum size. It's important to
+ * understand that only messages where the receiving side will know the
+ * size of the entire message should send messages larger than
+ * SEND_MSG_MAX. This can be accomplished by including the complete
+ * message length in the message header (for example hm_freadwrite_t).
  *
  * smsg is the message to send.
- * slen is the length of the message to send.
- * rdata will be assigned a pointer to the received data. The caller is
- *     is not responsible for allocating or freeing the returned buffer.
- * rlen will be assigned the length of the received message.
+ * len is the length of the message to send.
  */
 uint
 host_send_msg(void *smsg, uint len)
@@ -580,6 +633,8 @@ STATIC_ASSERT(ARRAY_SIZE(msg_status_s) ==
  * smash_err
  * ---------
  * Converts KS_STATUS, KM_STATUS, or MSG_STATUS value to a readable string
+ *
+ * status is the error status code to convert.
  */
 const char *
 smash_err(uint status)

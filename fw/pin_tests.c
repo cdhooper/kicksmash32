@@ -20,6 +20,7 @@
 #include "utils.h"
 #include "config.h"
 #include "usb.h"
+#include "cmdline.h"
 
 uint8_t  board_is_standalone = 0;
 uint8_t  kbrst_in_amiga = 0;
@@ -50,7 +51,7 @@ static const pin_config_t pin_config[] =
     { "FLASH_OE",   FLASH_OE_PORT,   FLASH_OE_PIN,   FS_PU, PIN_INPUT },
     { "FLASH_A18",  FLASH_A18_PORT,  FLASH_A18_PIN,  FS_PD, PIN_INPUT },
     { "FLASH_A19",  FLASH_A19_PORT,  FLASH_A19_PIN,  FS_PD, PIN_INPUT },
-    { "SOCKET_D31", SOCKET_D31_PORT, SOCKET_D31_PIN, FS_PU, PIN_EXT_PULLUP },
+    { "SOCKET_D31", SOCKET_D31_PORT, SOCKET_D31_PIN, FS_PU, PIN_INPUT },
     { "SOCKET_OE",  SOCKET_OE_PORT,  SOCKET_OE_PIN,  FS_PU, PIN_INPUT },
     { "FLASH_OEWE", FLASH_OEWE_PORT, FLASH_OEWE_PIN, FS_PD, PIN_EXT_PULLDOWN },
     { "USB_CC1",    USB_CC1_PORT,    USB_CC1_PIN,    FS_IN, PIN_EXT_PULLDOWN },
@@ -114,19 +115,12 @@ void
 check_board_standalone(void)
 {
     uint     pass;
-    uint     cur;
     uint     d31_conn;
     uint64_t timeout;
     uint16_t got;
     uint16_t got2;
     uint16_t saw;
     uint16_t conn;
-    uint32_t curport;
-    uint16_t curpin;
-    const char *curname;
-    char     buf0[8];
-    char     buf1[8];
-    uint     fail = 0;
 
     /*
      * Test if KBRST is connected. If connected, pin should be high
@@ -309,7 +303,6 @@ check_board_standalone(void)
         ee_set_mode(ee_default_mode);
     }
 
-
     /* Set pullup and test */
     gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
     gpio_setv(SOCKET_A0_PORT, 0xffff, 1);
@@ -339,7 +332,31 @@ in_amiga:
     }
 
     board_is_standalone = true;
+    pin_tests();
+}
+
+/*
+ * pin_tests
+ * ---------
+ * Performs stand-alone board pin tests.
+ */
+uint
+pin_tests(void)
+{
+    uint     pass;
+    uint     cur;
+    char     buf0[8];
+    char     buf1[8];
+    uint     fail = 0;
+    uint32_t curport;
+    uint16_t curpin;
+    const char *curname;
+
     /* Perform data bus tests */
+    if (board_is_standalone == false) {
+        printf("This test may only be performed on a stand-alone board\n");
+        return (RC_FAILURE);
+    }
 
     /*
      * Stand-alone test:
@@ -516,7 +533,7 @@ in_amiga:
                     if ((pass == 1) &&
                         (curport == FLASH_RP_PORT) &&
                         (curpin == FLASH_RP_PIN) &&
-                        ((checkport = FLASH_D0_PORT) ||
+                        ((checkport == FLASH_D0_PORT) ||
                          (checkport == FLASH_D16_PORT))) {
                         /* FLASH_RP=1 drives data pins */
                         continue;
@@ -524,9 +541,9 @@ in_amiga:
                     if ((pass == 0) &&
                         (curport == FLASH_WE_PORT) &&
                         (curpin == FLASH_WE_PIN) &&
-                        (((checkport = FLASH_OE_PORT) &&
+                        (((checkport == FLASH_OE_PORT) &&
                           (checkpin == FLASH_OE_PIN)) ||
-                         ((checkport = SOCKET_OE_PORT) &&
+                         ((checkport == SOCKET_OE_PORT) &&
                           (checkpin == SOCKET_OE_PIN)))) {
                         /*
                          * FLASH_WE causes flash to drive FLASH_OE,
@@ -546,28 +563,37 @@ in_amiga:
                          */
                         continue;
                     }
-                    if ((pass == 0) &&
-                        (((curport = FLASH_OE_PORT) &&
-                          (curpin == FLASH_OE_PIN)) ||
-                         ((curport = SOCKET_OE_PORT) &&
-                          (curpin == SOCKET_OE_PIN)) ||
-                         (curport = SOCKET_A0_PORT) ||
-                         ((curport = SOCKET_A16_PORT) &&
-                          (curpin >= 1) && (curpin <= 7))) &&
-                        ((checkport == FLASH_D0_PORT) ||
-                         (checkport == FLASH_D16_PORT) ||
-                         ((checkport == SOCKET_D31_PORT) &&
-                          (checkpin == SOCKET_D31_PIN)))) {
+
+                    if (((checkport == FLASH_D0_PORT) ||
+                         (checkport == FLASH_D16_PORT)) &&
+                        (gpio_get(FLASH_OE_PORT, FLASH_OE_PIN) == 0)) {
                         /*
-                         * FLASH_OE or SOCKET_OE low will cause data pins
-                         * to be driven
+                         * FLASH_OE will cause flash to drive data pins.
+                         */
+                        continue;
+                    }
+                    if (((checkport == SOCKET_D31_PORT) &&
+                          (checkpin == SOCKET_D31_PIN)) &&
+                        (gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN) == 0)) {
+                        /*
+                         * SOCKET_OE will cause buffers to drive SOCKET_D31
+                         */
+                        continue;
+                    }
+
+                    if ((curport == FLASH_D31_PORT) &&
+                        (curpin == FLASH_D31_PIN) &&
+                        (checkport == SOCKET_D31_PORT) &&
+                        (checkpin == SOCKET_D31_PIN)) {
+                        /*
+                         * FLASH_D31 can affect SOCKET_D31 if SOCKET_OE=0
                          */
                         continue;
                     }
                     if ((pass == 1) &&
                         ((checkport == FLASH_D0_PORT) ||
                          (checkport == FLASH_D16_PORT)))
-                        /* FLASH_D* pins can be driven */ {
+                        /* FLASH_D* pins can be driven if FLASH_OE=0 */ {
                         continue;
                     }
 
@@ -578,7 +604,7 @@ in_amiga:
                     printf("%-4s %s=%u\n",
                            gpio_to_str(checkport, checkpin), checkname, state);
                     if (fail == 1)
-                        gpio_show(-1, -1);
+                        gpio_show(-1, 0xffff);
                 }
             }
 
@@ -605,4 +631,6 @@ in_amiga:
         gpio_setv(curport, curpin, final);
         gpio_setmode(curport, curpin, mode);
     }
+
+    return (fail ? RC_FAILURE : RC_SUCCESS);
 }
