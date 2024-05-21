@@ -437,8 +437,10 @@ pin_tests(void)
                 }
             }
             if ((pass == 1) &&
-                (cur >= ARRAY_SIZE(pin_config)) &&
-                (cur < ARRAY_SIZE(pin_config) + 32)) {
+                (((cur >= ARRAY_SIZE(pin_config)) &&
+                  (cur < ARRAY_SIZE(pin_config) + 32)) ||
+                 ((curport == SOCKET_D31_PORT) &&
+                  (curpin == SOCKET_D31_PIN)))) {
                 /* Don't bother checking data pins when they are driven */
                 continue;
             }

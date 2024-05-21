@@ -1,3 +1,7 @@
 Silkscreen text for bottom AMS1117 should be flipped 180 degrees
 
 Silkscreen text for bottom 5819 should be flipped 180 degrees
+
+Connect BOOT0 to a GPIO so that pin state can be read at runtime.
+    This could be used as a secondary method to step to next longreset
+    or have a dedicated kickstart bank recovery chain

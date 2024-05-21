@@ -26,19 +26,6 @@
  *   TIM1 - bits 0-15 of tick timer, OVF trigger to TIM4
  *   TIM5 CH1 - ROM OE (PA0) trigger to DMA2 CH5 capture of address lo
  *   TIM2 CH1 - ROM OE (PA0) trigger to DMA1 CH5 capture of address hi
- *
- * Potential uses
- *   TIM5 - CH1 ROM OE (PA0) trigger to DMA2 CH5 send bits 0-15
- *          TIM5 can only trigger TIM8, which can't be used without changing
- *          to use a different timer for bits 0-15 of tick
- *   TIM1 - UP trigger to DMA1 CH5
- *   TIM4 - UP trigger to DMA1 CH7
- *   TIM4 CH1 trigger to DMA1 CH1
- *   TIM4 CH2 trigger to DMA1 CH4
- *   TIM4 CH3 trigger to DMA1 CH5
- *   TIM6 - UP trigger to DMA2 CH3 send bits 16-31
- *   TIM7 - UP trigger to DMA2 CH4
- *   TIM8 - UP trigger to DMA2 CH2
  */
 
 /*
@@ -55,7 +42,6 @@
  *
  *  Timer Triggers in use:
  *      TIM1 -> TIM4 ITR0
- *      TIM2 -> TIM3 ITR1
  */
 
 /*
@@ -190,6 +176,12 @@ timer_init(void)
     TIM_DIER(TIM4) |= TIM_DIER_UIE | TIM_DIER_TDE;
     nvic_set_priority(NVIC_TIM4_IRQ, 0x11);
     nvic_enable_irq(NVIC_TIM4_IRQ);
+}
+
+void
+timer_shutdown(void)
+{
+    TIM_DIER(TIM4) = 0;
 }
 
 void

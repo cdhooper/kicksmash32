@@ -231,7 +231,7 @@ gpio_setmode(uint32_t GPIOx, uint16_t GPIO_Pins, uint value)
  * ------------
  * Get the input/output mode of the specified GPIO pins.
  */
-static uint
+uint
 gpio_getmode(uint32_t GPIOx, uint pin)
 {
 #ifdef STM32F1

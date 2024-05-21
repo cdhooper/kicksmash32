@@ -13,6 +13,7 @@
 #define _TIMER_H
 
 void     timer_init(void);
+void     timer_shutdown(void);
 uint64_t timer_tick_get(void);
 void     timer_delay_msec(uint msec);
 void     timer_delay_usec(uint usec);

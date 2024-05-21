@@ -162,7 +162,7 @@ Writing to the Kickstart ROM flash
         % hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111.rom -s 3210
         Writing 0x080000 bytes to EEPROM starting at address 0x200000
         100%
-        Wrote 0x80000 bytes to device from file test.rom
+        Wrote 0x80000 bytes to device from file A3000.47.111.rom
         % echo "prom bank current 4;reset amiga" | hostsmash -d /dev/ttyACM0 -t
     The above example puts the Amiga in reset, erases bank 4, programs
     bank 4, then sets the current bank to 4 and resets the Amiga.

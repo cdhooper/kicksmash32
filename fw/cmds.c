@@ -71,7 +71,7 @@ const char cmd_c_help[] =
 "   q = quad (8 bytes)\n"
 "   o = oct (16 bytes)\n"
 "   h = hex (32 bytes)\n"
-"   S = swap bytes (endian)"
+"   S = swap bytes (endian)\n"
 "  <addr> may be prefixed by one of:"
 #ifdef HAVE_SPACE_FILE
 " file"
@@ -113,7 +113,7 @@ const char cmd_d_help[] =
 "   A = no ASCII\n"
 "   N = no output (only perform read)\n"
 "   R = raw output (no address or ASCII output)\n"
-"   S = swap bytes (endian)"
+"   S = swap bytes (endian)\n"
 "  SS = swap ASCII display (endian)\n"
 "  <addr> may be prefixed by one of:"
 #ifdef HAVE_SPACE_FILE

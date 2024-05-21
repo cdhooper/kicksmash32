@@ -94,6 +94,7 @@
 
 void gpio_setv(uint32_t GPIOx, uint16_t GPIO_Pins, int value);
 void gpio_setmode(uint32_t GPIOx, uint16_t GPIO_Pins, uint value);
+uint gpio_getmode(uint32_t GPIOx, uint pin);
 void gpio_init(void);
 void gpio_show(int whichport, int pins);
 void gpio_assign(int whichport, int pins, const char *assign);

@@ -19,6 +19,7 @@
 #include "prom_access.h"
 #include "adc.h"
 #include "timer.h"
+#include "gpio.h"
 
 #define TEMP_BASE          25000     // Base temperature is 25C
 
@@ -78,20 +79,26 @@ volatile uint16_t adc_buffer[CHANNEL_COUNT];
 
 int v5_stable = false;
 
+static void
+adc_enable(void)
+{
+    int p;
+    for (p = 0; p < ARRAY_SIZE(channel_gpios); p++) {
+        gpio_setmode(channel_gpios[p].gpio_port, channel_gpios[p].gpio_pin,
+                     GPIO_SETMODE_INPUT_ANALOG);
+    }
+}
+
 void
 adc_init(void)
 {
     uint32_t adcbase = ADC1;
-    size_t   p;
 
     /* STM32F1... */
     uint32_t dma = DMA1;  // STM32F1xx RM Table 78 Summary of DMA1 requests...
     uint32_t channel = DMA_CHANNEL1;
 
-    for (p = 0; p < ARRAY_SIZE(channel_gpios); p++) {
-        gpio_set_mode(channel_gpios[p].gpio_port, GPIO_MODE_INPUT,
-                      GPIO_CNF_INPUT_ANALOG, channel_gpios[p].gpio_pin);
-    }
+    adc_enable();
 
     rcc_periph_clock_enable(RCC_ADC1);
     rcc_periph_clock_enable(RCC_DMA1);

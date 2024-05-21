@@ -619,6 +619,7 @@ cmd_reset(int argc, char * const *argv)
         timer_delay_msec(30);
         msg_shutdown();
         adc_shutdown();
+        timer_shutdown();
         reset_cpu();
         return (RC_FAILURE);
     } else if (strcmp(argv[1], "dfu") == 0) {
@@ -629,6 +630,7 @@ cmd_reset(int argc, char * const *argv)
         timer_delay_msec(30);
         msg_shutdown();
         adc_shutdown();
+        timer_shutdown();
         reset_dfu();
         return (RC_SUCCESS);
     } else if (strcmp(argv[1], "usb") == 0) {
