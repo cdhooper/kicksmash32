@@ -19,7 +19,7 @@ that system enough to confirm.
     to one side (NOT the 5V side) of R120.
 
 3. Remove your old Kickstart ROMs
-    It's best to use a chip extractor. If you must use a flat edge
+    It's best to use a chip extractor to remove the ROM chips. If you must use a flat head
     screwdriver, be very careful to not damage traces on your motherboard.
 
 4. Install KickSmash in place of the ROMs
@@ -34,7 +34,7 @@ that system enough to confirm.
 5. Attach your KBRST wire to the KBRST pin on KickSmash
 
 6. Optionally attach your ST-Link
-    You can this if you plan to do firmware programming. Ensure the
+    You can do this if you plan to do firmware programming. Ensure the
     cable is oriented correctly.
 
 7. Optionally attach a USB-C cable to your KickSmash
