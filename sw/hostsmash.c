@@ -9,6 +9,7 @@
  * UNIX side to interact with MX29F1615 programmer and Amiga Kicksmash
  */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -3626,6 +3627,9 @@ dir_read_common:
                 hm_dirent->hmd_ctime = SWAP32(time_a);
                 hm_dirent->hmd_mtime = SWAP32(time_a);
                 hmd_type = HM_TYPE_VOLUME;
+                size_hi = 0;
+                size_lo = 0;
+                amiga_perms = amiga_perms_from_host(0444);  // read-only
             } else if (lstat(host_path, &st) == 0) {
                 uint32_t time_a = time_offset(st.st_atime);
                 uint32_t time_c = time_offset(st.st_ctime);
@@ -3636,6 +3640,7 @@ dir_read_common:
                 size_hi = st.st_size >> 32;
                 size_lo = (uint32_t) st.st_size;
                 hmd_type = st_mode_to_hm_type(st.st_mode);
+                amiga_perms = amiga_perms_from_host(st.st_mode);
             } else {
                 printf("lstat %s failed\n", host_path);
                 hm_dirent->hmd_atime = 0;
@@ -3643,9 +3648,9 @@ dir_read_common:
                 hm_dirent->hmd_mtime = 0;
                 size_hi = 0;
                 size_lo = 0;
+                amiga_perms = FIBF_OTR_READ | FIBF_GRP_READ;
             }
 
-            amiga_perms = amiga_perms_from_host(st.st_mode);
             hm_dirent->hmd_aperms  = SWAP32(amiga_perms);
             hm_dirent->hmd_type    = SWAP16(hmd_type);
             hm_dirent->hmd_ino     = SWAP32(dp->d_ino);
