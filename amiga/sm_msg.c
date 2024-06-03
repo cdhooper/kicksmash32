@@ -152,7 +152,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      * A3000 68030-25:  10 spins minimum
      * A3000 A3660 50M: 30 spins minimum
      */
-    cia_spin((arglen >> 3) + (replymax >> 4) + 10);
+    cia_spin((arglen >> 3) + (replymax >> 5) + 10);
 //  cia_spin(100);  // XXX Debug delay for brief KS output
 
     /*

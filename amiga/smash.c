@@ -894,6 +894,8 @@ smash_test_msg_loopback(void)
     uint      count_r  = 0;
     uint      time_w[2];
     uint      time_r[2];
+    uint      total_w[2];
+    uint      total_r[2];
 
     show_test_state("Message buffer", -1);
 
@@ -1064,6 +1066,7 @@ smash_test_msg_loopback(void)
     /* Measure write performance */
     time_start = smash_time();
     for (pos = 0; pos < 2; pos++) {
+        uint total_wlen = 0;
         for (pass = 0; pass < 2; pass++) {
             srand(rseed[pass]);
             for (count = 0; count < 10; count++) {
@@ -1074,24 +1077,29 @@ smash_test_msg_loopback(void)
                     len = 0x100;
                 if ((rc = send_msg_loopback(buf, len, pass)) != 0)
                     goto fail;
+                total_wlen += len;
             }
         }
-        time_end    = smash_time();
-        time_w[pos] = time_end - time_start;
-        time_start  = time_end;
+        time_end     = smash_time();
+        time_w[pos]  = time_end - time_start;
+        time_start   = time_end;
+        total_w[pos] = total_wlen;
     }
 
     /* Measure read performance */
     for (pos = 0; pos < 2; pos++) {
+        uint total_rlen = 0;
         for (pass = 0; pass < 2; pass++) {
             for (count = 0; count < 10; count++) {
                 if ((rc = recv_msg_loopback(buf, MAX_CHUNK, &rlen, pass)) != 0)
                     goto fail;
+                total_rlen += rlen;
             }
         }
-        time_end    = smash_time();
-        time_r[pos] = time_end - time_start;
-        time_start  = time_end;
+        time_end     = smash_time();
+        time_r[pos]  = time_end - time_start;
+        time_start   = time_end;
+        total_r[pos] = total_rlen;
     }
 
 fail:
@@ -1109,10 +1117,10 @@ fail:
     if (rc == 0) {
         if (flag_quiet == 0) {
             printf("PASS  %u-%u KB/sec (W)  %u-%u KB/sec (R)\n",
-                   calc_kb_sec(time_w[0], 2 * 10 * 0x30),
-                   calc_kb_sec(time_w[1], 2 * 10 * 0x100),
-                   calc_kb_sec(time_r[0], 2 * 10 * 0x30),
-                   calc_kb_sec(time_r[1], 2 * 10 * 0x100));
+                   calc_kb_sec(time_w[0], total_w[0]),
+                   calc_kb_sec(time_w[1], total_w[1]),
+                   calc_kb_sec(time_r[0], total_r[0]),
+                   calc_kb_sec(time_r[1], total_r[1]));
             return (0);
         }
     } else {
