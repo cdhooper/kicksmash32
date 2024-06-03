@@ -152,21 +152,21 @@ ee_address_override(uint8_t bits, uint override)
             GPIO_BSRR(port) = pin << shift;
 #undef ADDR_OVERRIDE_DEBUG
 #ifdef ADDR_OVERRIDE_DEBUG
-            if (override == 0)             // XXX: Remove output when debugged
+            if (override == 0)
                 printf(" A%u=%u", 17 + bit, !shift);
 #endif
         } else {
             /* Disable drive: Weak pull down pin */
-            gpio_setmode(port, pin, GPIO_SETMODE_INPUT_PULLUPDOWN);
             GPIO_BSRR(port) = pin << 16;
+            gpio_setmode(port, pin, GPIO_SETMODE_INPUT_PULLUPDOWN);
 #ifdef ADDR_OVERRIDE_DEBUG
-            if (override == 0)             // XXX: Remove output when debugged
+            if (override == 0)
                 printf(" !A%u", 17 + bit);
 #endif
         }
     }
 #ifdef ADDR_OVERRIDE_DEBUG
-    if (override == 0)  // XXX: Remove output when debugged
+    if (override == 0)
         printf("\n");
 #endif
 }
@@ -1305,7 +1305,7 @@ ee_set_bank(uint8_t bank)
             ee_address_override((bank << 4) | 0x6, 0);
             break;
         case 2:  // 2MB bank (width 4)
-            ee_address_override((bank << 4) | 0x8, 0);
+            ee_address_override((bank << 4) | 0x4, 0);
             break;
         case 3:  // 4MB bank (width 8)
             ee_address_override((bank << 4) | 0x0, 0);

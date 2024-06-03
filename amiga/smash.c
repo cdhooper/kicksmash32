@@ -1359,7 +1359,10 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 {
     uint32_t addr;
     uint32_t addrs[64];
-//  uint32_t data[64];
+#undef DEBUG_FLASH_SEQUENCE
+#ifdef DEBUG_FLASH_SEQUENCE
+    uint32_t data[64];
+#endif
 //  uint32_t val;
 //  uint     retry = 0;
     uint     num_addr;
@@ -1381,7 +1384,7 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
      */
     num_addr /= 4;
 
-    cia_spin(CIA_USEC(5));
+    cia_spin(CIA_USEC(10));
 
     addr = ROM_BASE + ((addrs[0] << smash_cmd_shift) & 0x7ffff);
     (void) *ADDR32(addr);  // Generate OE strobe to kick off DMA
@@ -1399,7 +1402,7 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
             continue;
         }
 #endif
-#if 0
+#ifdef DEBUG_FLASH_SEQUENCE
         /* Debug this particular command sequence */
         if (cmd == KS_CMD_FLASH_ID) {
             if (pos < ARRAY_SIZE(data)) {
@@ -1411,7 +1414,7 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 #endif
     }
 
-#if 0
+#ifdef DEBUG_FLASH_SEQUENCE
     // below is for debug, to ensure all Kicksmash DMA is drained.
     for (pos = 0; pos < 10000; pos++) {
         (void) *ADDR32(ROM_BASE);
@@ -1420,7 +1423,7 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 
 flash_cmd_cleanup:
     if (rc == 0) {
-#if 0
+#ifdef DEBUG_FLASH_SEQUENCE
         if (flag_debug && !irq_disabled) {
             printf("Flash sequence\n");
             for (pos = 0; pos < num_addr; pos++)
@@ -2119,7 +2122,7 @@ read_from_flash(uint bank, uint addr, void *buf, uint len)
 #endif
     rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    cia_spin(CIA_USEC(1000));
+    cia_spin(1);
 #ifdef USE_OVERLAY
     local_memcpy(buf, (void *) (addr), len);
     *CIAA_PRA &= ~(CIAA_PRA_OVERLAY | CIAA_PRA_LED);
@@ -2128,7 +2131,7 @@ read_from_flash(uint bank, uint addr, void *buf, uint len)
 #endif
     rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
                         &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    cia_spin(CIA_USEC(1000));
+    cia_spin(CIA_USEC(100));
 
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
@@ -2147,6 +2150,8 @@ wait_for_flash_done(uint addr, uint erase_mode)
     uint     spin_count = 0;
     int      same_count = 0;
     int      see_fail_count = 0;
+
+    cia_spin(1);
     lstatus = *ADDR32(addr);
     while (spin_count < spins) {
         status = *ADDR32(addr);
@@ -2204,7 +2209,7 @@ write_to_flash(uint bank, uint addr, void *buf, uint len)
     /* Switch to flash bank to be programmed */
     rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    cia_spin(CIA_USEC(1000));
+    cia_spin(CIA_USEC(100));
 
     if (rc == 0) {
         /* Write flash data */
@@ -2227,11 +2232,11 @@ write_to_flash(uint bank, uint addr, void *buf, uint len)
             addr += xlen;
         }
     }
-    cia_spin(CIA_USEC(1000));
+    cia_spin(CIA_USEC(10));
 
     /* Restore flash to read mode */
     rc |= flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
-    cia_spin(CIA_USEC(1000));
+    cia_spin(CIA_USEC(10));
 
     /* Return to "current" flash bank */
     rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
@@ -2260,7 +2265,7 @@ erase_flash_block(uint bank, uint addr)
     /* Switch to flash bank to be programmed */
     rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    cia_spin(CIA_USEC(1000));
+    cia_spin(CIA_USEC(100));
 
     /* Send erase command */
     rc = flash_cmd_core(KS_CMD_FLASH_ERASE, NULL, 0);
@@ -2268,13 +2273,12 @@ erase_flash_block(uint bank, uint addr)
         *ADDR32(ROM_BASE + addr);  // Generate address for erase
         rc = wait_for_flash_done(ROM_BASE + addr, 1);
     }
-    cia_spin(CIA_USEC(1000));
 
     /* Restore flash to read mode */
     rc1 = flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
     if (rc == 0)
         rc = rc1;
-    cia_spin(CIA_USEC(1000));
+    cia_spin(CIA_USEC(10));
 
     /* Return to "current" flash bank */
     rc1 = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
@@ -2854,7 +2858,7 @@ cmd_erase(int argc, char *argv[])
     uint        flash_end_bsize;
     uint        mode = 0;
     uint        tlen = 0;
-    uint        dot_count = 1;
+    uint        dot_count = 0;
     uint        dot_iters = 1;
     uint        dot_max;
     int         arg;
@@ -3075,8 +3079,13 @@ usage:
         }
     }
     if (rc == 0) {
-        if ((tlen > 0) && (++dot_count == dot_iters))
-            printf(".");
+        while (tlen >= MAX_CHUNK) {
+            tlen -= MAX_CHUNK;
+            if (++dot_count == dot_iters) {
+                dot_count = 0;
+                printf(".");
+            }
+        }
         printf("]\n");
         time_end = smash_time();
         printf("Erase complete in ");

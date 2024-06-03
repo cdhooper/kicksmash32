@@ -100,6 +100,7 @@ TGT_CPPFLAGS	+= -MD
 TGT_CPPFLAGS	+= -Wall -Wundef -pedantic
 TGT_CPPFLAGS	+= $(DEFS)
 TGT_CPPFLAGS	+= -Wno-unused-parameter
+#TGT_CPPFLAGS	+= -fanalyzer -Wno-analyzer-out-of-bounds
 
 # Linker flags
 TGT_LDFLAGS		+= --static -nostartfiles -nostdlib

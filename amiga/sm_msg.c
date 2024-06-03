@@ -152,7 +152,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      * A3000 68030-25:  10 spins minimum
      * A3000 A3660 50M: 30 spins minimum
      */
-    cia_spin((arglen >> 3) + (replymax >> 4) + 30);
+    cia_spin((arglen >> 3) + (replymax >> 4) + 10);
 //  cia_spin(100);  // XXX Debug delay for brief KS output
 
     /*
@@ -182,7 +182,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         if (magic < ARRAY_SIZE(sm_magic)) {
             if (val != sm_magic[magic]) {
                 magic = 0;
-                cia_spin(5);
+                cia_spin(word);
                 continue;
             }
         } else if (magic < ARRAY_SIZE(sm_magic) + 1) {
@@ -264,13 +264,22 @@ scc_cleanup:
 
     if ((replystatus & 0xffffff00) != 0) {
         /* Ensure Kicksmash firmware has returned ROM to normal state */
+        uint     timeout = 0;
+        uint32_t last = 0;
+        uint32_t cur;
         cia_spin(CIA_USEC(30));
-        for (pos = 0; pos < 100; pos++)
-            (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-// XXX: implement new recovery function which will loop until
-//      value at ROM address is consistent for 100 iterations.
-//      cia_spin(10) in between.
-        cia_spin(CIA_USEC(4000U));
+
+        /* Wait until Kickstart ROM data is consistent for 5 ms */
+        for (pos = 0; pos < 500; pos++) {
+            cur = *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
+            if (last != cur) {
+                if (timeout++ > 400000)
+                    break;  // Give up after 4 seconds
+                pos = 0;
+            }
+            last = cur;
+            cia_spin(CIA_USEC(10));
+        }
     }
     if (((replystatus & 0xffff0000) == 0) && (replystatus != KS_STATUS_CRC)) {
         crc = crc32(crc, reply, replylen);

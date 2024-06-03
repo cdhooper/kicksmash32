@@ -30,9 +30,12 @@
 #include <libopencm3/stm32/timer.h>
 #include <libopencm3/cm3/nvic.h>
 
-#define SWAP16(x) __builtin_bswap16(x)
-#define SWAP32(x) __builtin_bswap32(x)
-#define SWAP64(x) __builtin_bswap64(x)
+#define SWAP16(x)   __builtin_bswap16(x)
+#define SWAP32(x)   __builtin_bswap32(x)
+#define SWAP64(x)   __builtin_bswap64(x)
+
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
 
 /* Flags to ks_reply() */
 #define KS_REPLY_RAW    BIT(0)  // Don't emit header or CRC (raw data)
@@ -122,6 +125,10 @@ static uint     messages_atou;  // Count of Amiga-to-USB messages
 static uint     messages_utoa;  // Count of USB-to-Amiga messages
 static uint     messages_amiga; // Messages sent by Amiga
 static uint     messages_usb;   // Messages sent by USB Host
+static uint     fail_crc_a;     // CRC message failures from Amiga
+static uint     fail_crc_u;     // CRC message failures from USB Host
+static uint     fail_cmd_a;     // Invalid command failures from Amiga
+static uint     fail_cmd_u;     // Invalid command failures from USB Host
 
 /* Buffers for DMA from/to GPIOs and Timer event generation registers */
 #define ADDR_BUF_COUNT 1024
@@ -598,7 +605,7 @@ configure_oe_capture_rx(bool verbose)
 // Not enough memory bandwidth on at least one CPU I have to have both
 // DMAs active and STM32 keep up with the Amiga. That particular STM32 does
 // not have DFU, so it might be a remarked STM32F103 or something else.
-    TIM_CCER(TIM2) |= TIM_CCER_CC1E;  // timer_enable_oc_output()
+//  TIM_CCER(TIM2) |= TIM_CCER_CC1E;  // timer_enable_oc_output()
     TIM_CCER(TIM5) |= TIM_CCER_CC1E;
     enable_irq();
 }
@@ -616,7 +623,6 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
 {
     uint      count;
     uint      pos = 0;
-    uint      tlen = (ee_mode == EE_MODE_32) ? 4 : 2;
     uint      dma_left;
     uint      dma_last;
     uint16_t  rlen = rlen1 + rlen2;
@@ -696,36 +702,36 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             }
             pos = (rlen + 3) / 4;
         } else {
+            uint16_t *txl = (uint16_t *)buffer_txd_lo;
+            uint16_t *txh = (uint16_t *)buffer_txd_hi;
             uint32_t crc;
-            for (count = 0; count < ARRAY_SIZE(sm_magic); pos++) {
-                buffer_txd_hi[pos] = sm_magic[count++];
-                buffer_txd_lo[pos] = sm_magic[count++];
+            for (count = 0; count < ARRAY_SIZE(sm_magic); ) {
+                *(txh++) = sm_magic[count++];
+                *(txl++) = sm_magic[count++];
             }
-            buffer_txd_hi[pos] = rlen;
-            buffer_txd_lo[pos] = status;
-            pos++;
+            *(txh++) = rlen;
+            *(txl++) = status;
+            rbp = (uint32_t *) rbuf1;
             crc = crc32r(0, &rlen, 2);
             crc = crc32r(crc, &status, 2);
             crc = crc32(crc, rbuf1, rlen1);
-            rlen1 /= tlen;
-            rbp = (uint32_t *) rbuf1;
-            for (count = 0; count < rlen1; count++, pos++) {
+
+            for (count = rlen1 / 4; count > 0; count--, pos++) {
                 uint32_t val = *(rbp++);
-                buffer_txd_hi[pos] = (val << 8)  | ((val >> 8) & 0x00ff);
-                buffer_txd_lo[pos] = (val >> 24) | ((val >> 8) & 0xff00);
+                *(txh++) = (val << 8)  | ((val >> 8) & 0x00ff);
+                *(txl++) = (val >> 24) | ((val >> 8) & 0xff00);
             }
             if (rlen2 != 0) {
                 crc = crc32(crc, rbuf2, rlen2);
-                rlen2 /= tlen;
                 rbp = (uint32_t *) rbuf2;
-                for (count = 0; count < rlen2; count++, pos++) {
+                for (count = rlen2 / 4; count > 0; count--, pos++) {
                     uint32_t val = *(rbp++);
-                    buffer_txd_hi[pos] = (val << 8)  | ((val >> 8) & 0x00ff);
-                    buffer_txd_lo[pos] = (val >> 24) | ((val >> 8) & 0xff00);
+                    *(txh++) = (val << 8)  | ((val >> 8) & 0x00ff);
+                    *(txl++) = (val >> 24) | ((val >> 8) & 0xff00);
                 }
             }
-            buffer_txd_hi[pos] = crc >> 16;
-            buffer_txd_lo[pos] = (uint16_t) crc;
+            *(txh++) = crc >> 16;
+            *(txl++) = (uint16_t) crc;
             pos = (rlen + 3 + KS_HDR_AND_CRC_LEN) / 4;
         }
 
@@ -889,6 +895,8 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
 
 oe_reply_end:
     configure_oe_capture_rx(false);
+    timer_set_oc_polarity_low(TIM5, TIM_OC1);
+
     timer_enable_irq(TIM5, TIM_DIER_CC1IE);
     data_output(0xffffffff);    // Return to pull-up of data pins
 
@@ -1020,6 +1028,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 break;
             }
 
+            /* Capture addresses and data */
             cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
             for (pos = 0; pos < cmd_len / 2; pos++) {
                 *(valuep++) = buffer_rxa_lo[cons_s];
@@ -1027,7 +1036,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     cons_s = 0;
             }
 
-            /* Swap address */
+            /* Swap addresses */
             for (pos = 0; pos < count; pos++) {
                 uint32_t value = (values[pos] << 16) | (values[pos] >> 16);
                 values[pos] = SWAP32(value);
@@ -1596,6 +1605,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
         default:
             /* Unknown command */
             ks_reply(0, KS_STATUS_UNKCMD, 0, NULL, 0, NULL);
+            fail_cmd_a++;
             printf("KS cmd %x?\n", cmd);
             break;
     }
@@ -1611,6 +1621,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
 static inline void
 process_addresses(void)
 {
+    static uint     cons_start = 0;
     static uint     magic_pos = 0;
     static uint16_t len = 0;
     static uint16_t cmd = 0;
@@ -1666,15 +1677,14 @@ new_cmd_post:
             case ARRAY_SIZE(sm_magic):
                 /* Length phase */
                 messages_amiga++;
+                cons_start = rx_consumer;
                 len = cmd_len = buffer_rxa_lo[rx_consumer];
-                crc = crc32r(0, &len, sizeof (uint16_t));
-                cmd_len = (cmd_len + 1) & ~1;  // round up
+                len = (cmd_len + 1) / 2;
                 magic_pos++;
                 break;
             case ARRAY_SIZE(sm_magic) + 1:
                 /* Command phase */
                 cmd = buffer_rxa_lo[rx_consumer];
-                crc = crc32r(crc, &cmd, sizeof (uint16_t));
                 if (len == 0)
                     magic_pos++;  // Skip following Data Phase
                 magic_pos++;
@@ -1682,15 +1692,7 @@ new_cmd_post:
             case ARRAY_SIZE(sm_magic) + 2:
                 /* Data phase */
                 len--;
-                if (len != 0) {
-                    crc = crc32r(crc, (void *) &buffer_rxa_lo[rx_consumer], 2);
-                    len--;
-                } else {
-                    /* Special case -- odd byte at end */
-                    uint8_t *ptr = (uint8_t *) &buffer_rxa_lo[rx_consumer];
-                    crc = crc32r(crc, ptr + 1, 1);
-                }
-                if (len == 0)
+                if (unlikely(len == 0))
                     magic_pos++;
                 break;
             case ARRAY_SIZE(sm_magic) + 3:
@@ -1701,14 +1703,25 @@ new_cmd_post:
             case ARRAY_SIZE(sm_magic) + 4:
                 /* Bottom half of CRC */
                 crc_rx |= buffer_rxa_lo[rx_consumer];
+                uint len1 = cmd_len + 4;
+                uint32_t ncrc;
+                if (len1 > sizeof (buffer_rxa_lo) - cons_start * 2) {
+                    uint len2;
+                    len1 = sizeof (buffer_rxa_lo) - cons_start * 2;
+                    len2 = cmd_len - len1 + 4;
+                    ncrc = crc32s(0, (void *) &buffer_rxa_lo[cons_start], len1);
+                    ncrc = crc32s(ncrc, (void *) buffer_rxa_lo, len2);
+                } else {
+                    ncrc = crc32s(0, (void *) &buffer_rxa_lo[cons_start], len1);
+                }
+                crc = ncrc;
                 if (crc_rx != crc) {
                     uint16_t error[2];
                     error[0] = KS_STATUS_CRC;
                     error[1] = crc;
 #define CRC_DEBUG
 #ifdef CRC_DEBUG
-                {
-                // XXX: not fast enough to deal with log
+                    /* First capture the log */
                     static uint16_t tempcap[16];
                     uint c = rx_consumer;
                     int pos;
@@ -1719,22 +1732,24 @@ new_cmd_post:
                     }
 #endif  // CRC_DEBUG
                     ks_reply(0, KS_STATUS_CRC, sizeof (error), &error, 0, NULL);
+                    fail_crc_a++;
 
                     printf("cmd=%x l=%04x CRC %08lx != calc %08lx\n",
                            cmd, cmd_len, crc_rx, crc);
 #ifdef CRC_DEBUG
-                        for (pos = 0; pos < ARRAY_SIZE(tempcap); pos++) {
-                            printf(" %04x", tempcap[pos]);
-                            if (((pos & 0xf) == 0xf) &&
-                                (pos != ARRAY_SIZE(tempcap) - 1))
-                                printf("\n");
-                        }
-                        printf("\n");
+                    for (pos = 0; pos < ARRAY_SIZE(tempcap); pos++) {
+                        printf(" %04x", tempcap[pos]);
+                        if (((pos & 0xf) == 0xf) &&
+                            (pos != ARRAY_SIZE(tempcap) - 1))
+                            printf("\n");
                     }
+                    printf("\n");
 #endif  // CRC_DEBUG
                     magic_pos = 0;  // Restart magic detection
                     goto new_cmd;
                 }
+
+                cmd_len = (cmd_len + 1) & ~1;  // round up
 
                 /* Execution phase */
                 execute_cmd(cmd, cmd_len);
@@ -1801,12 +1816,15 @@ address_log_replay(uint max)
                "Wrap=%u\n"
                "Spin=%u\n"
                "KS Messages  Amiga=%-8u  USB=%u\n"
+               "KS CRC Fail  Amiga=%-8u  USB=%u\n"
+               "KS Unk CMD   Amiga=%-8u  USB=%u\n"
                "Buf Messages  AtoU=%-8u UtoA=%u\n"
                "Message Prod  AtoU=%-8u UtoA=%u\n"
                "Message Cons  AtoU=%-8u UtoA=%u\n",
                (uint) DMA_CNDTR(DMA1, DMA_CHANNEL5), (uintptr_t)buffer_rxd,
                (uint) DMA_CNDTR(DMA2, DMA_CHANNEL5), (uintptr_t)buffer_rxa_lo,
                consumer_wrap, consumer_spin, messages_amiga, messages_usb,
+               fail_crc_a, fail_crc_u, fail_cmd_a, fail_cmd_u,
                messages_atou, messages_utoa, prod_atou, prod_utoa,
                cons_atou, cons_utoa);
         consumer_wrap = 0;
@@ -1815,6 +1833,10 @@ address_log_replay(uint max)
         messages_usb = 0;
         messages_atou = 0;
         messages_utoa = 0;
+        fail_crc_a = 0;
+        fail_crc_u = 0;
+        fail_cmd_a = 0;
+        fail_cmd_u = 0;
         return (0);
     }
     if (max > ARRAY_SIZE(buffer_rxa_lo) - 1)
@@ -1894,6 +1916,7 @@ bus_snoop(uint mode)
         uint dma_left;
         capture_mode = mode;
         configure_oe_capture_rx(false);
+        TIM_CCER(TIM2) |= TIM_CCER_CC1E;  // timer_enable_oc_output()
         dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER, LOG_DMA_CHANNEL);
         prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
         if (prod > ARRAY_SIZE(buffer_rxa_lo))
@@ -2282,6 +2305,9 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
                 cons_utoa = prod_utoa;
             usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             break;
+        default:
+            fail_cmd_u++;
+            break;
     }
 }
 
@@ -2367,6 +2393,7 @@ msg_usb_service(void)
                     error[1] = crc;
                     usb_msg_reply(0, KS_STATUS_CRC, sizeof (error),
                                   &error, 0, NULL);
+                    fail_crc_u++;
                     printf("Ucmd=%x l=%04x CRC %08lx != calc %08lx\n",
                            cmd, len, crc_rx, crc);
                     pos = 0;
@@ -2484,8 +2511,6 @@ msg_init(void)
 //  timer_clear_flag(TIM5, TIM_SR(TIM5) & TIM_DIER(TIM5));
     nvic_set_priority(NVIC_TIM5_IRQ, 0x20);
     nvic_enable_irq(NVIC_TIM5_IRQ);
-
-    configure_oe_capture_rx(true);
 
     capture_mode = CAPTURE_ADDR;
     configure_oe_capture_rx(true);
