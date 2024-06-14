@@ -499,13 +499,10 @@ fail:
     return (RC_SUCCESS);
 }
 
-int
-prom_verify(int verbose)
+rc_t
+prom_test(void)
 {
-    if (warn_amiga_not_in_reset())
-        return (RC_BUSY);
-
-    return (ee_verify(verbose));
+    return (ee_test());
 }
 
 void

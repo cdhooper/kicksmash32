@@ -79,6 +79,7 @@ address_output(uint32_t addr)
                                  ((addr >> 12) & 0x00fe); // Set A13-A19
 }
 
+#if 0
 /*
  * address_input
  * -------------
@@ -91,6 +92,7 @@ address_input(void)
     addr |= ((GPIO_IDR(SOCKET_A16_PORT) & 0x00f0) << (16 - 4));
     return (addr);
 }
+#endif
 
 /*
  * ee_address_override
@@ -1112,177 +1114,136 @@ ee_poll(void)
     }
 }
 
-static void
-ee_print_bits(uint32_t value, int high_bit, char *prefix)
-{
-    int bit;
-    for (bit = high_bit; bit >= 0; bit--) {
-        if (value & (1 << bit))
-            printf("%s%d ", prefix, bit);
-    }
-}
-
 /*
- * ee_verify() verifies pin connectivity to an installed EEPROM. This is done
- *             by a sequence of distinct tests.
- *
- * These are:
- *   1) Pull-down test (all address and data lines are weakly pulled
- *      down to verify no exernal power is present).
- *      including using STM32 internal
- *   2) VCC, CE, OE, and VPP are then applied in sequence to verify
- *      no address or data lines are pulled up.
- *   3) Pull-up test (all address and data lines are weakly pulled up, one
- *      at a time) to verify:
- *      A) Each line is pulled up in less than 1 ms
- *      B) No other line is affected by that pull-up
- *   4) Pins one row beyond where the EEPROM should be are tested to verify
- *      that they float.
- *   5) Power is applied
+ * ee_test() checks that all pins of flash parts are connected and that
+ *           the flash parts can be identified.
  */
 int
-ee_verify(int verbose)
+ee_test(void)
 {
-    int         rc = 0;
-    int         pass;
-    uint32_t    value;
-    uint32_t    expected;
-    const char *when = "";
+    uint32_t addr;
+    uint     block;
+    const chip_blocks_t *cb1;
+    const chip_blocks_t *cb2;
+    const char *id1;
+    const char *id2;
+    uint32_t part1;
+    uint32_t part2;
+    uint32_t val;
+    uint pos;
+    int rc = 0;
 
-    if (verbose)
-        printf("Test address and data pull-down: ");
-    for (pass = 0; pass <= 1; pass++) {
-        /* Set up next pass */
-        switch (pass) {
-            case 0:
-                /* Start in an unpowered state, all I/Os input, pulldown */
-                ee_disable();
-                break;
-            case 1:
-                oe_output_enable();
-                oe_output(1);
-                when = " when OE high";
-                break;
-        }
-        timer_delay_usec(100);  // Pull-downs should quickly drop voltage
+    /* Verify flash parts can be identified */
+    ee_enable();
+    ee_id(&part1, &part2);
+    cb1 = get_chip_block_info(part1);
+    cb2 = get_chip_block_info(part2);
 
-        value = address_input();
-        if (value != 0) {
-            ee_print_bits(value, 19, "A");
-            printf("addr stuck high: 0x%05lx%s\n", value, when);
-            rc = 1;
-            goto fail;
-        }
+    id1 = ee_id_string(part1);
 
-        value = data_input();
-        if (value != 0) {
-            ee_print_bits(value, 15, "D");
-            printf("data stuck high: 0x%08lx%s\n", value, when);
-            rc = 1;
-            goto fail;
-        }
-    }
-
-    if (verbose) {
-        printf("pass\n");
-        printf("Test address pull-up: ");
-    }
-
-    /* Pull up and verify address lines, one at a time */
-    for (pass = 0; pass <= 19; pass++) {
-        /* STM32F1 pullup/pulldown is controlled by output data register */
-        address_output((1 << (pass + 1)) - 1);
-
-        uint64_t timeout = timer_tick_plus_msec(1);
-        uint64_t start = timer_tick_get();
-        uint64_t seen = 0;
-
-        while (timer_tick_has_elapsed(timeout) == false) {
-            value = data_input();
-            if (value != 0) {
-                ee_print_bits(value, 16, "D");
-                printf("found high with A%d pull-up: %04lx\n", pass, value);
+    switch (ee_mode) {
+        case EE_MODE_16_LOW:
+        case EE_MODE_16_HIGH:
+            if ((strcmp(id1, "Unknown") == 0) ||
+                (cb1->cb_chipid == 0)) {
+                printf("FAIL: ");
                 rc = 1;
-                break;
             }
-            value = address_input();
-            if (value & (1 << pass)) {
-                if (seen == 0)
-                    seen = timer_tick_get();
-                expected = (1U << (pass + 1)) - 1;
-                if (value != expected) {
-                    printf("A%d pull-up caused incorrect ", pass);
-                    ee_print_bits(value ^ expected, 19, "A");
-                    printf("value: 0x%05lx\n", value);
-                    rc = 1;
-                    break;
-                }
+            printf("Prom %08lx %s\n", part1, id1);
+            break;
+        case EE_MODE_32:
+            id2 = ee_id_string(part2);
+            if ((strcmp(id1, "Unknown") == 0) ||
+                (strcmp(id1, "Unknown") == 0) ||
+                (cb1->cb_chipid == 0) ||
+                (cb2->cb_chipid == 0)) {
+                printf("FAIL: ");
+                rc = 1;
             }
-        }
-        if (seen == 0) {
-            printf("A%d stuck low: 0x%05lx\n", pass, value);
-            rc = 1;
-        } else if (verbose > 1) {
-            printf(" A%d: %lld usec\n",
-                   pass, timer_tick_to_usec(seen - start));
-        }
+            printf("Prom %08lx %08lx %s %s\n", part1, part2, id1, id2);
+            break;
     }
     if (rc != 0)
-        goto fail;
+        return (rc);
 
-    if (verbose) {
-        printf("pass\n");
-        printf("Test data pull-up: ");
-    }
-
-    /* Pull up and verify data lines, one at a time */
-    for (pass = 0; pass <= 15; pass++) {
-        /* STM32F1 pullup/pulldown is controlled by output data register */
-        data_output((1 << (pass + 1)) - 1);
-
-        uint64_t timeout = timer_tick_plus_msec(1);
-        uint64_t start = timer_tick_get();
-        uint64_t seen = 0;
-
-        while (timer_tick_has_elapsed(timeout) == false) {
-            value = address_input();
-            if (value != 0xfffff) {
-                ee_print_bits(value ^ 0xffff, 19, "A");
-                printf("found low with D%d pull-up: %05lx\n", pass, value);
-                rc = 1;
-                break;
-            }
-            value = data_input();
-            if (value & (1 << pass)) {
-                if (seen == 0)
-                    seen = timer_tick_get();
-                expected = (1U << (pass + 1)) - 1;
-                if (value != expected) {
-                    printf("D%d pull-up caused incorrect ", pass);
-                    ee_print_bits(value ^ expected, 16, "D");
-                    printf("value: 0x%04lx\n", value);
-                    rc = 1;
-                    break;
+    /*
+     * Read Autoselect address 0x3 while pulling high all data pins.
+     * The value should always be 0x0000000 unless a flash part is not
+     * populated or pins are not making contact.
+     */
+    ee_cmd(0x00555, 0x00900090);
+    data_output_disable();
+    data_output(0xffffffff);  // pull high
+    ee_read_word(0x3, &val);
+    ee_read_mode();
+    if (val != 0x00000000) {
+        printf("Flash data %08lx should be 00000000.\n"
+               "Bits floating or stuck:", val);
+        for (pos = 0; pos < 32; pos++)
+            if (val & BIT(pos)) {
+                uint npos;
+                printf(" %u", pos);
+                for (npos = pos; npos < 32; npos++)
+                    if ((val & BIT(npos + 1)) == 0)
+                        break;
+                if (pos != npos) {
+                    printf("-%u", npos);
+                    pos = npos;
                 }
             }
+        printf("\n");
+        return (1);
+    }
+
+    /* Verify that no blocks are locked */
+    ee_cmd(0x00555, 0x00900090);
+    for (block = 0, addr = 0; addr < EE_DEVICE_SIZE; ) {
+        uint bsize = cb1->cb_bsize << 10;
+        uint bnum  = addr / bsize;
+
+        if (bnum == cb1->cb_bbnum) {
+            /* Boot block has variable block size */
+            uint soff = addr - bnum * bsize;
+
+            uint snum = soff / (cb1->cb_ssize << 10);
+            uint smap = cb1->cb_map;
+            bsize = 0;
+            do {
+                bsize += (cb1->cb_ssize << 10);
+                snum++;
+                if (smap & BIT(snum))
+                    break; // At next block
+            } while (snum < 8);
         }
-        if (seen == 0) {
-            printf("D%d stuck low: 0x%04lx\n", pass, value);
-            rc = 1;
-        } else if (verbose > 1) {
-            printf(" D%d: %lld usec\n",
-                   pass, timer_tick_to_usec(seen - start));
+        ee_read_word(addr + 2, &val);
+        if ((val == 0x00000001) ||
+            (val == 0x00010000) ||
+            (val == 0x00010001)) {
+            if (rc++ == 0)
+                printf("Flash blocks locked: ");
+            printf(" 0x%x:", block);
+            if (val == 0x00000001)
+                printf("01");
+            else if (val == 0x00010000)
+                printf("10");
+            else
+                printf("11");
+            rc++;
+        } else if (val != 0x0000) {
+            printf("Invalid flash block lock status addr=%06lx block=%x "
+                   "status=%08lx\n",
+                   addr, block, val);
+            ee_read_mode();
+            return (1);
         }
+
+        addr += bsize;
+        block++;
     }
     if (rc != 0)
-        goto fail;
+        printf("\n");
 
-    if (verbose) {
-        printf("pass\n");
-    }
-
-fail:
-    ee_disable();
+    ee_read_mode();
     return (rc);
 }
 

@@ -21,6 +21,8 @@
 #include "config.h"
 #include "usb.h"
 #include "cmdline.h"
+#include "prom_access.h"
+#include "led.h"
 
 uint8_t  board_is_standalone = 0;
 uint8_t  kbrst_in_amiga = 0;
@@ -116,6 +118,7 @@ check_board_standalone(void)
 {
     uint     pass;
     uint     d31_conn;
+    int      rc;
     uint64_t timeout;
     uint16_t got;
     uint16_t got2;
@@ -332,7 +335,11 @@ in_amiga:
     }
 
     board_is_standalone = true;
-    pin_tests();
+    rc = pin_tests();
+    if (rc == 0)
+        rc = prom_test();
+    if (rc != 0)
+        led_alert(1);
 }
 
 /*
@@ -590,12 +597,6 @@ pin_tests(void)
                         /*
                          * FLASH_D31 can affect SOCKET_D31 if SOCKET_OE=0
                          */
-                        continue;
-                    }
-                    if ((pass == 1) &&
-                        ((checkport == FLASH_D0_PORT) ||
-                         (checkport == FLASH_D16_PORT)))
-                        /* FLASH_D* pins can be driven if FLASH_OE=0 */ {
                         continue;
                     }
 

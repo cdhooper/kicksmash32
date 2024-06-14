@@ -24,6 +24,7 @@ void     ee_status_clear(void);
 void     ee_cmd(uint32_t addr, uint32_t cmd);
 void     ee_poll(void);
 int      ee_verify(int verbose);
+int      ee_test(void);
 void     ee_address_override(uint8_t bits, uint override);
 void     ee_set_mode(uint new_mode);
 void     ee_set_bank(uint8_t bank);

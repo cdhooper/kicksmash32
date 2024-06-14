@@ -16,5 +16,6 @@ void led_init(void);
 void led_power(int turn_on);
 void led_busy(int turn_on);
 void led_alert(int turn_on);
+void led_poll(void);
 
 #endif /* _LED_H */

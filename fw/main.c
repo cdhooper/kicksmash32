@@ -51,6 +51,7 @@ main_poll(void)
     kbrst_poll();
     config_poll();
     msg_poll();
+    led_poll();
 }
 
 int
@@ -70,6 +71,7 @@ main(void)
     show_reset_reason();
     config_read();
     usb_startup();
+    led_power(1);
     check_board_standalone();
 
     rl_initialize();  // Enable command editing and history
@@ -83,8 +85,6 @@ main(void)
         printf("Standalone\n");
     else
         printf("in Amiga\n");
-
-    led_power(1);
 
     while (1) {
         main_poll();

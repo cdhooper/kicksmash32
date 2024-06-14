@@ -21,9 +21,9 @@ void prom_cmd(uint32_t addr, uint32_t cmd);
 rc_t prom_id(void);
 rc_t prom_status(void);
 rc_t prom_status_clear(void);
+rc_t prom_test(void);
 void prom_show_mode(void);
 void prom_mode(uint mode);
-int  prom_verify(int verbose);
 
 #define ERASE_MODE_CHIP   0
 #define ERASE_MODE_SECTOR 1

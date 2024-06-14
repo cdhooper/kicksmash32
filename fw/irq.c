@@ -196,6 +196,23 @@ fault_show_regs(const void *sp)
     }
 }
 
+static void
+run_cmdline(void)
+{
+    static uint8_t ran_before = 0;
+    if (ran_before) {
+        printf("Running UART command line\n");
+        while (1)
+            cmdline();
+    } else {
+        ran_before++;
+        while (1) {
+            main_poll();
+            cmdline();
+        }
+    }
+}
+
 /**
  * hard_fault_handler_impl() provides an implementation of a hardfault handler
  *                           with optional return, skipping the offending
@@ -238,8 +255,7 @@ hard_fault_handler_impl(void *sp)
     puts("Hard fault");
     fault_show_regs(sp);
     led_alert(1);
-    while (1)
-        cmdline();
+    run_cmdline();
 }
 
 /**
@@ -265,8 +281,7 @@ nmi_handler_impl(const void *sp)
     puts("NMI");
     fault_show_regs(sp);
     led_alert(1);
-    while (1)
-        cmdline();
+    run_cmdline();
 }
 
 void nmi_handler(void);
@@ -286,8 +301,7 @@ bus_fault_handler_impl(const void *sp)
     puts("bus fault");
     fault_show_regs(sp);
     led_alert(1);
-    while (1)
-        cmdline();
+    run_cmdline();
 }
 
 void bus_fault_handler(void);
@@ -307,8 +321,7 @@ mem_manage_handler_impl(const void *sp)
     puts("Memory management exception");
     fault_show_regs(sp);
     led_alert(1);
-    while (1)
-        cmdline();
+    run_cmdline();
 }
 
 void mem_manage_handler(void);
@@ -328,8 +341,7 @@ usage_fault_handler_impl(const void *sp)
     puts("usage fault");
     fault_show_regs(sp);
     led_alert(1);
-    while (1)
-        cmdline();
+    run_cmdline();
 }
 
 void usage_fault_handler(void);
@@ -349,8 +361,7 @@ unknown_handler_impl(const void *sp)
     puts("Unknown fault");
     fault_show_regs(sp);
     led_alert(1);
-    while (1)
-        cmdline();
+    run_cmdline();
 }
 
 /*
@@ -360,8 +371,7 @@ unknown_handler_impl(const void *sp)
  * handler functions in this code.
  *
  * Example, trigger window watchdog interrupt:
- *    CMD> cb 0xe000e100 1
- *    CMD> cb 0xe000e200 1
+ *    CMD> cb 0xe000e100 1 ; cb 0xe000e200 1
  *
  *    Unknown fault
  *    R0=e000e200 R3=2000fdf9 R6=20000f94  R9=2000fdf8 R12=00000000 PC=08001678

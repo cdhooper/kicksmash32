@@ -32,6 +32,7 @@
 #include "msg.h"
 #include "config.h"
 #include "pin_tests.h"
+#include "led.h"
 
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/stm32/gpio.h>
@@ -524,7 +525,12 @@ cmd_prom(int argc, char * const *argv)
     } else if (strcmp("write", arg) == 0) {
         op_mode = OP_WRITE;
     } else if (strcmp("test", arg) == 0) {
-        return (pin_tests());
+        rc = pin_tests();
+        if (rc == 0)
+            rc = prom_test();
+        if (rc != 0)
+            led_alert(1);
+        return (rc);
     } else {
         printf("error: unknown prom operation %s\n", arg);
         return (RC_USER_HELP);
