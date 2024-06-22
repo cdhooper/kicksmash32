@@ -365,6 +365,9 @@ pin_tests(void)
         return (RC_FAILURE);
     }
 
+    /* Set alternate PA13 | PA14 | PA15 to be input */
+    gpio_setmode(SOCKET_A13_PORT, GPIO1 | GPIO2 | GPIO3, GPIO_SETMODE_INPUT);
+
     /*
      * Stand-alone test:
      *  Pull all SOCKET_A0-A15 high, wait 1 ms

@@ -1,7 +1,21 @@
 Silkscreen text for bottom AMS1117 should be flipped 180 degrees
+    Fixed in Rev 5
 
 Silkscreen text for bottom 5819 should be flipped 180 degrees
+    Fixed in Rev 5
 
 Connect BOOT0 to a GPIO so that pin state can be read at runtime.
-    This could be used as a secondary method to step to next longreset
-    or have a dedicated kickstart bank recovery chain
+    This could be used as a secondary method for step to next longreset
+    or have a dedicated kickstart bank recovery chain.
+    Fixed in Rev 5
+
+LED3 (POWER) should be specified as Purple 3.0-3.2V
+    Fixed in Rev 5
+
+LED1 (READ) should be specified as Orange 2.0-2.3V
+    Fixed in Rev 5 (Yellow)
+
+LED2 (WRITE) should be specified as Green 2.0-2.3V
+    Fixed in Rev 5
+
+Investigate hole size reduction for socket header pins
