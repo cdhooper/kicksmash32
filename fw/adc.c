@@ -157,9 +157,9 @@ print_reading(int value, char *suffix)
     uint milli = abs(value) % 1000;
 
     if (*suffix == 'C') {
-        printf("%3d.%u %s", units, milli / 100, suffix);
+        printf("%2d.%u %s", units, milli / 100, suffix);
     } else {
-        printf("%2d.%02u %s", units, milli / 10, suffix);
+        printf("%d.%02u %s", units, milli / 10, suffix);
     }
 }
 
@@ -267,8 +267,9 @@ adc_poll(int verbose, int force)
     static uint     avg_v5 = 0;
     uint            calc_v5;
     uint            scale;
-    int             percent5;   // 0.1 percent voltage deviation for 5V
+    int             v5_good = false;
     uint16_t        adc[CHANNEL_COUNT];
+    static uint8_t  deglitch = 0;
     static uint64_t next_check = 0;
 
     if ((timer_tick_has_elapsed(next_check) == false) && (force == false))
@@ -283,24 +284,29 @@ adc_poll(int verbose, int force)
     else
         avg_v5 += ((int)calc_v5 - (int)avg_v5) / 4;
 
-    percent5 = avg_v5 * 100 / V5_EXPECTED_MV;
-    if ((percent5 < 90) || (percent5 > 105)) {  // 4.5V - 5.25V
-        if ((v5_stable == true) && verbose) {
-#if BOARD_REV >= 4
-            printf("Amiga V5 not stable at ");
-            print_reading(avg_v5, "V\n");
-#endif
-        }
-        v5_stable = false;
+    if ((avg_v5 < 4250) || (avg_v5 > 5250)) {  // 4.25V - 5.25V
+        v5_good = false;
     } else {
-        if ((v5_stable == false) && verbose) {
-#if BOARD_REV >= 4
-            printf("Amiga V5 stable at ");
-            print_reading(avg_v5, "V\n");
-#endif
-        }
-        v5_stable = true;
+        v5_good = true;
     }
 
+    if (v5_stable != v5_good) {
+        printf(".");
+        if (deglitch == 0) {
+            v5_stable = v5_good;
+#if BOARD_REV >= 4
+            if (verbose) {
+                printf("Amiga V5 %sstable at ",
+                       (v5_stable == false) ? "not " : "");
+                print_reading(avg_v5, "V\n");
+            }
+#endif
+        } else {
+            deglitch--;
+            next_check = 0;
+        }
+    } else {
+        deglitch = 3;
+    }
 //  scale = adc_get_scale(adc[0]);
 }

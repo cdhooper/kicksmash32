@@ -131,11 +131,8 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     crc = crc32(crc, argbuf, arglen);
     (void) *ADDR32(ROM_BASE + (cmd << smash_cmd_shift));
 
-    for (pos = 0; pos < arglen / sizeof (uint16_t); pos++) {
-        (void) *ADDR32(ROM_BASE + (argbuf[pos] << smash_cmd_shift));
-    }
-    if (arglen & 1) {
-        /* Odd byte at end */
+    /* Send message payload */
+    for (pos = 0; pos < (arglen + 1) / sizeof (uint16_t); pos++) {
         (void) *ADDR32(ROM_BASE + (argbuf[pos] << smash_cmd_shift));
     }
 

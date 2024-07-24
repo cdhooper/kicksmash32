@@ -2515,14 +2515,13 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
             sched_yield();
             continue;
         }
-// printf("[%x]", ch);
         if (flags & BIT(0)) {
             /* Capture raw data */
-            if (pos < buflen)
+            if (pos < ((buflen + 1) & ~1))
                 bufp[pos] = ch;
         } else {
             /* Just packet payload */
-            if (pos - KS_MSG_HEADER_LEN < buflen)
+            if (pos - KS_MSG_HEADER_LEN < ((buflen + 1) & ~1))
                 bufp[pos - KS_MSG_HEADER_LEN] = ch;
         }
         switch (pos) {
@@ -2591,32 +2590,14 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
                         status = 0;
                     } else {
                         /* Regular data receive */
-                        if ((pos - KS_MSG_HEADER_LEN - 3) > buflen) {
+                        if (len > buflen) {
                             printf("message len 0x%x > buflen 0x%x\n",
-                                   (uint)(pos - KS_MSG_HEADER_LEN - 3), buflen);
+                                   len, buflen);
                             return (MSG_STATUS_BAD_LENGTH);  // too large
                         }
                         crc = crc32s(0, &len, 2);       // length
-
-//
-// DEBUG next steps for odd length (1 byte)
-// Have STM32 print out CRC that it receives and compare against
-// 9f202df9 and 39120626
-//
-
                         crc = crc32s(crc, &status, 2);  // command
-#if 0
-                        if (len & 1) {
-                            crc = crc32s(crc, bufp, len & ~1);   // data
-printf("crc3=%08x\n", crc);
-printf("final byte=%02x\n", bufp[len]);
-                            crc = crc32(crc, bufp + len, 1);   // data
-                        } else {
-                            crc = crc32s(crc, bufp, len);   // data
-                        }
-#elif 1
                         crc = crc32s(crc, bufp, len);   // data
-#endif
                     }
                     if (crc != crc_rx) {
                         printf("Rx CRC %08x != expected %08x\n", crc, crc_rx);
@@ -2638,7 +2619,6 @@ printf("final byte=%02x\n", bufp[len]);
                     if (rxstatus != NULL)
                         *rxstatus = status;
                     return (MSG_STATUS_SUCCESS);
-                    pos = 0;
                 } else {
                     pos++;
                 }

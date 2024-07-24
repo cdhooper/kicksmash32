@@ -31,12 +31,14 @@ main(int argc, char *argv[])
     while (scanf("%x", &val) != EOF) {
         v = val;
         switch (magic_pos) {
-            case 0:
+            case 0:  // Magic start
                 if (v != sm_magic[0])
                     break;
                 magic_pos = 1;
                 break;
-            case 1 ... (ARRAY_SIZE(sm_magic) - 1):
+            case 1:  // Magic
+            case 2:  // Magic
+            case 3:  // Magic
                 /* Magic phase */
                 if (v != sm_magic[magic_pos]) {
                     magic_pos = 0;  // No match

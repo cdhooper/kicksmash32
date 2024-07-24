@@ -251,8 +251,7 @@ just-mxprog:
 
 # Select specific programmer ("make stinfo" to get serial)
 # export ST_ARGS="--serial 57FF6E064975545225502187"		# amiga1
-# export ST_ARGS="--serial 53FF74064986525547421187"		# amiga2
-# export ST_ARGS="--serial 303030303030303030303031"		# amiga1
+# export ST_ARGS="--serial 303030303030303030303031"		# amiga2
 
 just-unprotect: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_unprotect.bin 0x1ffff800

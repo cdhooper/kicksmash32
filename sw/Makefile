@@ -1,5 +1,7 @@
 PROG=hostsmash
 SRCS=hostsmash.c crc32.c version.c
+PROG2=crcit
+SRCS2=crcit.c crc32.c
 CC=gcc
 #CFLAGS  := -O2 -g -pthread -Wall -Wpedantic
 #LDFLAGS := -O2 -g -lpthread
@@ -7,7 +9,7 @@ CFLAGS  := -O0 -g -pthread -Wall -Wpedantic
 LDFLAGS := -O0 -g -lpthread
 UNAME_S := $(shell uname -s)
 
-QUIET := @
+QUIET ?= @
 
 #
 # Allowing links opens security risk for remote mounts because anything
@@ -42,8 +44,9 @@ else
 endif
 
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
+OBJS2  := $(SRCS2:%.c=$(OBJDIR)/%.o)
 
-all: $(PROG)
+all: $(PROG) $(PROG2)
 
 define DEPEND_SRC
 # The following line creates a rule for an object file to depend on a
@@ -51,6 +54,7 @@ define DEPEND_SRC
 $(patsubst %,$(OBJDIR)/%,$(filter-out $(OBJDIR)/%,$(basename $(1)).o)) $(filter $(OBJDIR)/%,$(basename $(1)).o): $(1)
 endef
 $(foreach SRCFILE,$(SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE))))
+$(foreach SRCFILE,$(SRCS2),$(eval $(call DEPEND_SRC,$(SRCFILE))))
 
 
 $(OBJS): Makefile smash_cmd.h version.h
@@ -61,7 +65,11 @@ $(PROG): $(OBJS)
 	@echo Building $@
 	$(QUIET)$(CC) $(LDFLAGS) $(OBJS) -o $@
 
-$(OBJS): Makefile | $(OBJDIR)
+$(PROG2): $(OBJS2)
+	@echo Building $@
+	$(QUIET)$(CC) $(LDFLAGS) $(OBJS2) -o $@
+
+$(sort $(OBJS) $(OBJS2)): Makefile | $(OBJDIR)
 	@echo Building $@
 	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -o $@
 

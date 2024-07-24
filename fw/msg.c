@@ -1969,7 +1969,6 @@ bus_snoop(uint mode)
             }
             cap_addr[oprod] = address_input();  // Capture address
             cap_data[oprod] = data_input();     // Capture data
-            continue;
         } else {
             /* Capture data on rising edge of OE */
             if (last_oe == 0) {
@@ -2029,7 +2028,7 @@ usb_msg_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
     uint rlen = rlen1 + rlen2;
 
     if (flags & KS_REPLY_RAW) {
-        /* raw mode byte swaps and sends an already constructed message */
+        /* raw mode sends an already constructed message */
         if (rlen1 != 0) {
             if (puts_binary(rbuf1, rlen1))
                 printf("puts_binary %u fail\n", rlen1);
