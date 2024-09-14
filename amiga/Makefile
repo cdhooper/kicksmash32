@@ -9,7 +9,7 @@ OBJDIR       := objs
 SMASH_SRCS   := smash.c crc32.c sm_msg.c cpu_control.c
 SMASH_HDRS   := smash_cmd.h host_cmd.h crc32.h cpu_control.h sm_msg.h sm_file.h
 SMASH_OBJS   := $(SMASH_SRCS:%.c=$(OBJDIR)/%.o)
-FS_SRCS      := fs_hand.c
+FS_SRCS      := fs_hand.c printf.c
 FS_OBJS      := $(FS_SRCS:%.c=$(OBJDIR)/%.o)
 FTP_SRCS     := smashftp.c smashftp_cli.c crc32.c sm_msg.c cpu_control.c \
 		readline.c sm_file.c
@@ -19,7 +19,7 @@ CC      := m68k-amigaos-gcc
 CFLAGS  := -Wall -Wextra -Wno-pointer-sign -fomit-frame-pointer
 CFLAGS  += -Wno-strict-aliasing -Wno-sign-compare
 LDFLAGS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -mcrt=clib2 -lgcc -lc -lamiga
-LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lamiga -lgcc -lc
+LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lamiga -lgcc -nostdlib -ldebug -lgcc -lc
 LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -mcrt=clib2 -lgcc -lc -lamiga
 PROGVER := $(SMASH_PROG)_$(shell awk '/char[[:space:]]*\*version =/{print $$7}' smash.c)
 

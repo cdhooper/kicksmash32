@@ -97,7 +97,7 @@ static const char cmd_options[] =
     "   quiet        minimize test output\n"
     "   sr <addr>    spin loop reading address (-x)\n"
     "   srr <addr>   spin loop reading address with ROM OVL set (-y)\n"
-    "   test[0123]   do interface test (-t)\n";
+    "   test[01234]  do interface test (-t)\n";
 
 static const char cmd_bank_options[] =
     "  show                       Display all ROM bank information (-s)\n"

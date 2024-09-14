@@ -112,13 +112,11 @@ static const cmd_t cmd_list[] = {
     { cmd_version, "version", 1, NULL, "", "show version" },
 };
 
+/* Do not evaluate any command line math operations */
+#define DO_NOT_EVAL_ANY
+
+#ifndef DO_NOT_EVAL_ANY
 static const char *do_not_eval_cmds[] = {
-    "get",
-    "put",
-    "chmod",
-    "protect",
-    "lchmod",
-    "lprotect",
 };
 
 static uint
@@ -142,6 +140,7 @@ check_for_do_not_eval(const char *str)
             return (1);
     return (0);
 }
+#endif
 
 void
 errx(int ec, const char *fmt, ...)
@@ -473,6 +472,7 @@ finish:
     return (rc);
 }
 
+#ifndef DO_NOT_EVAL_ANY
 static uint64_t
 op_add(uint64_t arg1, uint64_t arg2)
 {
@@ -890,10 +890,14 @@ continue_op_search:  ; /* Allow label before end of control struct */
 #endif
     return (RC_SUCCESS);
 }
+#endif
 
 char *
 eval_cmdline_expr(const char *str)
 {
+#ifdef DO_NOT_EVAL_ANY
+    return (strdup(str));
+#else
     char *ptr;
     char *buf = strdup(str);
     char *sptr = NULL;
@@ -929,6 +933,7 @@ eval_again:
         errx(EXIT_FAILURE, "Unable to allocate memory");
     free(buf);
     return (ptr);
+#endif
 }
 
 int

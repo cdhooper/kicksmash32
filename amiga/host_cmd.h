@@ -64,6 +64,7 @@
 #define HM_MODE_TRUNC       0x0200  // Truncate file at open
 #define HM_MODE_DIR         0x0200  // Read directory entry in parent (stat)
 #define HM_MODE_READDIR     0x0201  // Read directory (composite)
+#define HM_MODE_NOFOLLOW    0x0400  // Do not follow symlink on READDIR
 
 typedef uint32_t handle_t;
 

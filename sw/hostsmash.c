@@ -31,10 +31,11 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <inttypes.h>
 #ifdef LINUX
 #include <usb.h>
-#include <dirent.h>
 #endif
+#include <dirent.h>
 #include "crc32.h"
 #include "smash_cmd.h"
 #include "host_cmd.h"
@@ -3244,16 +3245,23 @@ printf("host_path=%s\n", host_path);
         hm_type = SWAP16(hm->hm_type);
     }
     if ((hm_mode & ~HM_MODE_DIR) & HM_MODE_READ) {
-        if (lstat(host_path, &st) != 0) {
-            printf("fopen(%s) stat failed errno=%d\n", host_path, errno);
-            goto reply_open_fail;
+        if (hm_mode & HM_MODE_NOFOLLOW) {
+            if (lstat(host_path, &st) != 0) {
+                printf("fopen(%s) lstat failed errno=%d\n", host_path, errno);
+                goto reply_open_fail;
+            }
+        } else {
+            if (stat(host_path, &st) != 0) {
+                printf("fopen(%s) stat failed errno=%d\n", host_path, errno);
+                goto reply_open_fail;
+            }
         }
         hm_type = st_mode_to_hm_type(st.st_mode);
         hm->hm_type = SWAP16(hm_type);
     }
 
     if (hm_mode & HM_MODE_DIR) {
-        if ((hm_mode & ~HM_MODE_DIR) != HM_MODE_READ) {
+        if ((hm_mode & HM_MODE_RDWR) != HM_MODE_READ) {
             printf("Did not open dirent %s for read (%x)\n",
                    host_path, hm_mode);
             goto reply_open_fail;
@@ -3472,6 +3480,7 @@ dir_read_common:
             char *nptr;
             uint nlen;
             uint hmd_type;
+            uint he_mode = handle->he_mode;
             uint32_t size_hi = 0;
             uint32_t size_lo = 0;
             uint32_t amiga_perms;
@@ -3547,6 +3556,7 @@ dir_read_common:
                 }
             } else {
                 dp = readdir(handle->he_dir);
+                he_mode |= HM_MODE_NOFOLLOW;
             }
             if (dp == NULL) {
                 rc = KM_STATUS_EOF;  // end of directory
@@ -3611,9 +3621,18 @@ dir_read_common:
                 size_lo = 0;
                 amiga_perms = amiga_perms_from_host(0444);  // read-only
             } else if (lstat(host_path, &st) == 0) {
-                uint32_t time_a = time_offset(st.st_atime);
-                uint32_t time_c = time_offset(st.st_ctime);
-                uint32_t time_m = time_offset(st.st_mtime);
+                uint32_t time_a;
+                uint32_t time_c;
+                uint32_t time_m;
+
+                if (((he_mode & HM_MODE_NOFOLLOW) == 0) &&
+                    (stat(host_path, &st) != 0)) {
+                    /* Just use the result of previous lstat */
+                    printf("stat %s failed\n", host_path);
+                }
+                time_a = time_offset(st.st_atime);
+                time_c = time_offset(st.st_ctime);
+                time_m = time_offset(st.st_mtime);
                 hm_dirent->hmd_atime = SWAP32(time_a);
                 hm_dirent->hmd_ctime = SWAP32(time_c);
                 hm_dirent->hmd_mtime = SWAP32(time_m);
@@ -3813,7 +3832,7 @@ static uint
 sm_fseek(hm_fseek_t *hm, uint *status)
 {
     handle_ent_t *handle = handle_get(hm->hm_handle);
-    printf("fseek(%d, o=%lx)\n", hm->hm_handle,
+    printf("fseek(%d, o=%"PRIx64")\n", hm->hm_handle,
            ((uint64_t) hm->hm_offset_hi << 32) | hm->hm_offset_lo);
     hm->hm_hdr.km_status = KM_STATUS_OK;
     if (handle == NULL) {
@@ -3837,7 +3856,7 @@ sm_fseek(hm_fseek_t *hm, uint *status)
         pos = lseek(handle->he_fd, offset, SEEK_SET);
         if (pos < 0) {
             /* Seek failed */
-            printf("Seek %u to %jd failed\n", hm->hm_handle, pos);
+            printf("Seek %u to %jd failed\n", hm->hm_handle, (intmax_t)pos);
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         } else {
             hi = pos >> 32;

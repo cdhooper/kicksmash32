@@ -21,3 +21,8 @@ rev3/
 photos
 #fw/libopencm3/
 #fw/stutils/
+amiga/smash
+amiga/smashfs
+amiga/smashftp
+sw/hostsmash
+sw/crcit

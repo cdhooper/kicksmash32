@@ -1714,6 +1714,7 @@ ls_show(const char *name, uint flags)
     if (flags & LS_FLAG_DIRENT) {
         /* Open file or dir as directory entry (like STAT) */
         open_mode = HM_MODE_READDIR;
+        open_mode |= HM_MODE_NOFOLLOW;
     }
 
     /* Open directory */
