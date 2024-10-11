@@ -9,32 +9,53 @@ OBJDIR       := objs
 SMASH_SRCS   := smash.c crc32.c sm_msg.c cpu_control.c
 SMASH_HDRS   := smash_cmd.h host_cmd.h crc32.h cpu_control.h sm_msg.h sm_file.h
 SMASH_OBJS   := $(SMASH_SRCS:%.c=$(OBJDIR)/%.o)
-FS_SRCS      := fs_hand.c printf.c
+FS_SRCS      := fs_hand.c fs_timer.c fs_vol.c fs_packet.c \
+		printf.c crc32.c sm_msg.c sm_file.c cpu_control.c
+FS_HDRS	     := fs_hand.h fs_packet.h fs_timer.h fs_vol.h printf.h
 FS_OBJS      := $(FS_SRCS:%.c=$(OBJDIR)/%.o)
 FTP_SRCS     := smashftp.c smashftp_cli.c crc32.c sm_msg.c cpu_control.c \
 		readline.c sm_file.c
+FTP_HDRS     := smashftp.h smashftp_cli.h readline.h
 FTP_OBJS     := $(FTP_SRCS:%.c=$(OBJDIR)/%.o)
 
 CC      := m68k-amigaos-gcc
 CFLAGS  := -Wall -Wextra -Wno-pointer-sign -fomit-frame-pointer
 CFLAGS  += -Wno-strict-aliasing -Wno-sign-compare
 LDFLAGS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -mcrt=clib2 -lgcc -lc -lamiga
-LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lamiga -lgcc -nostdlib -ldebug -lgcc -lc
+#LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -nostdlib -lgcc -lamiga -ldebug -lc
+LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lgcc -lamiga -ldebug -lc -noixemul
 LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -mcrt=clib2 -lgcc -lc -lamiga
+# The below makes smashftp huge
+#LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lgcc -lc -lamiga -noixemul
 PROGVER := $(SMASH_PROG)_$(shell awk '/char[[:space:]]*\*version =/{print $$7}' smash.c)
 
 CFLAGS  += -Os
 QUIET   := @
 #QUIET   :=
 
+# Enable to completely turn off debug output (smashfs is about 5K smaller)
+#CFLAGS += -NO_DEBUG
+
+#LDFLAGS_FTP += -g
 #LDFLAGS += -g
 #CFLAGS  += -g
+
 
 #
 # Allowing links opens security risk for remote mounts because anything
 # the user running hostsmash can access may then be potentially linked
 # and accessed by the Amiga
 CFLAGS += -DALLOW_CREATE_LINK
+
+# If verbose is specified with no other targets, then build everything
+ifeq ($(MAKECMDGOALS),verbose)
+verbose: all
+endif
+ifeq (,$(filter verbose timed, $(MAKECMDGOALS)))
+QUIET   := @
+else
+QUIET   :=
+endif
 
 ifeq (, $(shell which $(CC) 2>/dev/null ))
 $(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga/bin")
@@ -57,6 +78,9 @@ OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS))
 $(OBJS): Makefile $(SMASH_HDRS) | $(OBJDIR)
 	@echo Building $@
 	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -o $@
+
+$(FS_OBJS): $(FS_HDRS)
+$(FTP_OBJS): $(FTP_HDRS)
 
 $(SMASH_PROG): $(SMASH_OBJS)
 $(FTP_PROG): $(FTP_OBJS)

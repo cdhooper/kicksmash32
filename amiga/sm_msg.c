@@ -83,7 +83,7 @@ dump_memory(void *buf, uint len, uint dump_base)
     }
     if ((pos & 3) != 0) {
         str[strpos] = '\0';
-        printf("%*s%s\n", (4 - (pos & 3)) * 5, "", str);
+        printf("%*s%s\n", (4 - (pos & 3)) * 9 + 1, "", str);
     }
 }
 
@@ -172,7 +172,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
 //          *ADDR32(0x7770000 + word * 2) = val;
             val = val32 >> 16;
         }
-        if (flag_debug && (replybuf != NULL) && (word < (replymax / 2))) {
+        if ((flag_debug > 2) && (replybuf != NULL) && (word < (replymax / 2))) {
             replybuf[word] = val;  // Just for debug on failure (-d flag)
         }
 
@@ -373,7 +373,7 @@ recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
         rc = KM_STATUS_OK;
     if (rc != KM_STATUS_OK) {
         printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
-        if (flag_debug)
+        if (flag_debug > 2)
             dump_memory(buf, 0x40, DUMP_VALUE_UNASSIGNED);
     }
     return (rc);
@@ -477,7 +477,7 @@ host_send_msg(void *smsg, uint len)
     if (rc != 0) {
         printf("Send message l=%u failed: %d (%s)\n",
                len, rc, smash_err(rc));
-        if (flag_debug)
+        if (flag_debug > 2)
             dump_memory(rbuf, sizeof (rbuf), DUMP_VALUE_UNASSIGNED);
     }
     return (rc);

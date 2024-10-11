@@ -164,6 +164,8 @@ warnx(const char *fmt, ...)
     va_end(args);
     putchar('\n');
 }
+
+#if 0
 void
 warn(const char *fmt, ...)
 {
@@ -175,6 +177,7 @@ warn(const char *fmt, ...)
     va_end(args);
     putchar('\n');
 }
+#endif
 
 static rc_t
 cmd_help(int argc, char * const *argv)

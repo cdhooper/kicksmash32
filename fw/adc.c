@@ -291,7 +291,6 @@ adc_poll(int verbose, int force)
     }
 
     if (v5_stable != v5_good) {
-        printf(".");
         if (deglitch == 0) {
             v5_stable = v5_good;
 #if BOARD_REV >= 4

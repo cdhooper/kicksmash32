@@ -166,6 +166,10 @@ int sscanf(const char *str, char const *fmt, ...);
 int putchar(int ch);
 int puts(const char *str);
 
+#ifdef NO_DEBUG
+#define printf(args...) do { } while (0)
+#endif
+
 #ifdef __cplusplus
 }
 #endif

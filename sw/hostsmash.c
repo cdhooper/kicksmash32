@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/file.h>
@@ -32,6 +33,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <inttypes.h>
+#include <sys/statvfs.h>
 #ifdef LINUX
 #include <usb.h>
 #endif
@@ -40,6 +42,16 @@
 #include "smash_cmd.h"
 #include "host_cmd.h"
 #include "version.h"
+
+#define FILE_DEBUG
+#ifndef FILE_DEBUG
+#define fsprintf(args...) do { } while (0)
+#endif
+
+#define MSG_DEBUG
+#ifndef MSG_DEBUG
+#define msgprintf(args...) do { } while (0)
+#endif
 
 #define SWAP16(x) __builtin_bswap16(x)
 #define SWAP32(x) __builtin_bswap32(x)
@@ -54,6 +66,8 @@ static const struct option long_opts[] = {
     { "bank",     required_argument, NULL, 'b' },
     { "delay",    required_argument, NULL, 'D' },
     { "device",   required_argument, NULL, 'd' },
+    { "debugfs",  no_argument,       NULL, 0x80 + 'f' },
+    { "debugmsg", no_argument,       NULL, 0x80 + 'm' },
     { "erase",    no_argument,       NULL, 'e' },
     { "fill",     no_argument,       NULL, 'f' },
     { "identify", no_argument,       NULL, 'i' },
@@ -101,6 +115,12 @@ static const char usage_text[] =
 "    -b --bank <num>         starting EEPROM address as multiple of file size\n"
 "    -D --delay <msec>       pacing delay between sent characters (ms)\n"
 "    -d --device <filename>  serial device to use (e.g. /dev/ttyACM0)\n"
+#ifdef FILE_DEBUG
+"       --debugfs            debug filesystem operations\n"
+#endif
+#ifdef FILE_DEBUG
+"       --debugmsg           debug Amiga messages\n"
+#endif
 "    -e --erase              erase EEPROM (use -a <addr> for sector erase)\n"
 "    -f --fill               fill EEPROM with duplicates of the same image\n"
 "    -h --help               display usage\n"
@@ -123,6 +143,43 @@ static const char usage_text[] =
 "    hostsmash -d /dev/ttyACM0 -t\n"
 #endif
 "";
+
+static uint debug_fs = 0;
+static uint debug_msg = 0;
+
+#ifdef FILE_DEBUG
+__attribute__((format(__printf__, 1, 2)))
+int fsprintf(const char *fmt, ...)
+{
+    int rc;
+    va_list args;
+
+    if (debug_fs) {
+        va_start(args, fmt);
+        rc = vprintf(fmt, args);
+        va_end(args);
+    }
+
+    return (rc);
+}
+#endif
+
+#ifdef MSG_DEBUG
+__attribute__((format(__printf__, 1, 2)))
+int msgprintf(const char *fmt, ...)
+{
+    int rc;
+    va_list args;
+
+    if (debug_msg) {
+        va_start(args, fmt);
+        rc = vprintf(fmt, args);
+        va_end(args);
+    }
+
+    return (rc);
+}
+#endif
 
 /* Command line modes which may be specified by the user */
 #define MODE_UNKNOWN 0x00
@@ -181,6 +238,10 @@ static const char usage_text[] =
 
 #define KS_PATH_MAX              4096  // Maximum lenght of file pathname
 
+#define SEEK_OFFSET_BEGINNING (-1)
+#define SEEK_OFFSET_CURRENT   (0)
+#define SEEK_OFFSET_END       (1)
+
 typedef unsigned int uint;
 
 static void discard_input(int timeout);
@@ -202,6 +263,7 @@ typedef struct handle_ent handle_ent_t;
 typedef struct handle_ent {
     handle_t      he_handle;   // Reference handle for Amiga interface
     char         *he_name;     // Name of file's path relative to parent
+    char         *he_path;     // Full local filesystem relative path
     int           he_fd;       // Open file number
     uint          he_type;     // One of HM_TYPE_*
     uint          he_mode;     // Open mode
@@ -217,11 +279,16 @@ static handle_ent_t *handle_list_head = NULL;
 static handle_t      handle_unique = 0;
 static handle_t      handle_default = 0;  // Volume directory is default
 
+#define AV_FLAG_BOOTABLE 0x01
+
 typedef struct amiga_vol {
     const char   *av_volume;   // Amiga path
     const char   *av_path;     // Host path
+    const char   *av_realpath; // Host real path (not relative)
     handle_ent_t *av_handle;
     amiga_vol_t  *av_next;
+    uint          av_flags;
+    int           av_bootpri;
 } amiga_vol_t;
 amiga_vol_t *amiga_vol_head = NULL;
 
@@ -275,6 +342,10 @@ usage(FILE *fp)
     (void) fputs(usage_text, fp);
 }
 
+
+#if defined(DEBUG_READ_DATA)
+#define VALUE_UNASSIGNED 0xffffffff
+
 static char
 printable_ascii(uint8_t ch)
 {
@@ -284,8 +355,6 @@ printable_ascii(uint8_t ch)
         return (' ');
     return ('.');
 }
-
-#define VALUE_UNASSIGNED 0xffffffff
 
 static void
 dump_memory(void *buf, uint len, uint dump_base)
@@ -320,6 +389,7 @@ dump_memory(void *buf, uint len, uint dump_base)
         printf("%*s%s\n", (4 - (pos & 3)) * 5, "", str);
     }
 }
+#endif
 
 #if 0
 static const char *
@@ -367,7 +437,7 @@ is_same_path(const char *path1, const char *path2)
     path1 = trim_path(path1, &len1);
     path2 = trim_path(path2, &len2);
 
-    printf("compare '%.*s' %zu with '%.*s' %zu\n", (int)len1, path1, len1, (int)len2, path2, len2);
+    fsprintf("compare '%.*s' %zu with '%.*s' %zu\n", (int)len1, path1, len1, (int)len2, path2, len2);
     if ((len1 == len2) && (strncmp(path1, path2, len1) == 0))
         return (1);
     return (0);
@@ -2114,13 +2184,26 @@ wait_for_tx_writer(void)
             time_delay_msec(10);
 }
 
+static void
+show_handle_count(const char *prefix)
+{
+#ifdef DEBUG_HANDLE_COUNT
+    handle_ent_t *cur;
+    uint count = 0;
+    for (cur = handle_list_head; cur != NULL; cur = cur->he_next)
+        count++;
+    fsprintf("%s: handle count=%u\n", prefix, count);
+#endif
+}
+
 static handle_ent_t *
-handle_new(const char *name, handle_ent_t *parent, uint type, uint mode)
+handle_new(const char *name, const char *path, handle_ent_t *parent,
+           uint type, uint mode)
 {
     handle_t handle;
     handle_ent_t *node = malloc(sizeof (*node));
     if (node == NULL) {
-        printf("alloc %ju bytes failed\n", sizeof (*node));
+        fsprintf("alloc %ju bytes failed\n", sizeof (*node));
         return (0);
     }
     memset(node, 0, sizeof (*node));
@@ -2128,10 +2211,12 @@ handle_new(const char *name, handle_ent_t *parent, uint type, uint mode)
 
     node->he_handle  = handle;
     node->he_name    = strdup(name);
+    node->he_path    = strdup(path);
     node->he_type    = type;
     node->he_mode    = mode;
     node->he_count   = 1;
     node->he_entnum  = 0;
+    node->he_dir     = NULL;
     node->he_next    = handle_list_head;
     handle_list_head = node;
 
@@ -2139,12 +2224,11 @@ handle_new(const char *name, handle_ent_t *parent, uint type, uint mode)
         node->he_volume  = node;  // This is the root of the volume
         node->he_avolume = NULL;  // Will be assigned later?
     } else if (parent != NULL) {
+        /* Parent can be NULL if referencing the Volume Directory */
         node->he_volume  = parent->he_volume;
         node->he_avolume = parent->he_avolume;
-
-        /* Parent can be NULL if referencing the Volume Directory */
     }
-
+    show_handle_count("New");
     return (node);
 }
 
@@ -2162,13 +2246,15 @@ handle_free(handle_t handle)
                 handle_list_head = node->he_next;
             else
                 parent->he_next = node->he_next;
+            free(node->he_path);
             free(node->he_name);
             free(node);
+            show_handle_count("Free");
             return;
         }
         parent = node;
     }
-    printf("Failed to find %x in handle list for free\n", handle);
+    fsprintf("Failed to find %x in handle list for free\n", handle);
 }
 
 static handle_ent_t *
@@ -2182,7 +2268,7 @@ handle_get(handle_t handle)
     for (node = handle_list_head; node != NULL; node = node->he_next)
         if (node->he_handle == handle)
             return (node);
-    printf("Failed to find %x in handle list\n", handle);
+    fsprintf("Failed to find %x in handle list\n", handle);
     return (NULL);
 }
 
@@ -2193,7 +2279,7 @@ handle_get_name(const char *name)
     for (node = handle_list_head; node != NULL; node = node->he_next)
         if ((node->he_name != NULL) && (strcmp(node->he_name, name) == 0))
             return (node);
-    printf("Failed to find \"%s\" in handle list\n", name);
+    fsprintf("Failed to find \"%s\" in handle list\n", name);
     return (NULL);
 }
 
@@ -2203,8 +2289,8 @@ handle_list_show(void)
 {
     char *type;
     handle_ent_t *node;
-    printf("    Type Handle FD D Path               APath              "
-           "HPath\n");
+    fsprintf("    Type Handle FD D Path               APath              "
+             "HPath\n");
     for (node = handle_list_head; node != NULL; node = node->he_next) {
         switch (node->he_type) {
             default:
@@ -2242,9 +2328,9 @@ handle_list_show(void)
                 type = "VOLDIR";
                 break;
         }
-        printf(" %7s %6x %2d %s %-18s\n",
-               type, node->he_handle, node->he_fd,
-               node->he_dir ? "Y" : " ", node->he_name);
+        fsprintf(" %7s %6x %2d %s %-18s\n",
+                 type, node->he_handle, node->he_fd,
+                 node->he_dir ? "Y" : " ", node->he_name);
     }
 }
 #endif
@@ -2257,30 +2343,67 @@ volume_add(const char *volume_name, const char *local_path, uint is_default)
     char *vpos;
     char volnamebuf[128];
     uint volnamelen = strlen(volume_name);
+    uint flags = 0;
+    int  bootpri = 0;
 
     if (volnamelen > sizeof (volnamebuf) - 2)
         errx(EXIT_FAILURE, "Volume name '%s' too long\n", volume_name);
     if (strchr(volume_name, '/') != NULL)
         errx(EXIT_FAILURE, "Volume name '%s' may not contain '/'\n",
              volume_name);
-    vpos = strchr(volume_name, ':');
-    if ((vpos != NULL) && ((vpos - volume_name) < volnamelen - 1)) {
-        errx(EXIT_FAILURE, "Volume name '%s' only have ':' at end\n",
-             volume_name);
-    }
+
     strcpy(volnamebuf, volume_name);
+    vpos = strchr(volnamebuf, ':');
+    if ((vpos != NULL) && ((vpos - volume_name) < volnamelen - 1)) {
+        /* Volume Flags were specified */
+        char *start = vpos + 1;
+        char *end;
+        while (*start != '\0') {
+            char ch;
+            end = strchr(start, ',');
+            if (end == NULL)
+                end = strchr(start, '\0');
+            ch = *end;
+            *end = '\0';
+            fsprintf("flag '%s'\n", start);
+            if (strncmp(start, "bootpri=", 8) == 0) {
+                if ((sscanf(start + 8, "%i", &bootpri) != 1) ||
+                    (bootpri > 127) || (bootpri < -128))  {
+                    errx(EXIT_FAILURE,
+                         "Invalid boot priority %s", start + 8);
+                }
+                flags |= AV_FLAG_BOOTABLE;
+            } else {
+                errx(EXIT_FAILURE,
+                     "\"-m %s\" unknown flag \"%s\"\n"
+                     "Use one of\n"
+                     "    bootpri=<num> - make partition bootable",
+                     volume_name, start);
+            }
+            *end = ch;
+            if (ch == '\0')
+                start = end;
+            else
+                start = end + 1;
+        }
+        vpos[1] = '\0';
+    }
+
     if (vpos == NULL) {
         /* Append colon */
         volnamebuf[volnamelen++] = ':';
         volnamebuf[volnamelen] = '\0';
     }
 
-    handle = handle_new(volnamebuf, NULL, HM_TYPE_VOLUME, HM_MODE_READ);
+    handle = handle_new(volnamebuf, "", NULL, HM_TYPE_VOLUME, HM_MODE_READ);
 
     node->av_volume    = strdup(volnamebuf);
     node->av_path      = local_path;
+    node->av_realpath  = realpath(local_path, NULL);
     node->av_handle    = handle;
     node->av_next      = amiga_vol_head;
+    node->av_flags     = flags;
+    node->av_bootpri   = bootpri;
     amiga_vol_head     = node;
 
     handle->he_avolume = node;
@@ -2294,7 +2417,7 @@ volume_add(const char *volume_name, const char *local_path, uint is_default)
         handle_default = handle->he_handle;
     }
 
-    printf("add volume %s = %s\n", volnamebuf, local_path);
+    fsprintf("add volume %s = %s\n", volnamebuf, local_path);
 }
 
 static amiga_vol_t *
@@ -2304,7 +2427,7 @@ volume_get_by_handle(handle_ent_t *handle)
     for (node = amiga_vol_head; node != NULL; node = node->av_next)
         if (node->av_handle == handle)
             return (node);
-    printf("Could not locate handle %u in volume list\n", handle->he_handle);
+    fsprintf("Could not locate handle %x in volume list\n", handle->he_handle);
     return (NULL);
 }
 
@@ -2320,12 +2443,28 @@ volume_get_by_index(uint index)
 }
 
 static amiga_vol_t *
-volume_get_by_path(const char *path)
+volume_get_by_path(const char *path, uint partial)
 {
     amiga_vol_t *node;
-    for (node = amiga_vol_head; node != NULL; node = node->av_next)
-        if (strcmp(node->av_path, path) == 0)
-            return (node);
+    uint         len;
+
+    for (node = amiga_vol_head; node != NULL; node = node->av_next) {
+        if (partial) {
+            len = strlen(node->av_path);
+            if ((strncmp(node->av_path, path, len) == 0) &&
+                ((path[len] == '\0') || (path[len] == '/')))
+                return (node);
+
+            len = strlen(node->av_realpath);
+            if ((strncmp(node->av_realpath, path, len) == 0) &&
+                ((path[len] == '\0') || (path[len] == '/')))
+                return (node);
+        } else {
+            if ((strcmp(node->av_path, path) == 0) ||
+                (strcmp(node->av_realpath, path) == 0))
+                return (node);
+        }
+    }
     return (NULL);
 }
 
@@ -2602,17 +2741,17 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
                     }
                     if (crc != crc_rx) {
                         printf("Rx CRC %08x != expected %08x\n", crc, crc_rx);
-#if 1
+
                         uint pos;
                         printf(" status=%04x len=%04x\n", status, len);
-                        for (pos = 0; pos < ARRAY_SIZE (sm_magic); pos++)
+                        for (pos = 0; pos < ARRAY_SIZE(sm_magic); pos++)
                             printf(" %04x", sm_magic[pos]);
                         printf(" %04x %04x", len, status);
                         for (pos = 0; pos < len; pos += 2) {
                             printf(" %04x", SWAP16(*(uint16_t *)(bufp + pos)));
                         }
                         printf(" %04x %04x\n", crc_rx >> 16, crc_rx & 0xffff);
-#endif
+
                         return (MSG_STATUS_BAD_CRC);
                     }
                     if (rxlen != NULL)
@@ -2628,9 +2767,16 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
     }
 }
 
+#ifdef STATIC_SEND_KS_CMD
 static uint
 send_ks_cmd(uint cmd, void *txbuf, uint txlen, void *rxbuf, uint rxmax,
             uint *rxstatus, uint *rxlen, uint flags)
+#else
+__attribute__((noinline))
+static uint
+send_ks_cmd(uint cmd, void *txbuf, uint txlen, void *rxbuf, uint rxmax,
+            uint *rxstatus, uint *rxlen, uint flags)
+#endif
 {
     uint rc;
     rc = send_ks_cmd_core(cmd, txlen, txbuf);
@@ -2655,7 +2801,6 @@ show_ks_inquiry(void)
         return;
     }
 
-    printf("ID\n");
     printf("  Kicksmash %u.%u built %02u%02u-%02u-%02u %02u:%02u:%02u\n",
            SWAP16(id.si_ks_version[0]), SWAP16(id.si_ks_version[1]),
            id.si_ks_date[0], id.si_ks_date[1],
@@ -2711,6 +2856,7 @@ send_msg(void *buf, uint len, uint *status)
     uint sendlen = len;
     uint bodylen;
     uint pos;
+    uint bodylen_rounded;
 
     mem16_swap(buf, len);
     if (sendlen > SEND_MSG_MAX)
@@ -2730,8 +2876,9 @@ send_msg(void *buf, uint len, uint *status)
         while (pos < len) {
             if (bodylen > len - pos)
                 bodylen = len - pos;
+            bodylen_rounded = (bodylen + 1) & ~1;
             memcpy(msgbuf + sizeof (km_msg_hdr_t),
-                   (uint8_t *)buf + pos, bodylen);
+                   (uint8_t *)buf + pos, bodylen_rounded);
             sendlen = bodylen + sizeof (km_msg_hdr_t);
             rc = send_ks_cmd(KS_CMD_MSG_SEND, msgbuf, sendlen, NULL, 0,
                              status, NULL, 0);
@@ -2785,24 +2932,19 @@ keep_app_state(void)
 }
 
 /*
- * time_offset
- * -----------
- * Converts a UNIX-style seconds since 1970 (GMT) value to Amiga-style
- * seconds since 1970 (local time) value.
+ * get_localtime
+ * -------------
+ * Applies local time offset to the specified raw time.
  */
 time_t
-time_offset(time_t rawtime)
+get_localtime(time_t rawtime)
 {
-#define UNIX_SEC_TO_AMIGA_SEC (2922 * 24 * 60 * 60)  // 1978 - 1970 = 2922 days
-    struct tm *ptm;
-    if (rawtime >= UNIX_SEC_TO_AMIGA_SEC)
-        rawtime -= UNIX_SEC_TO_AMIGA_SEC;
-    ptm = localtime(&rawtime);
+    struct tm *ptm = localtime(&rawtime);
     return (rawtime + ptm->tm_gmtoff);
 }
 
-static uint
-get_relative_path(handle_ent_t **parent, const char *name, char *pathbuf)
+static char *
+make_amiga_relpath(handle_ent_t **parent, const char *name)
 {
     char pathname[4096];
     const char *nptr = name;
@@ -2837,7 +2979,7 @@ get_relative_path(handle_ent_t **parent, const char *name, char *pathbuf)
             pathname[len] = '\0';
 #undef REL_PATH_DEBUG
 #ifdef REL_PATH_DEBUG
-            printf("find vol name %s\n", pathname);
+            fsprintf("find vol name %s\n", pathname);
 #endif
             *parent = handle_get_name(pathname);
             if (*parent != NULL) {
@@ -2851,7 +2993,7 @@ get_relative_path(handle_ent_t **parent, const char *name, char *pathbuf)
     if ((*parent != NULL) && ((*parent)->he_type != HM_TYPE_VOLUME)) {
         strcpy(tptr, (*parent)->he_name);
         tptr += strlen(tptr);
-        if ((tptr > pathname) && (tptr[-1] != '/'))
+        if ((tptr > pathname) && (tptr[-1] != '/') && (*nptr != '\0'))
             *(tptr++) = '/';
     }
 
@@ -2873,11 +3015,11 @@ get_relative_path(handle_ent_t **parent, const char *name, char *pathbuf)
                     goto get_rel_restart;
                 }
 #ifdef REL_PATH_DEBUG
-                printf("Seek vol name %s\n", pathname);
+                fsprintf("Seek vol name %s\n", pathname);
 #endif
                 *parent = handle_get_name(pathname);
                 if (*parent == NULL)
-                    return (1);
+                    return (NULL);
                 /* Got volume; start again with path name */
 get_rel_restart:
                 tptr = pathname;
@@ -2889,14 +3031,14 @@ get_rel_next:
             } else if ((*nptr == '/') && (tptr == pathname)) {
                 /* Consume leading / */
 #ifdef REL_PATH_DEBUG
-                printf("saw /\n");
+                fsprintf("saw /\n");
 #endif
                 goto get_rel_next;
             } else if ((tptr > pathname) && (tptr[-1] == '.') &&
                        ((tptr == pathname + 1) || (tptr[-2] == '/'))) {
                 /* Consume ./ meaning "same directory" */
 #ifdef REL_PATH_DEBUG
-                printf("saw ./\n");
+                fsprintf("saw ./\n");
 #endif
                 tptr--;
                 goto get_rel_next;
@@ -2904,7 +3046,7 @@ get_rel_next:
                                                (*nptr == '/')) {
                 /* Consume // meaning "up a directory" for Amiga */
 #ifdef REL_PATH_DEBUG
-                printf("saw //\n");
+                fsprintf("saw //\n");
 #endif
                 goto get_rel_trim_dotdot;
             } else if ((tptr > pathname + 1) &&
@@ -2912,7 +3054,7 @@ get_rel_next:
                        ((tptr == pathname + 2) || (tptr[-3] == '/'))) {
                 /* Consume .. and previous path element */
 #ifdef REL_PATH_DEBUG
-                printf("saw ..\n");
+                fsprintf("saw ..\n");
 #endif
                 tptr -= 2;
 get_rel_trim_dotdot:
@@ -2933,12 +3075,11 @@ get_rel_trim_dotdot:
     }
     *tptr = '\0';
 
-    strcpy(pathbuf, pathname);
 #ifdef REL_PATH_DEBUG
-    printf("got relative path %s from '%s' and '%s'\n",
-           pathbuf, name, *parent ? (*parent)->he_name : "NULL");
+    fsprintf("got relative path %s from '%s' and '%s'\n",
+             pathbuf, name, *parent ? (*parent)->he_name : "NULL");
 #endif
-    return (0);
+    return (strdup(pathname));
 }
 
 /*
@@ -2951,16 +3092,42 @@ merge_host_paths(const char *base, const char *append)
 {
     char pathbuf[KS_PATH_MAX];
     uint len = strlen(base);
-// printf("base=%s len=%u append=%s\n", base, len, append);
     if (len == 0)
         return (strdup(append));
     if (strlen(append) == 0)
         return (strdup(base));
     strcpy(pathbuf, base);
-    if (base[len - 1] != '/')
-        pathbuf[len++] = '/';
+    if (base[len - 1] != '/') {
+        if (base[len - 1] != ':') {
+            /* Volume name plus some part of path; add a slash */
+            pathbuf[len++] = '/';
+        } else {
+            /* Possiblly just the volume name */
+            const char *ptr;
+            /* Is the name just the volume root? */
+            for (ptr = &base[len - 2]; ptr > base; ptr--)
+                if (*ptr == ':') {
+                    /* More than one colon present; add a slash */
+                    pathbuf[len++] = '/';
+                }
+        }
+    }
     strcpy(pathbuf + len, append);
     return (strdup(pathbuf));
+}
+
+/*
+ * make_host_path is used to build a final path for file open.
+ * It takes the volume path and simply concatenates the file
+ * path, inserting a slash in the middle as appropriate.
+ */
+char *
+make_host_path(amiga_vol_t *vol, const char *append)
+{
+    if (vol == NULL)
+        return (strdup(append));
+
+    return (merge_host_paths(vol->av_path, append));
 }
 
 char *
@@ -2982,6 +3149,272 @@ merge_amiga_paths(const char *base, const char *append)
         pathbuf[len++] = '/';
     strcpy(pathbuf + len, append);
     return (strdup(pathbuf));
+}
+
+static void
+convert_host_path_to_amiga_path(char *path)
+{
+    char *ptr_s;
+    char *ptr_e;
+    char *ptr_copy = path;
+
+    ptr_s = path;
+    ptr_e = strchr(ptr_s, '/');
+    while (ptr_e != NULL) {
+        uint elen = ptr_e - ptr_s;
+        if (strncmp(ptr_s, "..", elen) == 0) {
+            *(ptr_copy++) = '/';
+        } else {
+            strncpy(ptr_copy, ptr_s, elen + 1);
+            ptr_copy += elen + 1;
+        }
+        ptr_s = ptr_e + 1;
+        ptr_e = strchr(ptr_s, '/');
+    }
+    if (ptr_s != ptr_copy)
+        strcpy(ptr_copy, ptr_s);
+}
+
+/*
+ * realpath_parent() will return an absolute path to the specified file,
+ * even if it does not exist. The parent directory must exist, however.
+ */
+static char *
+realpath_parent(char *path)
+{
+    char *eptr = path + strlen(path);
+    char *rp;
+    char *tmp;
+    int   tlen;
+
+    do {
+        while (eptr > path) {
+            if (*eptr == '/')
+                break;
+            eptr--;
+        }
+        if (eptr == path)
+            return (strdup(path));
+
+        *eptr = '\0';
+        rp = realpath(path, NULL);
+        *eptr = '/';
+    } while (rp == NULL);
+
+    tlen = strlen(rp);
+    tmp = (char *) malloc(tlen + strlen(eptr) + 1);
+    memcpy(tmp, rp, tlen);
+    strcpy(tmp + tlen, eptr);
+    free(rp);
+    return (tmp);
+}
+
+static char *
+make_host_relative_path(char *target_path, char *link_path)
+{
+    char         *target_path_save;
+    char         *link_path_save;
+    char         *target_next;
+    char         *link_next;
+    uint          pcount;
+
+    fsprintf("start: tpath=%s lpath=%s\n", target_path, link_path);
+    /*
+     * realpath_parent() will convert the specified path to a
+     * an absolute OS path. This is used to deal with cases
+     * where new links which connect backward through symlinks might
+     * result in a bad link.
+     */
+    target_path = realpath_parent(target_path);
+    link_path   = realpath_parent(link_path);
+
+    target_path_save = target_path;  // for later deallocate
+    link_path_save = link_path;      // for later deallocate
+
+    /*
+     * link_path is the new link's location in the local filesystem.
+     * target_path is the target file's path in the local filesystem.
+     *
+     * Now that these are known, trim target_path to be relative to
+     * where link_path is in the local filesystem.
+     * Common path elements are eliminated.
+     */
+    while (((target_next = strchr(target_path, '/')) != NULL) &&
+           ((link_next = strchr(link_path, '/')) != NULL)) {
+        uint tlen = target_next - target_path;
+        uint llen = link_next - link_path;
+
+        if (tlen != llen)
+            break;  // Name lengths do not match
+        if (strncmp(target_path, link_path, tlen) != 0)
+            break;  // Path elements do not match
+
+        target_path = target_next + 1;
+        link_path = link_next + 1;
+    }
+    fsprintf("part 1: tpath=%s lpath=%s\n", target_path, link_path);
+
+    /*
+     * Count the number of additional path elements in the target path.
+     */
+    for (pcount = 0; link_next != NULL; pcount++) {
+        link_next = strchr(link_path, '/');
+        if (link_next == NULL)
+            break;
+        link_path = link_next + 1;
+    }
+    if (pcount > 0) {
+        /*
+         * For each additional path element in the target path,
+         * prepend the link path with "../"
+         */
+        char *tp = malloc(strlen(target_path) + 1 + 3 * pcount);
+        char *tp_tmp = tp;
+        fsprintf("path elements to add: %d\n", pcount);
+        while (pcount-- > 0) {
+            strcpy(tp_tmp, "../");
+            tp_tmp += 3;
+        }
+        strcpy(tp_tmp, target_path);
+        target_path = tp;
+    } else {
+        target_path = strdup(target_path);
+    }
+    free(target_path_save);
+    free(link_path_save);
+
+    return (target_path);
+}
+
+char *
+amiga_link_to_host_path(handle_ent_t *phandle, const char *apath,
+                        char *link_path)
+{
+    handle_ent_t *handle = phandle;
+    char         *target_path;
+    char         *name;
+
+    if ((name = make_amiga_relpath(&handle, apath)) == NULL) {
+        fsprintf("link relative path failed for %s\n", apath);
+        return (NULL);
+    }
+    target_path = make_host_path(phandle->he_avolume, name);
+    free(name);
+
+    name = make_host_relative_path(target_path, link_path);
+    free(target_path);
+    return (name);
+}
+
+/*
+ * host_to_amiga_path() converts the specified host path in a
+ * format which is acceptable as an Amiga path.
+ *
+ * Links which resolve to outside the exported volume will be mangled.
+ * They could possibly be located if within another exported volume,
+ * but that could be very complicated.
+ */
+static char *
+host_to_amiga_path(char *hpath, char *npath, char *lpath)
+{
+    amiga_vol_t *vol_lpath;
+    amiga_vol_t *vol_hpath;
+    char *end;
+    char *full_lpath;
+    char *real_lpath;
+    char *real_hpath;
+
+    /*
+     * Example:
+     *    hpath = /home/cdh/projects/amiga_sdmac/k/ool
+     *    lpath = ../../amiga_sdmac/z2
+     *
+     * This specific example is difficult because "k" is actually
+     * a symlink outside the local filesystem. When "ool" was
+     * created, it was a link through "k" which made its link
+     * target also outside the local filesystem.
+     *
+     * If the link is within the exported volume, then simply
+     * convert the host path elements ("../" to "/") and return
+     * just that.
+     *
+     * Otherwise, if the link is outside the exported volume, then
+     * do the following.
+     * Resolve lpath
+     *    hpath = /home/cdh/projects/amiga_sdmac/k      /ool
+     *    lpath = /home/cdh/projects/amiga_sdmac/k/../../amiga_sdmac
+     * to a real path.
+     *    /home/cdh/projects/amiga_sdmac
+     *
+     * Then select the volume which best matches the link.
+     * There could be multiple volumes which match, so choose the
+     * one with the longest match.
+     */
+
+    for (end = hpath + strlen(hpath); end != hpath; end--)
+        if (*end == '/')
+            break;
+
+    *end = '\0';
+    full_lpath = merge_host_paths(hpath, lpath);
+    *end = '/';
+    real_lpath = realpath_parent(full_lpath);
+    free(full_lpath);
+    if (real_lpath == NULL) {
+unresolved_link:
+        /* Give up and just return the relative path of the unresolved link */
+        return (strdup(lpath));
+    }
+    vol_lpath = volume_get_by_path(real_lpath, 1);
+    if (vol_lpath == NULL) {
+        /* Did not find path inside any exported volume */
+        fsprintf("Link path %s not in any exported volume\n", real_lpath);
+        free(real_lpath);
+        goto unresolved_link;
+    }
+
+    /*
+     * At this point, real_lpath is the host path to the destination file,
+     * whether it exists or not.
+     */
+
+    real_hpath = realpath_parent(hpath);
+    vol_hpath = volume_get_by_path(real_hpath, 1);
+
+    if (vol_hpath == NULL) {
+        /*
+         * Did not find source link path inside any exported volume
+         * This should not happen.
+         */
+        printf("BUG: Did not find source path for link %s\n", real_hpath);
+        free(real_lpath);
+        free(real_hpath);
+        goto unresolved_link;
+    }
+
+    if (vol_lpath == vol_hpath) {
+        /*
+         * Within the same Amiga volume; create a relative path
+         *
+         * Start by using hpath to get the real path to the source link.
+         */
+        char *newpath;
+        newpath = make_host_relative_path(real_lpath, real_hpath);
+        fsprintf("newpath=%s\n", newpath);
+        convert_host_path_to_amiga_path(newpath);
+        return (newpath);
+    }
+
+    /*
+     * Link target is not on the same volume.
+     * Return a link target which is relative to the target volume root.
+     */
+    uint rlen = strlen(vol_lpath->av_realpath) + 1;
+    char *merged = merge_amiga_paths(vol_lpath->av_volume, real_lpath + rlen);
+
+    free(real_lpath);
+    free(real_hpath);
+    return (merged);
 }
 
 static uint
@@ -3011,7 +3444,7 @@ st_mode_to_hm_type(uint st_mode)
             hm_type = HM_TYPE_SOCKET;
             break;
         default:
-            printf("unknown dir type(%x)\n", st_mode & S_IFMT);
+            fsprintf("unknown dir type(%x)\n", st_mode & S_IFMT);
             hm_type = HM_TYPE_UNKNOWN;
             break;
     }
@@ -3089,6 +3522,32 @@ host_perms_from_amiga(uint amiga_perms)
 }
 
 static uint
+amiga_perms_from_str(const char *aperms)
+{
+    const char *ptr;
+    uint mask = 0;
+
+    /* Check for "hsparwed" | "x" SetProtect format */
+    for (ptr = aperms; *ptr != '\0'; ptr++) {
+        if (*ptr != '-') {
+            static const char permstr[] = "hsparwedx";
+            char *pos = strchr(permstr, *ptr);
+            uint  bit;
+            if (pos == NULL)
+                return (0xffffffff);
+            bit = pos - permstr;
+            if (bit == 8)
+                bit = 1;  // 'x' is the same as 'e'
+            else
+                bit = 7 - bit;
+            mask |= BIT(bit);
+        }
+    }
+    mask ^= (FIBF_READ | FIBF_WRITE | FIBF_EXECUTE | FIBF_DELETE);
+    return (mask);
+}
+
+static uint
 errno_to_km_status(void)
 {
     switch (errno) {
@@ -3109,7 +3568,7 @@ errno_to_km_status(void)
         case ENOTEMPTY:
             return (KM_STATUS_NOTEMPTY);
         default:
-            printf("errno=%d\n", errno);
+            fsprintf("errno=%d\n", errno);
             return (KM_STATUS_FAIL);
     }
 }
@@ -3117,7 +3576,7 @@ errno_to_km_status(void)
 static uint
 sm_unknown(km_msg_hdr_t *km, uint *status)
 {
-    printf("KS unexpected op %x\n", km->km_op);
+    fsprintf("KS unexpected op %x\n", km->km_op);
     km->km_status = KM_STATUS_UNKCMD;
     km->km_op |= KM_OP_REPLY;
     return (send_msg(km, sizeof (*km), status));
@@ -3138,8 +3597,8 @@ sm_loopback(km_msg_hdr_t *km, uint8_t *rxdata, uint rxlen, uint *status)
     km->km_status = KM_STATUS_OK;
     km->km_op |= KM_OP_REPLY;
 #if 0
-    printf("lb l=%x s=%04x data=%02x %02x\n",
-           rxlen, status, rxdata[0], rxdata[1]);
+    fsprintf("lb l=%x s=%04x data=%02x %02x\n",
+             rxlen, status, rxdata[0], rxdata[1]);
 #endif
     return (send_msg(rxdata, rxlen, status));
 }
@@ -3192,67 +3651,76 @@ sm_fopen(hm_fopenhandle_t *hm, uint *status)
     handle_ent_t *phandle = handle_get(hm->hm_handle);
     handle_ent_t *handle;
     char         *host_path = NULL;
-    char          name[KS_PATH_MAX];
+    char         *name = NULL;
     uint16_t      hm_type;
     uint16_t      hm_mode = SWAP16(hm->hm_mode);
     uint          oflags;
     int           fd;
     struct stat   st;
 
-    printf("fopen(%s) in %d\n", hm_name, hm->hm_handle);
+    fsprintf("fopen(%s %x) in %x\n", hm_name, hm_mode, hm->hm_handle);
 
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     hm->hm_hdr.km_status = KM_STATUS_OK;
 
 #ifdef FOPEN_DEBUG
-    printf("parent handle=%d type=%x path=%s\n",
-           hm->hm_handle, phandle ? phandle->he_type: 0,
-           phandle ? phandle->he_name : NULL);
+    fsprintf("parent handle=%x type=%x path=%s\n",
+             hm->hm_handle, phandle ? phandle->he_type: 0,
+             phandle ? phandle->he_name : NULL);
 #endif
-    if (get_relative_path(&phandle, hm_name, name)) {
-        printf("fopen(%s) relative path failed\n", hm_name);
+    if ((hm_name[0] == '\0') && (hm_mode == 0)) {
+        /* Special case -- want to reopen handle with same mode */
+//      hm_mode = phandle->he_mode;
+        hm_mode = HM_MODE_READ;
+        // XXX: I'm not sure this is enough because for the new file,
+        //      phandle could end up being a file, and this might break
+        //      future reopens. Need to test that.
+    }
+    if ((name = make_amiga_relpath(&phandle, hm_name)) == NULL) {
+        fsprintf("fopen(%s) relative path failed\n", hm_name);
 reply_open_fail:
+        if (name != NULL)
+            free(name);
         hm->hm_handle = 0;
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
-            hm->hm_hdr.km_status = KM_STATUS_FAIL;
+            hm->hm_hdr.km_status = KM_STATUS_NOEXIST;
         return (send_msg(hm, sizeof (*hm), status));
     }
+
     if (phandle == NULL) {
         /* Opening the volume directory */
-        if ((hm_mode & ~HM_MODE_DIR) != HM_MODE_READ) {
-            printf("Did not open volume directory for read (%x)\n",
-                   hm_mode);
+        if ((hm_mode & HM_MODE_READ) == 0) {
+            fsprintf("Did not open volume directory for read (%x)\n",
+                     hm_mode);
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
             goto reply_open_fail;
         }
         hm->hm_type = SWAP16(HM_TYPE_DIR);
 
-        handle = handle_new(name, NULL, HM_TYPE_VOLDIR, hm_mode);
+        handle = handle_new(name, "", NULL, HM_TYPE_VOLDIR, hm_mode);
         /* Volume directory has no he_volume or he_avolume pointers */
 
         hm->hm_hdr.km_status = KM_STATUS_OK;
         hm->hm_handle = handle->he_handle;
         hm->hm_mode   = 0;
+        free(name);
         return (send_msg(hm, sizeof (*hm), status));
     }
-    if (phandle->he_avolume != NULL)  {
-        host_path = merge_host_paths(phandle->he_avolume->av_path, name);
-    } else {
-        host_path = name;
-    }
-printf("host_path=%s\n", host_path);
+    host_path = make_host_path(phandle->he_avolume, name);
 
-    if (hm_mode & HM_MODE_WRITE) {
-        hm_type = SWAP16(hm->hm_type);
-    }
-    if ((hm_mode & ~HM_MODE_DIR) & HM_MODE_READ) {
+    fsprintf("host_path=%s\n", host_path);
+
+    hm_type = SWAP16(hm->hm_type);
+    if (hm_mode & HM_MODE_READ) {
+        /* File is opened for read; attempt to figure out file type */
         if (hm_mode & HM_MODE_NOFOLLOW) {
             if (lstat(host_path, &st) != 0) {
-                printf("fopen(%s) lstat failed errno=%d\n", host_path, errno);
+                fsprintf("fopen(%s) lstat fail errno=%d\n", host_path, errno);
                 goto reply_open_fail;
             }
         } else {
             if (stat(host_path, &st) != 0) {
-                printf("fopen(%s) stat failed errno=%d\n", host_path, errno);
+                fsprintf("fopen(%s) stat fail errno=%d\n", host_path, errno);
                 goto reply_open_fail;
             }
         }
@@ -3260,41 +3728,50 @@ printf("host_path=%s\n", host_path);
         hm->hm_type = SWAP16(hm_type);
     }
 
-    if (hm_mode & HM_MODE_DIR) {
+    if ((hm_mode & HM_MODE_LINK) ||
+        (hm_mode & HM_MODE_DIR)) {
+        /*
+         * Special open mode which returns directory or link target
+         * information for a single file.
+         */
         if ((hm_mode & HM_MODE_RDWR) != HM_MODE_READ) {
-            printf("Did not open dirent %s for read (%x)\n",
-                   host_path, hm_mode);
+            fsprintf("Did not open dirent %s for read (%x)\n",
+                     host_path, hm_mode);
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
             goto reply_open_fail;
         }
-        /*
-         * Special mode which returns directory information for
-         * a single file.
-         */
-        printf("dirmode phandle=%p %d  name=%s\n", (void *)phandle,
-               (phandle != NULL) ? phandle->he_handle : -1, name);
-        handle = handle_new(name, phandle, hm_type, hm_mode);
-        printf("dirmode handle %u avolume=%s\n",
-               handle->he_handle, handle->he_avolume->av_volume);
+        fsprintf("handle_new name='%s' hm_name='%s' host_path='%s'\n",
+                 name, hm_name, host_path);
+        handle = handle_new(name, host_path, phandle, hm_type, hm_mode);
+        fsprintf("dirmode phandle %x handle %x avolume=%s name=%s\n",
+                 (phandle != NULL) ? phandle->he_handle : 0,
+                 handle->he_handle, handle->he_avolume->av_volume, name);
+        free(name);
 
         hm->hm_hdr.km_status = KM_STATUS_OK;
         hm->hm_handle = handle->he_handle;
         hm->hm_mode   = 0;
+        fsprintf("  dir/link handle=%x\n", handle->he_handle);
         return (send_msg(hm, sizeof (*hm), status));
     } else if (hm_type == HM_TYPE_DIR) {
         DIR *dir;
         if ((hm_mode & ~HM_MODE_DIR) != HM_MODE_READ) {
-            printf("Did not open dir %s for read (%x)\n",
-                   host_path, hm_mode);
+            fsprintf("Did not open dir %s for read (%x)\n",
+                     host_path, hm_mode);
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
             goto reply_open_fail;
         }
         dir = opendir(host_path);
         if (dir == NULL) {
-            printf("opendir(%s) failed\n", host_path);
+            fsprintf("opendir(%s) failed\n", host_path);
             goto reply_open_fail;
         }
 
-        handle = handle_new(name, phandle, hm_type, hm_mode);
+        handle = handle_new(name, "", phandle, hm_type, hm_mode);
         handle->he_dir = dir;
+        fsprintf("  opendir(%s %s) = %x %p\n",
+                 host_path, name, handle->he_handle, (void *) dir);
+        free(name);
 
         hm->hm_hdr.km_status = KM_STATUS_OK;
         hm->hm_handle = handle->he_handle;
@@ -3325,7 +3802,7 @@ printf("host_path=%s\n", host_path);
     if (oflags & O_CREAT) {
         uint32_t aperms = SWAP32(hm->hm_aperms);
         uint mode = host_perms_from_amiga(aperms);
-printf("O_CREAT %s oflags=%x mode=%x\n", host_path, oflags, mode);
+        fsprintf("O_CREAT %s oflags=%x mode=%x\n", host_path, oflags, mode);
         fd = open(host_path, oflags, mode);
     } else {
         fd = open(host_path, oflags);
@@ -3334,14 +3811,16 @@ printf("O_CREAT %s oflags=%x mode=%x\n", host_path, oflags, mode);
         }
     }
     if (fd == -1) {
-        printf("File open %s fail: %d\n", host_path, errno);
+        fsprintf("File open %s fail: %d\n", host_path, errno);
         hm->hm_hdr.km_status = errno_to_km_status();
         goto reply_open_fail;
     }
 
-    handle = handle_new(name, phandle, hm_type, hm_mode);
+    handle = handle_new(name, "", phandle, hm_type, hm_mode);
     handle->he_fd = fd;
+    free(name);
 
+    fsprintf("  file handle=%x\n", handle->he_handle);
     hm->hm_hdr.km_status = KM_STATUS_OK;
     hm->hm_handle = handle->he_handle;
     hm->hm_mode   = 0;
@@ -3353,54 +3832,78 @@ sm_fclose(hm_fopenhandle_t *hm, uint *status)
 {
     handle_ent_t *handle = handle_get(hm->hm_handle);
 
-#define DEBUG_CLOSE
-#ifdef DEBUG_CLOSE
-    printf("fclose(%d)\n", hm->hm_handle);
-#endif
-    hm->hm_hdr.km_status = KM_STATUS_OK;
-    hm->hm_hdr.km_op |= KM_OP_REPLY;
-
     if (handle == NULL) {
-        printf("Handle %d not open for close\n", hm->hm_handle);
+        fsprintf("Handle %x not open for close\n", hm->hm_handle);
         hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
     }
 
+#define DEBUG_CLOSE
+#ifdef DEBUG_CLOSE
+    fsprintf("fclose(%x): ", hm->hm_handle);
+#endif
+    hm->hm_hdr.km_status = KM_STATUS_OK;
+    hm->hm_hdr.km_op |= KM_OP_REPLY;
+
+    if (handle->he_mode & HM_MODE_LINK) {
+#ifdef DEBUG_CLOSE
+        fsprintf("close readlink '%s'\n", handle->he_name);
+#endif
+        goto sm_fclose_end;
+    }
     if (handle->he_mode & HM_MODE_DIR) {
 #ifdef DEBUG_CLOSE
-        printf("Close STAT\n");
+        fsprintf("close STAT '%s'\n", handle->he_name);
 #endif
         goto sm_fclose_end;
     }
     switch (handle->he_type) {
         case HM_TYPE_VOLDIR:
 #ifdef DEBUG_CLOSE
-            printf("close volume directory\n");
+            fsprintf("close volume directory\n");
 #endif
             break;
         case HM_TYPE_VOLUME:
 #ifdef DEBUG_CLOSE
-            printf("close volume\n");
+            fsprintf("close volume '%s'\n", handle->he_name);
 #endif
             break;
         case HM_TYPE_DIR:
             if (handle->he_dir == NULL) {
-                printf("BUG: attempt close of NULL dir: %s\n",
-                       handle->he_name);
+                fsprintf("BUG: attempt close of NULL dir: %s\n",
+                         handle->he_name);
                 break;
             }
 #ifdef DEBUG_CLOSE
-            printf("close dir\n");
+            fsprintf("close dir %p\n", (void *) handle->he_dir);
 #endif
-            closedir(handle->he_dir);
+            if (handle->he_dir != NULL)
+                closedir(handle->he_dir);
             break;
         default:
+#ifdef DEBUG_CLOSE
+            fsprintf("close file '%s'\n", handle->he_name);
+#endif
             close(handle->he_fd);
             break;
     }
 sm_fclose_end:
     handle_free(hm->hm_handle);
     return (send_msg(hm, sizeof (*hm), status));
+}
+
+static uint64_t
+get_fs_size(const char *path, uint64_t *used, uint *blksize)
+{
+    struct statvfs buf;
+    statvfs(path, &buf);
+    *used = buf.f_blocks - buf.f_bavail;
+    *blksize = buf.f_bsize;
+#ifdef DEBUG_STATVFS
+    fsprintf("statvfs path='%s' blks=%u used=%u blksize=%u\n",
+             path, (uint) buf.f_blocks, (uint) *used, (uint) *blksize);
+#endif
+    return (buf.f_blocks);
 }
 
 static uint
@@ -3411,39 +3914,54 @@ sm_fread(hm_freadwrite_t *hm, uint *status)
     uint             pos;
     uint             len;
     uint             hm_length = SWAP32(hm->hm_length);
+    uint             hm_flag = SWAP16(hm->hm_flag);
     handle_ent_t    *handle = handle_get(hm->hm_handle);
     uint             pathlen = 0;
     char             pathbuf[2048];
 
     hm->hm_hdr.km_op |= KM_OP_REPLY;
 
-    printf("fread(%d, l=%x)\n", hm->hm_handle, hm_length);
+    fsprintf("fread(%x, l=%x)\n", hm->hm_handle, hm_length);
     if (handle == NULL) {
-        printf("handle get %d failed\n", hm->hm_handle);
+        fsprintf("handle get %x failed\n", hm->hm_handle);
 reply_read_fail:
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
     }
     if ((handle->he_mode & HM_MODE_READ) == 0) {
-        printf("%s not opened for read mode: %x\n",
-               handle->he_name, handle->he_mode);
+        fsprintf("%s not opened for read mode: %x\n",
+                 handle->he_name, handle->he_mode);
         hm->hm_hdr.km_status = KM_STATUS_INVALID;
         goto reply_read_fail;
     }
 
-    if (handle->he_type == HM_TYPE_DIR) {
-        printf("DIR %s\n", handle->he_name);
+    if (handle->he_type == HM_TYPE_VOLDIR) {
+        if (hm_flag & HM_FLAG_SEEK0)
+            handle->he_entnum = 0;
+#ifdef DEBUG_READ
+        fsprintf("VOLDIR %s\n", handle->he_name);
+#endif
         goto dir_read_common;
-    } else if (handle->he_type == HM_TYPE_VOLDIR) {
-        printf("VOLDIR %s\n", handle->he_name);
+    } else if (handle->he_type == HM_TYPE_DIR) {
+#ifdef DEBUG_READ
+        fsprintf("DIR %s\n", handle->he_name);
+#endif
+        if (hm_flag & HM_FLAG_SEEK0) {
+            if (handle->he_dir != NULL)
+                rewinddir(handle->he_dir);
+        }
         goto dir_read_common;
     } else if (handle->he_mode & HM_MODE_DIR) {
-        printf("STAT %s\n", handle->he_name);
+        if (hm_flag & HM_FLAG_SEEK0)
+            handle->he_entnum = 0;
+#ifdef DEBUG_READ
+        fsprintf("STAT %s\n", handle->he_name);
+#endif
 dir_read_common:
         pathlen = strlen(handle->he_name);
         if (pathlen > sizeof (pathbuf) - 257) {
-            printf("Path too long: %u bytes\n", pathlen);
+            fsprintf("Path too long: %u bytes\n", pathlen);
             goto reply_read_fail;
         }
         strcpy(pathbuf, handle->he_name);
@@ -3464,18 +3982,44 @@ dir_read_common:
             pathbuf[pathlen] = '\0';
         }
 #ifdef DEBUG_READ
-        printf("STAT pathbuf=%s\n", pathbuf);
+        fsprintf("STAT pathbuf=%s\n", pathbuf);
 #endif
     }
-    hmr = malloc(sizeof(*hmr) + hm_length);
+
+    /*
+     * Allocate buffer larger than requested. This is to accommodate
+     * the specific case of short read where a single directory entry
+     * is desired.
+     */
+    hmr = malloc(sizeof (*hmr) + hm_length + 256);
     pos = 0;
     rc = 0;
     while (pos < hm_length) {
-        char *ndata = ((char *)(hmr + 1)) + pos;
+        uint8_t *ndata = ((uint8_t *)(hmr + 1)) + pos;
         len = hm_length - pos;
-        if ((handle->he_type == HM_TYPE_DIR) ||
-            (handle->he_type == HM_TYPE_VOLDIR) ||
-            (handle->he_mode & HM_MODE_DIR)) {
+        if (handle->he_mode & HM_MODE_LINK) {
+            char  lbuf[PATH_MAX];
+            char *path;
+            int   llen;
+
+            fsprintf("readlink %s\n", handle->he_path);
+            llen = readlink(handle->he_path, lbuf, sizeof (lbuf) - 1);
+            if (llen == -1) {
+                fsprintf("readlink %s failed\n", handle->he_path);
+                llen = 0;
+            }
+            lbuf[llen] = '\0';
+            path = host_to_amiga_path(handle->he_path, handle->he_name, lbuf);
+
+            llen = strlen(path) + 1;
+            memcpy(ndata, path, llen);
+            free(path);
+
+            pos += llen;
+            break;
+        } else if ((handle->he_type == HM_TYPE_DIR) ||
+                   (handle->he_type == HM_TYPE_VOLDIR) ||
+                   (handle->he_mode & HM_MODE_DIR)) {
             struct dirent *dp;
             char *nptr;
             uint nlen;
@@ -3490,15 +4034,31 @@ dir_read_common:
             uint maxlen = hm_length - pos;
             char *host_path = NULL;
 
+            if (pos > hm_length)  // Safeguard
+                maxlen = 0;
             if ((sizeof (*hm_dirent) +
                  sizeof (dp->d_name) + 2 > maxlen) && (pos > 0)) {
-                rc = 0;  // next entry might not fit
+                /*
+                 * Next entry might not fit, so stop here.
+                 *
+                 * Note this only applies to subsequent directory entries.
+                 * At least one dirent will always be retrieved. The caller
+                 * to sm_fread() can * acquire a single dirent by
+                 * requesting a small buffer, for example the size of
+                 * hm_fdirent_t, and will get that including an untruncated
+                 * filename. This might seem bad (buffer overrun), but it
+                 * isn't because the receiving Amiga code will land data in
+                 * an oversized buffer.
+                 */
+                rc = 0;
 #ifdef DEBUG_READ
-                printf("No space for next dirent %lu %u\n",
-                       sizeof (*dp), maxlen);
+                fsprintf("No space for next dirent %lu %u\n",
+                         sizeof (*dp), maxlen);
 #endif
                 break;
             }
+
+            memset(hm_dirent, 0, sizeof (*hm_dirent)); // wipe the dirent
 
             if (handle->he_type == HM_TYPE_VOLDIR) {
                 amiga_vol_t *vol;
@@ -3507,12 +4067,11 @@ dir_read_common:
                 if (vol == NULL) {
                     dp = NULL;
                 } else {
-                    handle->he_entnum++;
                     dp = &ldp;
                     dp->d_type = DT_DIR;
                     strcpy(dp->d_name, vol->av_volume);
                     if (handle->he_mode & HM_MODE_DIR) {
-                        if (handle->he_entnum == 1) {
+                        if (handle->he_entnum == 0) {
                             strcpy(dp->d_name, "Volume Directory");
                         } else {
                             dp = NULL;
@@ -3532,8 +4091,8 @@ dir_read_common:
                          (handle->he_name[1] == '\0'))) {
                         /* Volume root */
                         sname = handle->he_avolume->av_volume;
-                        handle->he_type = HM_TYPE_VOLDIR;
-                        hmd_type = HM_TYPE_VOLDIR;
+                        handle->he_type = HM_TYPE_VOLUME;
+                        hmd_type = HM_TYPE_VOLUME;
                     } else {
                         /* Find name following directory path */
                         sname = handle->he_name;
@@ -3555,13 +4114,33 @@ dir_read_common:
                     strcpy(dp->d_name, sname);
                 }
             } else {
-                dp = readdir(handle->he_dir);
+                uint skip = 0;
+                do {
+                    dp = readdir(handle->he_dir);
+                    skip = 0;
+                    if (dp != NULL) {
+                        /* Skip .uaem files */
+                        char *end = dp->d_name + strlen(dp->d_name);
+                        if (((end - dp->d_name) >= 6) &&
+                            (strcmp(end - 5, ".uaem") == 0)) {
+                            skip = 1;
+                        }
+
+#define IS_DOT(x)     (((x)[0] == '.') && ((x)[1] == '\0'))
+#define IS_DOT_DOT(x) (((x)[0] == '.') && ((x)[1] == '.') && ((x)[2] == '\0'))
+                        /* Skip . and .. files */
+                        if (IS_DOT(dp->d_name) || IS_DOT_DOT(dp->d_name)) {
+                            skip = 1;
+                        }
+                    }
+                } while (skip);
                 he_mode |= HM_MODE_NOFOLLOW;
             }
             if (dp == NULL) {
                 rc = KM_STATUS_EOF;  // end of directory
                 break;
             }
+            strcpy(pathbuf + pathlen, dp->d_name);
             switch (dp->d_type) {
                 default:
                 case DT_UNKNOWN:
@@ -3592,62 +4171,120 @@ dir_read_common:
                     hmd_type = HM_TYPE_WHTOUT;
                     break;
             }
-            if (handle->he_type == HM_TYPE_VOLDIR)
+
+            if ((handle->he_type == HM_TYPE_VOLDIR) ||
+                (handle->he_type == HM_TYPE_VOLUME)) {
+                amiga_vol_t *vol;
+                uint64_t    fs_size;
+                uint64_t    fs_used;
+                uint        fs_blksize;
+                const char *path;
+                time_t      utctime = time(NULL);
+                time_t      time_a  = get_localtime(utctime);
                 hmd_type = HM_TYPE_VOLDIR;
-            strcpy(pathbuf + pathlen, dp->d_name);
-            if (hmd_type != HM_TYPE_VOLDIR) {
+                hm_dirent->hmd_atime = SWAP32(time_a);
+                hm_dirent->hmd_ctime = SWAP32(time_a);
+                hm_dirent->hmd_mtime = SWAP32(time_a);
+                hm_dirent->hmd_mode = SWAP32(S_IFDIR|S_IRUSR|S_IWUSR|S_IXUSR);
+
+                if (handle->he_type == HM_TYPE_VOLUME) {
+                    hmd_type = HM_TYPE_VOLUME;
+                    vol = handle->he_avolume;
+                } else {
+                    hmd_type = HM_TYPE_VOLDIR;
+                    vol = volume_get_by_index(handle->he_entnum);
+                    handle->he_entnum++;
+                }
+                if (vol == NULL)
+                    path = ".";
+                else
+                    path = vol->av_path;
+
+                fs_size = get_fs_size(path, &fs_used, &fs_blksize);
+                size_lo = (uint32_t) fs_used;
+                hm_dirent->hmd_blksize = SWAP32(fs_blksize);
+                hm_dirent->hmd_blks    = SWAP32(size_lo);
+                hm_dirent->hmd_ino     = vol->av_flags;
+                hm_dirent->hmd_nlink   = vol->av_bootpri;
+                size_hi = (uint32_t) (fs_size >> 32);
+                size_lo = (uint32_t) fs_size;
+
+                hmd_type = HM_TYPE_VOLUME;
+                amiga_perms = amiga_perms_from_host(0444);  // read-only
+            } else {
                 /* he_avolume is NULL for the Volume Directory */
                 amiga_vol_t *avol = handle->he_avolume;
                 if (avol == NULL) {
-                    printf("BUG: handle=%u he_avolume is NULL\n",
-                           handle->he_handle);
+                    fsprintf("BUG: handle=%x he_avolume is NULL\n",
+                             handle->he_handle);
                     break;
                 }
-                host_path = merge_host_paths(avol->av_path, handle->he_name);
+                host_path = make_host_path(avol, handle->he_name);
                 if ((handle->he_mode & HM_MODE_DIR) == 0) {
                     char *temp_path = host_path;
                     host_path = merge_host_paths(temp_path, dp->d_name);
                     free(temp_path);
                 }
-            }
-            if (hmd_type == HM_TYPE_VOLDIR) {
-                time_t utctime = time(NULL);
-                time_t time_a  = time_offset(utctime);
-                hm_dirent->hmd_atime = SWAP32(time_a);
-                hm_dirent->hmd_ctime = SWAP32(time_a);
-                hm_dirent->hmd_mtime = SWAP32(time_a);
-                hmd_type = HM_TYPE_VOLUME;
-                size_hi = 0;
-                size_lo = 0;
-                amiga_perms = amiga_perms_from_host(0444);  // read-only
-            } else if (lstat(host_path, &st) == 0) {
-                uint32_t time_a;
-                uint32_t time_c;
-                uint32_t time_m;
 
-                if (((he_mode & HM_MODE_NOFOLLOW) == 0) &&
-                    (stat(host_path, &st) != 0)) {
-                    /* Just use the result of previous lstat */
-                    printf("stat %s failed\n", host_path);
+                if (lstat(host_path, &st) == 0) {
+                    uint32_t time_a;
+                    uint32_t time_c;
+                    uint32_t time_m;
+                    char *host_path_uaem;
+
+                    if (((he_mode & HM_MODE_NOFOLLOW) == 0) &&
+                        (stat(host_path, &st) != 0)) {
+                        /* Just use the result of previous lstat */
+                        fsprintf("stat %s failed\n", host_path);
+                    }
+
+                    /* UAE support: check for .uaem file */
+                    host_path_uaem = malloc(strlen(host_path) + 6);
+                    if (host_path_uaem != NULL) {
+                        FILE *fp;
+                        strcpy(host_path_uaem, host_path);
+                        strcat(host_path_uaem, ".uaem");
+                        if ((fp = fopen(host_path_uaem, "r")) != NULL) {
+                            char f_perms[16];
+                            char f_date[12];
+                            char f_time[12];
+                            if (fscanf(fp, "%s %s %s",
+                                       f_perms, f_date, f_time) == 3) {
+                                fsprintf("%s UAEM perms=%s\n",
+                                         host_path_uaem, f_perms);
+                                amiga_perms = amiga_perms_from_str(f_perms);
+                                if (amiga_perms != 0xffffffff) {
+                                    st.st_mode = (st.st_mode & S_IFMT) |
+                                             host_perms_from_amiga(amiga_perms);
+                                }
+                            }
+                            fclose(fp);
+                        }
+                        free(host_path_uaem);
+                    }
+
+                    time_a = get_localtime(st.st_atime);
+                    time_c = get_localtime(st.st_ctime);
+                    time_m = get_localtime(st.st_mtime);
+                    hm_dirent->hmd_atime = SWAP32(time_a);
+                    hm_dirent->hmd_ctime = SWAP32(time_c);
+                    hm_dirent->hmd_mtime = SWAP32(time_m);
+                    hm_dirent->hmd_blksize = SWAP32(st.st_blksize);
+                    hm_dirent->hmd_blks = SWAP32(st.st_blocks);
+                    hm_dirent->hmd_ouid = SWAP32(st.st_uid);
+                    hm_dirent->hmd_ogid = SWAP32(st.st_gid);
+                    hm_dirent->hmd_mode = SWAP32(st.st_mode);
+
+                    size_hi = st.st_size >> 32;
+                    size_lo = (uint32_t) st.st_size;
+                    hmd_type = st_mode_to_hm_type(st.st_mode);
+                    amiga_perms = amiga_perms_from_host(st.st_mode);
+                } else {
+                    fsprintf("lstat %s failed\n", host_path);
+                    size_hi = 0;
+                    size_lo = 0;
+                    amiga_perms = FIBF_OTR_READ | FIBF_GRP_READ;
                 }
-                time_a = time_offset(st.st_atime);
-                time_c = time_offset(st.st_ctime);
-                time_m = time_offset(st.st_mtime);
-                hm_dirent->hmd_atime = SWAP32(time_a);
-                hm_dirent->hmd_ctime = SWAP32(time_c);
-                hm_dirent->hmd_mtime = SWAP32(time_m);
-                size_hi = st.st_size >> 32;
-                size_lo = (uint32_t) st.st_size;
-                hmd_type = st_mode_to_hm_type(st.st_mode);
-                amiga_perms = amiga_perms_from_host(st.st_mode);
-            } else {
-                printf("lstat %s failed\n", host_path);
-                hm_dirent->hmd_atime = 0;
-                hm_dirent->hmd_ctime = 0;
-                hm_dirent->hmd_mtime = 0;
-                size_hi = 0;
-                size_lo = 0;
-                amiga_perms = FIBF_OTR_READ | FIBF_GRP_READ;
             }
 
             hm_dirent->hmd_aperms  = SWAP32(amiga_perms);
@@ -3662,35 +4299,46 @@ dir_read_common:
             nlen = strlen(dp->d_name) + 1;  // Include NIL
             memcpy(nptr, dp->d_name, nlen);
             if (hmd_type == HM_TYPE_LINK) {
-                char lbuf[1024];
-                int llen;
+                char  lbuf[PATH_MAX];
+                char *path;
+                int   llen;
                 llen = readlink(host_path, lbuf, sizeof (lbuf) - 1);
                 if (llen == -1) {
-                    printf("readlink %s failed\n", host_path);
+                    fsprintf("readlink %s failed\n", host_path);
                     llen = 0;
                 }
-                lbuf[llen++] = '\0';
-                memcpy(nptr + nlen, lbuf, llen);
+                lbuf[llen] = '\0';
+                path = host_to_amiga_path(host_path, handle->he_name, lbuf);
 
                 /* Fill comment with link information */
+                llen = strlen(path) + 1;
+                memcpy(nptr + nlen, path, llen);
+                free(path);
+
                 nlen += llen;
             } else {
                 nptr[nlen++] = '\0';            // Comment NIL
             }
-            if (nlen & 1)                   // Round up
-                nlen++;
+            if (nlen & 1)
+                nptr[nlen++] = '\0';            // Round up
 #ifdef DEBUG_READ
-            printf("dirent %u %s\n", nlen, nptr);
+            fsprintf("dirent %u %s\n", nlen, nptr);
 #endif
             hm_dirent->hmd_elen = SWAP16(nlen);
             pos += sizeof (*hm_dirent) + nlen;
-            free(host_path);
+            if (host_path != NULL)
+                free(host_path);
         } else {
             /* Regular file */
+            if (hm_flag & HM_FLAG_SEEK0) {
+                hm_flag &= ~HM_FLAG_SEEK0;
+                (void) lseek(handle->he_fd, 0, SEEK_SET);
+            }
+
             rc = read(handle->he_fd, ndata, len);
 #ifdef DEBUG_READ
-            printf("read %d bytes from fd=%d %s\n",
-                   rc, handle->he_fd, handle->he_name);
+            fsprintf("read %d bytes from fd=%d %s\n",
+                     rc, handle->he_fd, handle->he_name);
 #endif
             if (rc <= 0) {
                 if (rc == 0) {
@@ -3705,15 +4353,18 @@ dir_read_common:
         }
     }
     if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF))
-        printf("Returning odd rc=%d\n", rc);
+        fsprintf("Returning odd rc=%d\n", rc);
 
     hmr->hm_hdr.km_op = hm->hm_hdr.km_op;
     hmr->hm_hdr.km_status = rc;
     hmr->hm_hdr.km_tag = hm->hm_hdr.km_tag;
     hmr->hm_handle = hm->hm_handle;
     hmr->hm_length = SWAP32(pos);
-    if (0)
-        dump_memory(hmr, sizeof (*hmr) + pos, VALUE_UNASSIGNED);
+    hmr->hm_flag = 0;
+    hmr->hm_unused = 0;
+#ifdef DEBUG_READ_DATA
+    dump_memory(hmr, sizeof (*hmr) + pos, VALUE_UNASSIGNED);
+#endif
     rc = send_msg(hmr, sizeof (*hmr) + pos, status);
     free(hmr);
     return (rc);
@@ -3724,29 +4375,30 @@ sm_fwrite(hm_freadwrite_t *hm, uint rxlen, uint *status)
 {
     uint             rc;
     uint             hm_length = SWAP32(hm->hm_length);
+    uint             hm_flag   = SWAP16(hm->hm_flag);
     handle_ent_t    *handle    = handle_get(hm->hm_handle);
-    char            *ndata     = (char *)(hm + 1);
+    uint8_t         *ndata     = (uint8_t *)(hm + 1);
 
-    printf("fwrite(%d, l=%x)\n", hm->hm_handle, hm_length);
+    fsprintf("fwrite(%x, l=%x)\n", hm->hm_handle, hm_length);
     hm->hm_hdr.km_op |= KM_OP_REPLY;
 
     if (handle == NULL) {
-        printf("handle get %d failed\n", hm->hm_handle);
+        fsprintf("handle get %x failed\n", hm->hm_handle);
 reply_write_fail:
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
     }
     if ((handle->he_mode & HM_MODE_WRITE) == 0) {
-        printf("%s not opened for write mode: %x\n",
-               handle->he_name, handle->he_mode);
+        fsprintf("%s not opened for write mode: %x\n",
+                 handle->he_name, handle->he_mode);
         hm->hm_hdr.km_status = KM_STATUS_INVALID;
         goto reply_write_fail;
     }
     if ((handle->he_type == HM_TYPE_DIR) ||
         (handle->he_type == HM_TYPE_VOLDIR) ||
         (handle->he_mode & HM_MODE_DIR)) {
-        printf("Can't write to directory\n");
+        fsprintf("Can't write to directory\n");
         /*
          * XXX: Writing a file's dirent could be used as a method to
          *      change atime, ctime, mtime, aperms, ouid, ogid, and
@@ -3775,7 +4427,7 @@ reply_write_fail:
             return (send_msg(hm, sizeof (*hm), status));
         }
         memcpy(rdata, ndata, rxlen);
-        ndata = (char *) ((km_msg_hdr_t *) rxdata + 1);
+        ndata = (uint8_t *) ((km_msg_hdr_t *) rxdata + 1);
         while (rdatapos < hm_length) {
             uint rxmax = hm_length - rdatapos + sizeof (km_msg_hdr_t);
             rc = recv_msg(rxdata, rxmax, status, &rxlen);
@@ -3784,8 +4436,8 @@ reply_write_fail:
             if (rxlen == 0) {
                 if (++timeout < 20)
                     continue;
-                printf("fwrite(%d) data timeout at pos=%x\n",
-                       hm->hm_handle, rdatapos);
+                fsprintf("fwrite(%x) data timeout at pos=%x\n",
+                         hm->hm_handle, rdatapos);
                 rc = RC_FAILURE;
                 break;
             }
@@ -3795,22 +4447,19 @@ reply_write_fail:
             else
                 rxlen = 0;
             if (((km_msg_hdr_t *)rxdata)->km_tag != hm->hm_hdr.km_tag) {
-                printf("tag mismatch: %04x != expected %04x\n",
-                       ((km_msg_hdr_t *)rxdata)->km_tag, hm->hm_hdr.km_tag);
+                fsprintf("tag mismatch: %04x != expected %04x\n",
+                         ((km_msg_hdr_t *)rxdata)->km_tag, hm->hm_hdr.km_tag);
                 rc = RC_FAILURE;
                 break;
             }
-#if 0
-printf("km_op=%x km_status=%x km_tag=%x rlen=%x ",
-((km_msg_hdr_t *)rxdata)->km_op,
-((km_msg_hdr_t *)rxdata)->km_status,
-((km_msg_hdr_t *)rxdata)->km_tag, rxlen);
-            printf("rdatapos=%x rxlen=%x\n", rdatapos, rxlen);
-#endif
             memcpy(rdata + rdatapos, ndata, rxlen);
             rdatapos += rxlen;
         }
         if (rc == RC_SUCCESS) {
+            if (hm_flag & HM_FLAG_SEEK0) {
+                hm_flag &= ~HM_FLAG_SEEK0;
+                (void) lseek(handle->he_fd, 0, SEEK_SET);
+            }
             rc = write(handle->he_fd, rdata, hm_length);
         }
         free(rdata);
@@ -3818,7 +4467,7 @@ printf("km_op=%x km_status=%x km_tag=%x rlen=%x ",
         rc = write(handle->he_fd, ndata, hm_length);
     }
     if (rc < 0) {
-        printf("write rc=%d errno=%d\n", rc, errno);
+        fsprintf("write rc=%d errno=%d\n", rc, errno);
         rc = errno_to_km_status();
     } else {
         rc = KM_STATUS_OK;
@@ -3832,11 +4481,12 @@ static uint
 sm_fseek(hm_fseek_t *hm, uint *status)
 {
     handle_ent_t *handle = handle_get(hm->hm_handle);
-    printf("fseek(%d, o=%"PRIx64")\n", hm->hm_handle,
-           ((uint64_t) hm->hm_offset_hi << 32) | hm->hm_offset_lo);
+
+    fsprintf("fseek(%x, o=%"PRIx64" from=%d)\n", hm->hm_handle,
+             ((uint64_t) hm->hm_off_hi << 32) | hm->hm_off_lo, hm->hm_seek);
     hm->hm_hdr.km_status = KM_STATUS_OK;
     if (handle == NULL) {
-        printf("handle get %d failed\n", hm->hm_handle);
+        fsprintf("handle get %x failed\n", hm->hm_handle);
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
@@ -3844,30 +4494,63 @@ sm_fseek(hm_fseek_t *hm, uint *status)
     if ((handle->he_type == HM_TYPE_VOLDIR) ||
         (handle->he_mode & HM_MODE_DIR)) {
         /* Can rewind volume dir or file stat */
+        hm->hm_old_hi = 0;
+        hm->hm_old_lo = SWAP32(handle->he_entnum);
         handle->he_entnum = 0;  // Can only rewind volume dir pointer
     } else if (handle->he_type == HM_TYPE_DIR) {
-        /* Can rewind dir */
-        rewinddir(handle->he_dir);
+        /* Can only rewind dir */
+        if (handle->he_dir != NULL)
+            rewinddir(handle->he_dir);
+        hm->hm_old_hi = 0;
+        hm->hm_old_lo = SWAP32(handle->he_entnum);
+        handle->he_entnum = 0;
     } else if (handle->he_type == HM_TYPE_FILE) {
-        uint32_t hi = SWAP32(hm->hm_offset_hi);
-        uint32_t lo = SWAP32(hm->hm_offset_lo);
-        off_t pos;
+        uint32_t hi = SWAP32(hm->hm_off_hi);
+        uint32_t lo = SWAP32(hm->hm_off_lo);
+        int seek_mode = hm->hm_seek;
+        off_t oldpos;
         off_t offset = ((uint64_t) hi << 32) | lo;
-        pos = lseek(handle->he_fd, offset, SEEK_SET);
-        if (pos < 0) {
+        off_t newpos;
+        int whence;
+
+        switch (seek_mode) {
+            default:
+                fsprintf("Unknown seek mode (%d)\n", seek_mode);
+                hm->hm_hdr.km_status = KM_STATUS_INVALID;
+                goto reply_seek;
+            case SEEK_OFFSET_BEGINNING:
+                whence = SEEK_SET;
+                break;
+            case SEEK_OFFSET_CURRENT:
+                whence = SEEK_CUR;
+                break;
+            case SEEK_OFFSET_END:
+                whence = SEEK_END;
+                break;
+        }
+
+        oldpos = lseek(handle->he_fd, 0, SEEK_CUR);
+        newpos = lseek(handle->he_fd, offset, whence);
+        if (newpos < 0) {
             /* Seek failed */
-            printf("Seek %u to %jd failed\n", hm->hm_handle, (intmax_t)pos);
+            fsprintf("Seek %x to %jd failed\n",
+                     hm->hm_handle, (intmax_t)offset);
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         } else {
-            hi = pos >> 32;
-            lo = (uint32_t) pos;
-            hm->hm_offset_hi = SWAP32(hi);
-            hm->hm_offset_lo = SWAP32(lo);
+            hi = newpos >> 32;
+            lo = (uint32_t) newpos;
+            hm->hm_off_hi = SWAP32(hi);
+            hm->hm_off_lo = SWAP32(lo);
+            hi = oldpos >> 32;
+            lo = (uint32_t) oldpos;
+            hm->hm_old_hi = SWAP32(hi);
+            hm->hm_old_lo = SWAP32(lo);
         }
     } else {
-        printf("Can't seek in file type %x\n", handle->he_type);
+        fsprintf("Can't seek in file type %x\n", handle->he_type);
         hm->hm_hdr.km_status = KM_STATUS_INVALID;
     }
+reply_seek:
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     return (send_msg(hm, sizeof (*hm), status));
 }
@@ -3883,35 +4566,36 @@ sm_fcreate(hm_fopenhandle_t *hm, uint *status)
     uint          dev     = SWAP16(hm->hm_mode);
     uint          ftype;
     char         *host_path = NULL;
-    char          buf[KS_PATH_MAX];
+    char         *name = NULL;
 
-    printf("fcreate(%s) type=%x perms=%x umode=%x in %x\n",
-           hm_name, hm_type, hm->hm_mode, umode, hm->hm_handle);
+    fsprintf("fcreate(%s) type=%x perms=%x umode=%x in %x\n",
+             hm_name, hm_type, hm->hm_mode, umode, hm->hm_handle);
 
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     hm->hm_hdr.km_status = KM_STATUS_OK;
 
-    if (get_relative_path(&phandle, hm_name, buf)) {
-        printf("fcreate(%s) relative path failed\n", hm_name);
+    if ((name = make_amiga_relpath(&phandle, hm_name)) == NULL) {
+        fsprintf("fcreate(%s) relative path failed\n", hm_name);
 reply_create_fail:
+        if (name != NULL)
+            free(name);
         hm->hm_handle = 0;
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
     }
+
     if (phandle == NULL) {
         /* Can't create the volume directory */
-        printf("Can't create the volume directory\n");
+        fsprintf("Can't create the volume directory\n");
         hm->hm_hdr.km_status = KM_STATUS_INVALID;
         goto reply_create_fail;
     }
-    if (phandle->he_avolume != NULL)  {
-        host_path = merge_host_paths(phandle->he_avolume->av_path, buf);
-    } else {
-        host_path = buf;
-    }
+    host_path = make_host_path(phandle->he_avolume, name);
+    free(name);
+    name = NULL;
 
-    printf("host path=%s\n", host_path);
+    fsprintf("host path=%s\n", host_path);
     switch (hm_type) {
         case HM_TYPE_FILE:   // Regular file
             ftype = S_IFREG;
@@ -3930,24 +4614,34 @@ create_node:
 #ifdef ALLOW_CREATE_LINK
         case HM_TYPE_LINK: {   // Symbolic (soft) link
             uint  hm_name_len = strlen(hm_name) + 1;
-            char *hm_lname = hm_name + hm_name_len;
-            if (symlink(hm_lname, host_path)) {
-                printf("symlink: %s -> %s failed: %d\n",
-                       host_path, hm_lname, errno);
+            char *lname = hm_name + hm_name_len;
+            char *relname;
+            relname = amiga_link_to_host_path(phandle, lname, host_path);
+
+            if (symlink(relname, host_path)) {
+                fsprintf("symlink: %s -> %s failed: %d\n",
+                         host_path, lname, errno);
                 hm->hm_hdr.km_status = errno_to_km_status();
                 goto reply_create_fail;
             }
+            if (relname != NULL)
+                free(relname);
             break;
         }
         case HM_TYPE_HLINK: {  // Hard link
             uint  hm_name_len = strlen(hm_name) + 1;
-            char *hm_lname = hm_name + hm_name_len;
-            if (link(hm_lname, host_path)) {
-                printf("hard link %s -> %s failed: %d\n",
-                       host_path, hm_lname, errno);
+            char *lname = hm_name + hm_name_len;
+            char *relname;
+
+            relname = amiga_link_to_host_path(phandle, lname, host_path);
+            if (link(lname, host_path)) {
+                fsprintf("hard link %s -> %s failed: %d\n",
+                         host_path, lname, errno);
                 hm->hm_hdr.km_status = errno_to_km_status();
                 goto reply_create_fail;
             }
+            if (relname != NULL)
+                free(relname);
             break;
         }
 #endif /* ALLOW_CREATE_LINK */
@@ -3980,49 +4674,50 @@ sm_fdelete(hm_fhandle_t *hm, uint *status)
     handle_ent_t *phandle = handle_get(hm->hm_handle);
     char         *hm_name = (char *)(hm + 1);
     char         *host_path = NULL;
-    char          buf[KS_PATH_MAX];
+    char         *name = NULL;
     struct stat   st;
 
-    printf("fdelete(%s) in %d\n", hm_name, hm->hm_handle);
+    fsprintf("fdelete(%s) in %x\n", hm_name, hm->hm_handle);
 
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     hm->hm_hdr.km_status = KM_STATUS_OK;
 
-    if (get_relative_path(&phandle, hm_name, buf)) {
-        printf("fdelete(%s) relative path failed\n", hm_name);
+    if ((name = make_amiga_relpath(&phandle, hm_name)) == NULL) {
+        fsprintf("fdelete(%s) relative path failed\n", hm_name);
 reply_delete_fail:
+        if (name != NULL)
+            free(name);
         hm->hm_handle = 0;
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
     }
+
     if (phandle == NULL) {
         /* Can't delete the volume directory */
-        printf("Can't delete the volume directory\n");
+        fsprintf("Can't delete the volume directory\n");
         hm->hm_hdr.km_status = KM_STATUS_INVALID;
         goto reply_delete_fail;
     }
-    if (phandle->he_avolume != NULL)  {
-        host_path = merge_host_paths(phandle->he_avolume->av_path, buf);
-    } else {
-        host_path = buf;
-    }
+    host_path = make_host_path(phandle->he_avolume, name);
+    free(name);
+    name = NULL;
 
     if (lstat(host_path, &st) != 0) {
-        printf("fdelete(%s) stat failed errno=%d\n", host_path, errno);
+        fsprintf("fdelete(%s) stat fail errno=%d\n", host_path, errno);
         goto reply_delete_fail;
     }
     switch (st.st_mode & S_IFMT) {
         case S_IFDIR:
             /* Use rmdir() */
-            if (volume_get_by_path(host_path) != NULL) {
-                printf("fdelete(%s) can't remove a volume\n", host_path);
+            if (volume_get_by_path(host_path, 0) != NULL) {
+                fsprintf("fdelete(%s) can't remove a volume\n", host_path);
                 hm->hm_hdr.km_status = KM_STATUS_PERM;
                 goto reply_delete_fail;
             }
             if (rmdir(host_path)) {
                 /* Failed */
-                printf("rmdir(%s) failed: %d\n", host_path, errno);
+                fsprintf("rmdir(%s) failed: %d\n", host_path, errno);
                 hm->hm_hdr.km_status = errno_to_km_status();
                 goto reply_delete_fail;
             }
@@ -4036,7 +4731,7 @@ reply_delete_fail:
         case S_IFSOCK:  // Socket
             /* Use unlink() */
             if (unlink(host_path)) {
-                printf("unlink(%s) failed: %d\n", host_path, errno);
+                fsprintf("unlink(%s) failed: %d\n", host_path, errno);
                 hm->hm_hdr.km_status = errno_to_km_status();
                 goto reply_delete_fail;
             }
@@ -4046,74 +4741,76 @@ reply_delete_fail:
 }
 
 static uint
-sm_frename(hm_fhandle_t *hm, uint *status)
+sm_frename(hm_frename_t *hm, uint *status)
 {
-    handle_ent_t *phandle_old  = handle_get(hm->hm_handle);
-    handle_ent_t *phandle_new  = phandle_old;
+    handle_ent_t *phandle_old  = handle_get(hm->hm_shandle);
+    handle_ent_t *phandle_new  = handle_get(hm->hm_dhandle);
     char         *name_old     = (char *)(hm + 1);
     uint          len_old_name = strlen(name_old) + 1;
     char         *name_new     = name_old + len_old_name;
     char         *path_old;
     char         *path_new;
-    char          buf_old[KS_PATH_MAX];
-    char          buf_new[KS_PATH_MAX];
+    char         *apath_old    = NULL;
+    char         *apath_new    = NULL;
 
-    printf("frename(%s to %s) in %x\n",
-           name_old, name_new, hm->hm_handle);
+    fsprintf("frename(%s to %s) in %x to %x\n",
+             name_old, name_new, hm->hm_shandle, hm->hm_dhandle);
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     hm->hm_hdr.km_status = KM_STATUS_OK;
 
-    if (get_relative_path(&phandle_old, name_old, buf_old)) {
-        printf("frename(%s) relative path failed\n", name_old);
+    if ((apath_old = make_amiga_relpath(&phandle_old, name_old)) == NULL) {
+        fsprintf("frename(%s) relative path failed\n", name_old);
 reply_rename_fail:
-        hm->hm_handle = 0;
+        if (apath_old != NULL)
+            free(apath_old);
+        if (apath_new != NULL)
+            free(apath_new);
+        hm->hm_shandle = 0;
+        hm->hm_dhandle = 0;
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
     }
+
     if (phandle_old == NULL) {
         /* Can't rename the volume directory */
-        printf("frename(%s) Can't rename the volume directory\n", name_old);
+        fsprintf("frename(%s) Can't rename the volume directory\n", name_old);
         hm->hm_hdr.km_status = KM_STATUS_INVALID;
         goto reply_rename_fail;
     }
-    if (phandle_old->he_avolume != NULL)  {
-        path_old = merge_host_paths(phandle_old->he_avolume->av_path, buf_old);
-    } else {
-        path_old = buf_old;
-    }
+    path_old = make_host_path(phandle_old->he_avolume, apath_old);
 
-    if (get_relative_path(&phandle_new, name_new, buf_new)) {
-        printf("frename(%s) relative path failed\n", name_new);
+    if ((apath_new = make_amiga_relpath(&phandle_new, name_new)) == NULL) {
+        fsprintf("frename(%s) relative path failed\n", name_new);
         goto reply_rename_fail;
     }
+
     if (phandle_new == NULL) {
         /* Can't rename the volume directory */
-        printf("frename(%s) Can't rename to the volume directory\n", name_new);
+        fsprintf("frename(%s) Can't rename to the volume directory\n",
+                 name_new);
         hm->hm_hdr.km_status = KM_STATUS_INVALID;
         goto reply_rename_fail;
     }
-    if (phandle_new->he_avolume != NULL)  {
-        path_new = merge_host_paths(phandle_new->he_avolume->av_path, buf_new);
-    } else {
-        path_new = buf_new;
-    }
+    path_new = make_host_path(phandle_new->he_avolume, apath_new);
 
-    if (volume_get_by_path(path_old) != NULL) {
-        printf("frename(%s) can't rename a volume\n", path_old);
+    if (volume_get_by_path(path_old, 0) != NULL) {
+        fsprintf("frename(%s) can't rename a volume\n", path_old);
         hm->hm_hdr.km_status = KM_STATUS_PERM;
         goto reply_rename_fail;
     }
-    if (volume_get_by_path(path_new) != NULL) {
-        printf("frename(%s) can't rename to a volume\n", path_new);
+    if (volume_get_by_path(path_new, 0) != NULL) {
+        fsprintf("frename(%s) can't rename to a volume\n", path_new);
         hm->hm_hdr.km_status = KM_STATUS_PERM;
         goto reply_rename_fail;
     }
     if (rename(path_old, path_new)) {
-        printf("rename %s to %s failed\n", path_old, path_new);
+        fsprintf("rename %s to %s failed\n", path_old, path_new);
         hm->hm_hdr.km_status = errno_to_km_status();
         goto reply_rename_fail;
     }
+    free(apath_old);
+    free(apath_new);
 
     hm->hm_hdr.km_status = KM_STATUS_OK;
     return (send_msg(hm, sizeof (*hm), status));
@@ -4125,89 +4822,92 @@ sm_fpath(hm_fhandle_t *hm, uint *status)
     /* Resolve handle to Amiga-specific path */
     hm_fhandle_t *hmr;
     handle_ent_t *handle = handle_get(hm->hm_handle);
-    char          pathbuf[2048];
+    char         *pathbuf;
     char          pathlen;
     uint          rc;
 
-    printf("fpath(%d)\n", hm->hm_handle);
+    fsprintf("fpath(%x)\n", hm->hm_handle);
     hm->hm_hdr.km_status = KM_STATUS_OK;
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     if (handle == NULL) {
         /* Volume directory */
-        strcpy(pathbuf, "::");
+        pathbuf = strdup("::");
     } else {
-        char *host_path;
+        amiga_vol_t *vol = NULL;
         handle_ent_t *volhandle = handle->he_volume;
 
-        pathbuf[0] = '\0';
-        if (volhandle != NULL) {
-            amiga_vol_t *vol = volume_get_by_handle(volhandle);
-            if (vol != NULL)
-                strcpy(pathbuf, vol->av_volume);
+        if (volhandle != NULL)
+            vol = volume_get_by_handle(volhandle);
+
+        if (vol != NULL) {
+            pathbuf = merge_amiga_paths(vol->av_volume, handle->he_name);
+        } else {
+            pathbuf = strdup(handle->he_name);
         }
-        host_path = merge_host_paths(pathbuf, handle->he_name);
-        strcpy(pathbuf, host_path);
-        free(host_path);
     }
 
-    pathlen = strlen(pathbuf) + 2;
-    hmr = malloc(sizeof(*hmr) + pathlen);
+    fsprintf("pathbuf=%s\n", pathbuf);
+    pathlen = strlen(pathbuf) + 1;
+    hmr = malloc(sizeof (*hmr) + pathlen + 1);
     memcpy(hmr, hm, sizeof (*hmr));
     strcpy((char *) (hmr + 1), pathbuf);
+    ((char *) hmr)[sizeof (*hmr) + pathlen] = '\0';  // unaligned data end init
 
     rc = send_msg(hmr, sizeof (*hmr) + pathlen, status);
+    free(pathbuf);
     free(hmr);
     return (rc);
 }
 
 static uint
-sm_fset_perms(hm_fopenhandle_t *hm, uint *status)
+sm_fsetprotect(hm_fopenhandle_t *hm, uint *status)
 {
     /* Resolve handle to Amiga-specific path */
     handle_ent_t *phandle = handle_get(hm->hm_handle);
     char         *name   = (char *)(hm + 1);
     char         *path;
-    char          pathbuf[KS_PATH_MAX];
+    char         *apath;
     uint32_t      aperms = SWAP32(hm->hm_aperms);
     uint          uperms;
 
-    printf("fset_perms(%s %x)\n", name, aperms);
+    fsprintf("fsetprotect(%s %x)\n", name, aperms);
     hm->hm_hdr.km_op |= KM_OP_REPLY;
 
-    if (get_relative_path(&phandle, name, pathbuf)) {
-        printf("fset_perms(%s) relative path failed\n", name);
-reply_set_perms_fail:
+    if ((apath = make_amiga_relpath(&phandle, name)) == NULL) {
+        fsprintf("fsetprotect(%s) relative path failed\n", name);
+reply_setprotect_fail:
+        if (apath != NULL)
+            free(apath);
         hm->hm_handle = 0;
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         return (send_msg(hm, sizeof (*hm), status));
     }
+
     if (phandle == NULL) {
         /* Can't set perms on the volume directory */
-        printf("fset_perms(%s) can't set perms on the volume directory\n",
-               name);
+        fsprintf("fsetprotect(%s) can't set perms on the volume directory\n",
+                 name);
         hm->hm_hdr.km_status = KM_STATUS_INVALID;
-        goto reply_set_perms_fail;
+        goto reply_setprotect_fail;
     }
-    if (phandle->he_avolume != NULL)  {
-        path = merge_host_paths(phandle->he_avolume->av_path, name);
-    } else {
-        path = name;
-    }
+    path = make_host_path(phandle->he_avolume, apath);
 
-    if (volume_get_by_path(path) != NULL) {
-        printf("fset_perms(%s) can't set perms on a volume\n", path);
+    if (volume_get_by_path(path, 0) != NULL) {
+        fsprintf("fsetprotect(%s) can't set perms on a volume\n", path);
         hm->hm_hdr.km_status = KM_STATUS_PERM;
-        goto reply_set_perms_fail;
+        goto reply_setprotect_fail;
     }
     uperms = host_perms_from_amiga(aperms);
-    printf("uperms=%x %o\n", uperms, uperms);
+    fsprintf("uperms=%x %o\n", uperms, uperms);
 
     if (chmod(path, uperms)) {
-        printf("chmod fail\n");
+        fsprintf("chmod fail\n");
         hm->hm_hdr.km_status = errno_to_km_status();
-        goto reply_set_perms_fail;
+        goto reply_setprotect_fail;
     }
+
+    free(apath);
 
     hm->hm_hdr.km_status = KM_STATUS_OK;
     return (send_msg(hm, sizeof (*hm), status));
@@ -4219,15 +4919,16 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
     km_msg_hdr_t *km = (km_msg_hdr_t *) rxdata;
     uint pos;
     uint rc;
+    uint op;
+    uint retry = 1;
 
-#undef MSG_DEBUG
 #ifdef MSG_DEBUG
-    printf("  got msg %04x len=%04x op=%02x mstatus=%02x tag=%02x data ",
-           status, rxlen, km->km_op, km->km_status, km->km_tag);
+    msgprintf("  got msg %04x len=%04x op=%02x mstatus=%02x tag=%02x data ",
+              status, rxlen, km->km_op, km->km_status, km->km_tag);
     for (pos = sizeof (*km); pos < 32; pos++) {
-        printf(" %02x", rxdata[pos]);
+        msgprintf(" %02x", rxdata[pos]);
     }
-    printf("\n");
+    msgprintf("\n");
 #endif
     if (rxlen < sizeof (*km)) {
         printf("Got invalid message: len=%04x status=%04x", rxlen, status);
@@ -4242,57 +4943,61 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
         return;
     }
 
-    switch (km->km_op) {
-        case KM_OP_NULL:
-            rc = sm_null(km, &status);
-            break;
-        case KM_OP_LOOPBACK:
-            rc = sm_loopback(km, rxdata, rxlen, &status);
-            break;
-        case KM_OP_ID:
-            rc = sm_id(km, &status);
-            break;
-        case KM_OP_FOPEN:
-            rc = sm_fopen((hm_fopenhandle_t *)rxdata, &status);
-            break;
-        case KM_OP_FCLOSE:
-            rc = sm_fclose((hm_fopenhandle_t *)rxdata, &status);
-            break;
-        case KM_OP_FREAD:
-            rc = sm_fread((hm_freadwrite_t *)rxdata, &status);
-            break;
-        case KM_OP_FWRITE:
-            rc = sm_fwrite((hm_freadwrite_t *)rxdata, rxlen, &status);
-            break;
-        case KM_OP_FSEEK:
-            rc = sm_fseek((hm_fseek_t *)rxdata, &status);
-            break;
-        case KM_OP_FCREATE:
-            rc = sm_fcreate((hm_fopenhandle_t *)rxdata, &status);
-            break;
-        case KM_OP_FDELETE:
-            rc = sm_fdelete((hm_fhandle_t *)rxdata, &status);
-            break;
-        case KM_OP_FRENAME:
-            rc = sm_frename((hm_fhandle_t *)rxdata, &status);
-            break;
-        case KM_OP_FPATH:
-            rc = sm_fpath((hm_fhandle_t *)rxdata, &status);
-            break;
-        case KM_OP_FSETPERMS:
-            rc = sm_fset_perms((hm_fopenhandle_t *)rxdata, &status);
-            break;
-        default:
-            rc = sm_unknown(km, &status);
-            break;
-    }
-    if (rc == 0)
-        rc = status;
+    op = km->km_op;
+    do {
+        switch (op) {
+            case KM_OP_NULL:
+                rc = sm_null(km, &status);
+                break;
+            case KM_OP_LOOPBACK:
+                rc = sm_loopback(km, rxdata, rxlen, &status);
+                break;
+            case KM_OP_ID:
+                rc = sm_id(km, &status);
+                break;
+            case KM_OP_FOPEN:
+                rc = sm_fopen((hm_fopenhandle_t *)rxdata, &status);
+                break;
+            case KM_OP_FCLOSE:
+                rc = sm_fclose((hm_fopenhandle_t *)rxdata, &status);
+                break;
+            case KM_OP_FREAD:
+                rc = sm_fread((hm_freadwrite_t *)rxdata, &status);
+                break;
+            case KM_OP_FWRITE:
+                rc = sm_fwrite((hm_freadwrite_t *)rxdata, rxlen, &status);
+                break;
+            case KM_OP_FSEEK:
+                rc = sm_fseek((hm_fseek_t *)rxdata, &status);
+                break;
+            case KM_OP_FCREATE:
+                rc = sm_fcreate((hm_fopenhandle_t *)rxdata, &status);
+                break;
+            case KM_OP_FDELETE:
+                rc = sm_fdelete((hm_fhandle_t *)rxdata, &status);
+                break;
+            case KM_OP_FRENAME:
+                rc = sm_frename((hm_frename_t *)rxdata, &status);
+                break;
+            case KM_OP_FPATH:
+                rc = sm_fpath((hm_fhandle_t *)rxdata, &status);
+                break;
+            case KM_OP_FSETPERMS:
+                rc = sm_fsetprotect((hm_fopenhandle_t *)rxdata, &status);
+                break;
+            default:
+                rc = sm_unknown(km, &status);
+                break;
+        }
+        if (rc == 0)
+            rc = status;
 
-    if (rc != 0)  {
+        if (rc == 0)
+            break;
+
         printf("KS send_msg failure op=%x status=%02x: %d (%s)\n",
                km->km_op, status, rc, smash_err(rc));
-    }
+    } while (retry-- > 0);
 }
 
 static uint
@@ -4343,7 +5048,7 @@ run_message_mode(void)
     uint16_t app_state = MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_LOOPBACK;
     smash_msg_info_t mi;
 
-    printf("Message mode\n");
+    msgprintf("Message mode\n");
     app_state_send[0] = SWAP16(0xffff);     // Affect all bits
     app_state_send[1] = SWAP16(app_state);  // Message service up
 
@@ -4393,9 +5098,11 @@ run_message_mode(void)
                 break;
             }
             if ((mi.smi_atou_inuse != 0) || (mi.smi_utoa_inuse != 0)) {
-                printf("  atou inuse=%u avail=%u  utoa inuse=%u avail=%u\n",
-                       SWAP16(mi.smi_atou_inuse), SWAP16(mi.smi_atou_avail),
-                       SWAP16(mi.smi_utoa_inuse), SWAP16(mi.smi_utoa_avail));
+                msgprintf("  atou inuse=%u avail=%u  utoa inuse=%u avail=%u\n",
+                          SWAP16(mi.smi_atou_inuse),
+                          SWAP16(mi.smi_atou_avail),
+                          SWAP16(mi.smi_utoa_inuse),
+                          SWAP16(mi.smi_utoa_avail));
             }
         }
 
@@ -4678,6 +5385,12 @@ errx(EXIT_FAILURE, "how did we get here?");
             case '?':
                 usage(stdout);
                 exit(EXIT_SUCCESS);
+                break;
+            case 0x80 + 'f':
+                debug_fs++;
+                break;
+            case 0x80 + 'm':
+                debug_msg++;
                 break;
             default:
                 warnx("Unknown option -%c 0x%x", ch, ch);

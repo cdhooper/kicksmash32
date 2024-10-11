@@ -14,7 +14,7 @@
  * THE AUTHOR ASSUMES NO LIABILITY FOR ANY DAMAGE ARISING OUT OF THE USE
  * OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
  */
-const char *version = "\0$VER: smash 0.2 ("__DATE__") © Chris Hooper";
+const char *version = "\0$VER: smashftp 0.4 ("__DATE__") © Chris Hooper";
 
 #include <stdio.h>
 #include <stdint.h>
@@ -242,12 +242,17 @@ sleep(unsigned int sec)
 }
 
 /*
- * unix_time_to_amiga_ds()
- *      Convert seconds since 1978 to Amiga DateStamp format
+ * unix_time_to_amiga_datestamp
+ * -----------------------------
+ * Convert UNIX seconds since 1970 to Amiga DateStamp format
  */
 void
-amiga_sec_to_ds(uint sec, struct DateStamp *ds)
+unix_time_to_amiga_datestamp(uint sec, struct DateStamp *ds)
 {
+#define UNIX_SEC_TO_AMIGA_SEC (2922 * 24 * 60 * 60)  // 1978 - 1970 = 2922 days
+    if (sec >= UNIX_SEC_TO_AMIGA_SEC)
+        sec -= UNIX_SEC_TO_AMIGA_SEC;
+
     ds->ds_Days   = sec / 86400;
     ds->ds_Minute = (sec % 86400) / 60;
     ds->ds_Tick   = (sec % 60) * TICKS_PER_SECOND;
@@ -260,10 +265,10 @@ amiga_sec_to_ds(uint sec, struct DateStamp *ds)
 uint
 amiga_ds_to_sec(struct DateStamp *ds)
 {
-    uint sec = ds->ds_Days * 24 * 3600 +       // Days
-               ds->ds_Minute * 60 +            // Minutes
-               ds->ds_Tick / TICKS_PER_SECOND; // Seconds
-    return (sec);
+    uint secs = ds->ds_Days * 24 * 3600 +       // Days
+                ds->ds_Minute * 60 +            // Minutes
+                ds->ds_Tick / TICKS_PER_SECOND; // Seconds
+    return (secs);
 }
 
 static uint32_t
@@ -599,7 +604,7 @@ cmd_chmod(int argc, char * const *argv)
                 rc = RC_FAILURE;
                 continue;
             }
-            rc2 = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen);
+            rc2 = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen, 0);
             if (rlen == 0) {
                 printf("Failed to stat remote file %s: %s\n",
                        name, smash_err(rc2));
@@ -882,7 +887,7 @@ get_file(const char *src, const char *dst)
         return (RC_FAILURE);
     }
 
-    rc = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen);
+    rc = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen, 0);
     if (rlen == 0) {
         printf("Failed to stat remote file %s: %s\n", src, smash_err(rc));
         return (RC_FAILURE);
@@ -925,7 +930,7 @@ get_file(const char *src, const char *dst)
             sm_fclose(handle);
             return (RC_USR_ABORT);
         }
-        rc = sm_fread(handle, buflen, (void **) &data, &rlen);
+        rc = sm_fread(handle, buflen, (void **) &data, &rlen, 0);
         if (rlen == 0) {
             printf("Failed to read %s at pos %x: %s\n",
                    src, (uint) pos, smash_err(rc));
@@ -952,7 +957,7 @@ get_file(const char *src, const char *dst)
 
     if (SetProtection(dst, fileperms) == 0)
         printf("Failed to set protection on %s\n", dst);
-    amiga_sec_to_ds(filemtime, &datestamp);
+    unix_time_to_amiga_datestamp(filemtime, &datestamp);
     if (SetFileDate(dst, &datestamp) == 0)
         printf("Failed to set date on %s\n", dst);
 
@@ -1645,7 +1650,7 @@ show_dirent(hm_fdirent_t *dent, uint flags)
             sec = dent->hmd_atime;
         else
             sec = dent->hmd_mtime;
-        amiga_sec_to_ds(sec, &ds);
+        unix_time_to_amiga_datestamp(sec, &ds);
     }
 
     if (flags & LS_FLAG_LIST) {
@@ -1743,7 +1748,7 @@ try_open_again:
         goto try_open_again;
     }
     while (1) {
-        rc = sm_fread(handle, DIRBUF_SIZE, (void **) &data, &rlen);
+        rc = sm_fread(handle, DIRBUF_SIZE, (void **) &data, &rlen, 0);
         if ((rlen == 0) && (rc != KM_STATUS_EOF)) {
             printf("Dir read failed: %s\n", smash_err(rc));
             goto ls_fail;
@@ -2273,7 +2278,7 @@ cmd_mv(int argc, char * const *argv)
         return (RC_USER_HELP);
     }
     if (do_remote) {
-        return (sm_frename(cwd_handle, name_old, name_new));
+        return (sm_frename(cwd_handle, name_old, cwd_handle, name_new));
     } else {
         if (Rename(name_old, name_new) == 0) {
             printf("Failed to rename %s to %s\n", name_old, name_new);
@@ -2376,7 +2381,7 @@ put_file(const char *src, const char *dst)
             rc = RC_FAILURE;
             break;
         }
-        rc = sm_fwrite(handle, bufptr, bytes);
+        rc = sm_fwrite(handle, bufptr, bytes, 1, 0);
         if (rc != KM_STATUS_OK) {
             printf("Remote write %s failed at pos %x: %s\n",
                    dst, (uint) pos, smash_err(rc));

@@ -2,10 +2,10 @@ PROG=hostsmash
 SRCS=hostsmash.c crc32.c version.c
 PROG2=crcit
 SRCS2=crcit.c crc32.c
-CC=gcc
+CC := gcc
 #CFLAGS  := -O2 -g -pthread -Wall -Wpedantic
 #LDFLAGS := -O2 -g -lpthread
-CFLAGS  := -O0 -g -pthread -Wall -Wpedantic
+CFLAGS  := -O0 -g -pthread -Wall -Wpedantic -Wno-variadic-macros
 LDFLAGS := -O0 -g -lpthread
 UNAME_S := $(shell uname -s)
 
@@ -27,20 +27,53 @@ TIME := $(shell date -d "@$(NOW)" '+%H:%M:%S')
 endif
 CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 
-ifeq ($(OS),Windows_NT)
+# Get the default target operating system
+ifneq (,$(filter $(OS),Windows_NT Windows win))
+    TARGET_OS ?= Windows_NT
+else
+    OS ?= $(shell uname -s)
+    TARGET_OS ?= $(OS)
+endif
+
+# Windows
+ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win))
     CFLAGS += -DWIN32
     OBJDIR := objs.win
+    ifeq ($(OS),Linux)
+	# Cross-compile
+	CC := x86_64-w64-mingw32-gcc
+	PROG := $(OBJDIR)/$(PROG).exe
+	PROG2 := $(OBJDIR)/$(PROG2).exe
+    endif
+endif
+$(info $(PROG2))
+
+# Linux
+ifeq ($(TARGET_OS),Linux)
+    CFLAGS += -DLINUX
+    UNAME_M := $(shell uname -m)
+    OBJDIR := objs.$(UNAME_M)
+endif
+
+# MacOS
+ifeq ($(TARGET_OS),Darwin)
+#   CFLAGS += -DOSX -target x86_64-apple-macos10.12
+    CFLAGS += -DOSX #-lxml2 -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/libxml2
+    OBJDIR := objs.mac
+endif
+
+ifneq ($(TARGET_OS),$(OS))
+    $(info HOST=$(OS) TARGET=$(TARGET_OS))
+endif
+
+# If verbose is specified with no other targets, then build everything
+ifeq ($(MAKECMDGOALS),verbose)
+verbose: all
+endif
+ifeq (,$(filter verbose timed, $(MAKECMDGOALS)))
+QUIET   := @
 else
-    ifeq ($(UNAME_S),Linux)
-        CFLAGS += -DLINUX
-	UNAME_M := $(shell uname -m)
-	OBJDIR := objs.$(UNAME_M)
-    endif
-    ifeq ($(UNAME_S),Darwin)
-#        CFLAGS += -DOSX -target x86_64-apple-macos10.12
-        CFLAGS += -DOSX #-lxml2 -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/libxml2
-	OBJDIR := objs.mac
-    endif
+QUIET   :=
 endif
 
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
@@ -57,7 +90,7 @@ $(foreach SRCFILE,$(SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE))))
 $(foreach SRCFILE,$(SRCS2),$(eval $(call DEPEND_SRC,$(SRCFILE))))
 
 
-$(OBJS): Makefile smash_cmd.h version.h
+$(OBJS) $(OBJS2): Makefile smash_cmd.h version.h crc32.h host_cmd.h
 $(OBJDIR)/hostsmash.o: | $(USB_HDR)
 $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(OBJS)) Makefile
 

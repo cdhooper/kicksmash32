@@ -44,8 +44,10 @@
  */
 
 #include "printf.h"
+
 #define USE_SERIAL_OUTPUT
 #include <clib/debug_protos.h>
+#include <clib/dos_protos.h>
 
 #include <string.h>
 #include <stdarg.h>
@@ -69,7 +71,11 @@
 #define FMT_UPPERCASE  0x0100   // Uppercase hex (A-F) instead of (a-f)
 #define FMT_DOT        0x0200   // Dot specifier was used
 
-#ifdef USE_SERIAL_OUTPUT
+#ifdef NO_DEBUG
+#undef USE_SERIAL_OUTPUT
+#undef printf
+#endif
+
 
 /* Output buffer structure */
 typedef struct {
@@ -77,18 +83,35 @@ typedef struct {
     char *buf_end;
 } buf_t;
 
+extern uint flag_output;
+
 int
 putchar(int ch)
 {
-    KPutChar(ch);
+#ifdef USE_SERIAL_OUTPUT
+    if (flag_output == 1) {
+        FPutC(Output(), ch);
+    } else if (flag_output) {
+        KPutChar(ch);
+    }
+#endif
     return (ch);
 }
 
 int
 puts(const char *str)
 {
-    KPutS(str);
-    KPutChar('\n');
+#ifdef USE_SERIAL_OUTPUT
+    if (flag_output == 1) {
+        PutStr(str);
+        FPutC(Output(), '\n');
+    } else if (flag_output) {
+        KPutS(str);
+        KPutChar('\n');
+    }
+#else
+    (void) str;
+#endif
     return (0);
 }
 
@@ -565,7 +588,6 @@ int printf(const char *fmt, ...)
 
     return (rc);
 }
-#endif /* USE_SERIAL_OUTPUT */
 
 #undef DO_PRINTF_TEST
 #ifdef DO_PRINTF_TEST

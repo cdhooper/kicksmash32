@@ -157,7 +157,7 @@ sm_fclose(handle_t handle)
  * rlen is the size of the received content (pointed to by data).
  */
 uint
-sm_fread(handle_t handle, uint readsize, void **data, uint *rlen)
+sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
 {
     uint rc;
     hm_freadwrite_t msg;
@@ -169,6 +169,8 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen)
     msg.hm_hdr.km_tag    = host_tag_alloc();
     msg.hm_handle        = handle;
     msg.hm_length        = readsize;
+    msg.hm_flag          = flags;
+    msg.hm_unused        = 0;
 
     rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rcvlen);
 
@@ -179,10 +181,13 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen)
     }
 
 // printf("sm_fread(%x) rawlen=%x", readsize, rcvlen);
+#if 0
+    // Need to remove this so that single dirents can be read
     if (rcvlen > readsize + sizeof (msg)) {
         printf("bad rcvlen %x\n", rcvlen);
         rcvlen = readsize + sizeof (msg);
     }
+#endif
 
     if (rcvlen >= sizeof (*rdata))
         rcvlen -= sizeof (*rdata);
@@ -217,7 +222,7 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen)
 sm_read_fail:
     if (rlen != NULL)
         *rlen = rcvlen;
-    if ((rc != KM_STATUS_OK) && flag_debug)
+    if ((rc != KM_STATUS_OK) && (flag_debug > 2))
         dump_memory(rdata, rcvlen, DUMP_VALUE_UNASSIGNED);
 
     host_tag_free(msg.hm_hdr.km_tag);
@@ -231,28 +236,70 @@ sm_read_fail:
  *
  * handle is the remote file handle: see sm_fopen().
  * buf is the data to be written, following uninitialized space reserved
- *     for a hm_freadwrite_t message header (12 bytes). This may be a bir
+ *     for a hm_freadwrite_t message header (12 bytes). This may be a bit
  *     odd for a file API, but it helps reduce the number of data copies
  *     for a message to be sent.
  * buflen is the number of bytes to write, which does not include the
  *     space reserved for the message header.
+ * padded_header is a flag which indicates 12 bytes of extra space has
+ *     been allocated in the buffer for header data. This allows more
+ *     efficient data send, but may not be convenient for the caller.
  */
 uint
-sm_fwrite(handle_t handle, void *buf, uint buflen)
+sm_fwrite(handle_t handle, void *buf, uint writelen, uint padded_header,
+          uint flags)
 {
-    hm_freadwrite_t *msg = buf;
+    hm_freadwrite_t *msg;
     hm_freadwrite_t *rdata;
-    uint msglen = sizeof (*msg) + buflen;
+    uint msglen;
     uint rcvlen;
     uint rc;
+    uint8_t chunk_header[sizeof (*msg) + 32];
+
+    if (padded_header)
+        msg = buf;
+    else
+        msg = (hm_freadwrite_t *) &chunk_header;
 
     msg->hm_hdr.km_op     = KM_OP_FWRITE;
     msg->hm_hdr.km_status = 0;
     msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_handle        = handle;
-    msg->hm_length        = buflen;
+    msg->hm_length        = writelen;
+    msg->hm_flag          = flags;
+    msg->hm_unused        = 0;
 
-    rc = host_msg(msg, msglen, (void **) &rdata, &rcvlen);
+    if (padded_header) {
+        /* Send entire message in one shot */
+        msglen = sizeof (*msg) + writelen;
+        rc = host_msg(msg, msglen, (void **) &rdata, &rcvlen);
+    } else {
+        /* Send an initial chunk, then use the sent space to insert header */
+        uint copylen = sizeof (chunk_header) - sizeof (*msg);
+        if (copylen > writelen)
+            copylen = writelen;
+
+        msg->hm_length = copylen;
+        memcpy(msg + 1, buf, copylen);
+
+        msglen = copylen + sizeof (*msg);
+        rc = host_msg(msg, msglen, (void **) &rdata, &rcvlen);
+        if ((rc == 0) && (copylen < writelen)) {
+            hm_freadwrite_t *msg2 = buf + copylen - sizeof (*msg);
+
+            /* Save original data */
+            memcpy(msg + 1, msg2, sizeof (*msg));  // Save original data
+            memcpy(msg2, msg, sizeof (*msg));      // Install header
+
+            /* Send the rest of the message */
+            msg2->hm_length = writelen - copylen;
+            msglen = sizeof (*msg) + writelen - copylen;
+            rc = host_msg(msg2, msglen, (void **) &rdata, &rcvlen);
+
+            /* Restore original data */
+            memcpy(msg2, msg + 1, sizeof (*msg));
+        }
+    }
     host_tag_free(msg->hm_hdr.km_tag);
     return (rc);
 }
@@ -347,7 +394,8 @@ sm_fdelete(handle_t handle, const char *name)
  * name_new is the filename to be renamed.
  */
 uint
-sm_frename(handle_t handle, const char *name_old, const char *name_new)
+sm_frename(handle_t shandle, const char *name_old,
+           handle_t dhandle, const char *name_new)
 {
     uint rc;
     uint len_from  = strlen(name_old) + 1;
@@ -356,7 +404,7 @@ sm_frename(handle_t handle, const char *name_old, const char *name_new)
     uint rlen;
     uint msglen;
     hm_fhandle_t *rdata;
-    hm_fhandle_t *msg;
+    hm_frename_t *msg;
 
     if (len_total > 2000) {
         printf("Path \"%s\" plus \"%s\" too long\n", name_old, name_new);
@@ -372,7 +420,8 @@ sm_frename(handle_t handle, const char *name_old, const char *name_new)
     msg->hm_hdr.km_op     = KM_OP_FRENAME;
     msg->hm_hdr.km_status = 0;
     msg->hm_hdr.km_tag    = host_tag_alloc();
-    msg->hm_handle        = handle;
+    msg->hm_shandle        = shandle;
+    msg->hm_dhandle        = dhandle;
     strcpy((char *)(msg + 1), name_old);  // From name follows message header
     strcpy((char *)(msg + 1) + len_from, name_new);  // To name follows that
 
@@ -475,6 +524,55 @@ sm_fcreate(handle_t parent_handle, const char *name, const char *tgt_name,
 }
 
 /*
+ * sm_fseek
+ * --------
+ * Move to a specific position in a file or directory on the USB host.
+ *
+ * handle is the handle of the file / directory.
+ * seek_mode is one of
+ *      OFFSET_BEGINNING (-1) to seek from the start of file
+ *      OFFSET_CURRENT (0) to seek from the current file position
+ *      OFFSET_END (1) to seek from the end of file, signed offset in that case
+ * offset is the offset from the start of the file / directory.
+ * new_pos is an optional pointer to the value of the new file position.
+ * prev_pos is an optional pointer to the value of the previous file position.
+ */
+uint
+sm_fseek(handle_t handle, int seek_mode, uint64_t offset,
+         uint64_t *new_pos, uint64_t *prev_pos)
+{
+    uint rc;
+    uint rlen;
+    hm_fseek_t  msg;
+    hm_fseek_t *rmsg;
+
+    if ((seek_mode < -1) || (seek_mode > 1)) {
+        printf("\nODD seek_mode %d\n\n", seek_mode);
+    }
+    msg.hm_hdr.km_op     = KM_OP_FSEEK;
+    msg.hm_hdr.km_status = 0;
+    msg.hm_hdr.km_tag    = host_tag_alloc();
+    msg.hm_handle        = handle;
+    msg.hm_off_hi        = offset >> 32;
+    msg.hm_off_lo        = offset;
+    msg.hm_seek          = seek_mode;
+    msg.hm_unused1       = 0;
+    msg.hm_unused2       = 0;
+
+    rc = host_msg(&msg, sizeof (msg), (void **) &rmsg, &rlen);
+    if (rc != KM_STATUS_OK)
+        printf("Failed to seek: %s\n", smash_err(rc));
+
+    if (new_pos != NULL)
+        *new_pos = ((uint64_t) (rmsg->hm_off_hi) << 32) | rmsg->hm_off_lo;
+    if (prev_pos != NULL)
+        *prev_pos = ((uint64_t) (rmsg->hm_old_hi) << 32) | rmsg->hm_old_lo;
+
+    host_tag_free(msg.hm_hdr.km_tag);
+    return (rc);
+}
+
+/*
  * sm_fsetprotect
  * --------------
  * Set access permissions and other attributes on the specified file.
@@ -535,6 +633,8 @@ sm_fsetprotect(handle_t parent_handle, const char *name, uint perms)
     msg->hm_mode          = 0;              // unused
     msg->hm_type          = 0;              // unused
     msg->hm_aperms        = perms;          // Amiga permissions
+
+    strcpy((char *)(msg + 1), name);  // Name follows message header
 
     rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
     if (rc != KM_STATUS_OK) {
