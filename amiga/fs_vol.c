@@ -247,7 +247,6 @@ volnode_remove(vollist_t *vol)
         current = (struct DeviceList *) BTOC(info->di_DevInfo);
         while (current != NULL) {
             if ((current == volnode) || (current == devnode)) {
-                struct DeviceList *temp = current;
                 removed++;
                 current->dl_Task = NULL;
                 if (parent == NULL)
@@ -255,9 +254,6 @@ volnode_remove(vollist_t *vol)
                 else
                     parent->dl_Next  = current->dl_Next;
                 current = (struct DeviceList *) BTOC(current->dl_Next);
-
-                FreeVec(BTOC(temp->dl_Name));
-                FreeMem(temp, sizeof (*temp));
             } else {
                 parent = current;
                 current = (struct DeviceList *) BTOC(current->dl_Next);
@@ -348,7 +344,8 @@ volume_flush(void)
             }
             if (cur->vl_use_count == 0) {
                 /* Okay to finish volume remove */
-                vollist_t *next = cur->vl_next;
+                DeviceList_t *dlnode;
+                vollist_t    *next = cur->vl_next;
                 if (prev == NULL)
                     vollist = next;
                 else
@@ -356,6 +353,15 @@ volume_flush(void)
                 sm_fclose(cur->vl_handle);
                 volume_msg_masks &= ~BIT(cur->vl_msgport->mp_SigBit);
                 DeletePort(cur->vl_msgport);
+
+                if ((dlnode = cur->vl_volnode) != NULL) {
+                    FreeVec(BTOC(dlnode->dl_Name));
+                    FreeMem(dlnode, sizeof (*dlnode));
+                }
+                if ((dlnode = cur->vl_devnode) != NULL) {
+                    FreeVec(BTOC(dlnode->dl_Name));
+                    FreeMem(dlnode, sizeof (*dlnode));
+                }
                 FreeMem(cur, sizeof (vollist_t));
                 cur = next;
                 continue;

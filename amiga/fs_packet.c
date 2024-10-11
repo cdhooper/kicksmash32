@@ -937,15 +937,19 @@ action_parent(void)
     ptr = name + strlen(name) - 1;
     if (*ptr == '/')
         ptr--;
+    if (*ptr == ':') {
+        /* At root of volume */
+        gpack->dp_Res2 = 0;
+        return (0);
+    }
     while (ptr > name) {
+        if (*ptr == ':') {
+            /* Volume root is parent */
+            break;
+        }
         if (*ptr == '/') {
             *ptr = '\0';
             break;
-        }
-        if (*ptr == ':') {
-            /* At root of volume */
-            gpack->dp_Res2 = 0;
-            return (0);
         }
         *(ptr--) = '\0';
     }
@@ -1289,8 +1293,10 @@ handle_packet(void)
             case ACTION_FREE_LOCK:
             case ACTION_END:
                 /* Allow these packets, as they release resources */
+                printf("not running but allowed\n");
                 break;
             default:
+                printf("not running, rejected %d\n", gpack->dp_Type);
                 gpack->dp_Res1 = DOSFALSE;
                 gpack->dp_Res2 = ERROR_DEVICE_NOT_MOUNTED;
                 return;
