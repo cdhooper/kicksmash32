@@ -26,7 +26,9 @@
 #define KM_OP_FDELETE         0x16  // File storage delete
 #define KM_OP_FRENAME         0x17  // File storage rename
 #define KM_OP_FPATH           0x18  // File storage get path to handle
-#define KM_OP_FSETPERMS       0x19  // File storage set file perms
+#define KM_OP_FSETPERMS       0x19  // File storage set permissions
+#define KM_OP_FSETOWN         0x1a  // File storage set owner / group
+#define KM_OP_FSETDATE        0x1b  // File storage set date
 
 #define KM_OP_REPLY           0x80  // Reply message flag to remote request
 
@@ -97,7 +99,8 @@ typedef struct {
 typedef struct {
     km_msg_hdr_t hm_hdr;     // Standard message header
     handle_t     hm_shandle; // Source parent dir handle
-    handle_t     hm_dhandle; // Desgination parent dir handle
+    handle_t     hm_dhandle; // Destination parent dir handle
+    /* Source and destination filenames immediately follow this struct */
 } hm_frename_t;
 
 typedef struct {
@@ -113,15 +116,34 @@ typedef struct {
 } hm_fseek_t;
 
 typedef struct {
+    km_msg_hdr_t hm_hdr;     // Standard message header
+    handle_t     hm_handle;  // Parent dir handle
+    uint8_t      hm_which;   // Which timestamp(s) to update
+    uint8_t      hm_unused0; // Unused
+    uint16_t     hm_unused1; // Unused
+    uint32_t     hm_time;    // Time secs since Jan 1, 1970
+    uint32_t     hm_time_ns; // Time nanoseconds
+    /* The filename immediately follows this struct */
+} hm_fsetdate_t;
+
+typedef struct {
+    km_msg_hdr_t hm_hdr;     // Standard message header
+    handle_t     hm_handle;  // Parent dir handle
+    uint32_t     hm_oid;     // New owner ID
+    uint32_t     hm_gid;     // New group ID
+    /* The filename immediately follows this struct */
+} hm_fsetown_t;
+
+typedef struct {
     uint16_t     hmd_type;    // File or directory type
     uint16_t     hmd_elen;    // Entry length
     uint32_t     hmd_size_hi; // file size upper 32 bits
     uint32_t     hmd_size_lo; // file size lower 32 bits
     uint32_t     hmd_blksize; // disk block size
     uint32_t     hmd_blks;    // disk blocks consumed lower 32 bits
-    uint32_t     hmd_atime;   // Access time   (secs since Jan 1, 1978)
-    uint32_t     hmd_ctime;   // Creation time (secs since Jan 1, 1978)
-    uint32_t     hmd_mtime;   // Modify time   (secs since Jan 1, 1978)
+    uint32_t     hmd_atime;   // Access time   (secs since Jan 1, 1970)
+    uint32_t     hmd_ctime;   // Creation time (secs since Jan 1, 1970)
+    uint32_t     hmd_mtime;   // Modify time   (secs since Jan 1, 1970)
     uint32_t     hmd_aperms;  // Amiga-style file permissions
     uint32_t     hmd_ino;     // Unique file number per-filesystem
     uint32_t     hmd_ouid;    // Owner userid

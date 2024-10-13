@@ -573,6 +573,131 @@ sm_fseek(handle_t handle, int seek_mode, uint64_t offset,
 }
 
 /*
+ * sm_fsetown
+ * ----------
+ * Set owner and group of the specified file.
+ *
+ * parent_handle is the parent directory handle of the file. If the
+ *     file name specifies a fully qualified path (beginning with a
+ *     volume name), then a value of 0 or -1 may be specified here.
+ *     See sm_fopen() for more information on the parent handle.
+ * name specifies the file name to owner and group information should
+ *     be changed. The file must already exist.
+ * which is which operation to perform.
+ *     0 sets the modify date/time
+ *     1 gets the modify date/time
+ *     2 sets the change date/time
+ *     3 gets the change date/time
+ *     4 sets the access date/time
+ *     5 gets the access date/time
+ * sec is seconds since 1970.
+ * nsec is nanoseconds
+ */
+uint
+sm_fsetdate(handle_t parent_handle, const char *name,
+            uint which, uint *sec, uint *nsec)
+{
+    uint rc;
+    uint msglen;
+    uint rlen;
+    uint namelen = strlen(name) + 1;
+    hm_fsetdate_t *msg;
+    hm_fhandle_t  *rdata;
+
+    if (namelen > 2000) {
+        printf("Path \"%s\" too long\n", name);
+        return (MSG_STATUS_BAD_LENGTH);
+    }
+    msglen = sizeof (*msg) + namelen;
+    msg = malloc(msglen);
+    if (msg == NULL) {
+        printf("malloc(%u) fail\n", msglen);
+        return (MSG_STATUS_NO_MEM);
+    }
+
+    msg->hm_hdr.km_op     = KM_OP_FSETDATE;
+    msg->hm_hdr.km_status = 0;
+    msg->hm_hdr.km_tag    = host_tag_alloc();
+    msg->hm_handle        = parent_handle;  // parent directory handle
+    msg->hm_which         = which;
+    msg->hm_unused0       = 0;
+    msg->hm_unused1       = 0;
+    msg->hm_time          = *sec;
+    msg->hm_time_ns       = *nsec;
+
+    strcpy((char *)(msg + 1), name);  // Name follows message header
+
+    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    if (rc != KM_STATUS_OK) {
+        printf("Failed to set date %u.%u %s: %s\n",
+               *sec, *nsec, name, smash_err(rc));
+    }
+
+    host_tag_free(msg->hm_hdr.km_tag);
+    free(msg);
+
+    *sec  = msg->hm_time;
+    *nsec = msg->hm_time_ns;
+
+    return (rc);
+}
+
+/*
+ * sm_fsetown
+ * ----------
+ * Set owner and group of the specified file.
+ *
+ * parent_handle is the parent directory handle of the file. If the
+ *     file name specifies a fully qualified path (beginning with a
+ *     volume name), then a value of 0 or -1 may be specified here.
+ *     See sm_fopen() for more information on the parent handle.
+ * name specifies the file name to owner and group information should
+ *     be changed. The file must already exist.
+ * oid is the owner ID.
+ * gid is the group ID.
+ */
+uint
+sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid)
+{
+    uint rc;
+    uint msglen;
+    uint rlen;
+    uint namelen = strlen(name) + 1;
+    hm_fsetown_t *msg;
+    hm_fhandle_t *rdata;
+
+    if (namelen > 2000) {
+        printf("Path \"%s\" too long\n", name);
+        return (MSG_STATUS_BAD_LENGTH);
+    }
+    msglen = sizeof (*msg) + namelen;
+    msg = malloc(msglen);
+    if (msg == NULL) {
+        printf("malloc(%u) fail\n", msglen);
+        return (MSG_STATUS_NO_MEM);
+    }
+
+    msg->hm_hdr.km_op     = KM_OP_FSETOWN;
+    msg->hm_hdr.km_status = 0;
+    msg->hm_hdr.km_tag    = host_tag_alloc();
+    msg->hm_handle        = parent_handle;  // parent directory handle
+    msg->hm_oid           = oid;            // file new owner id
+    msg->hm_gid           = gid;            // file new group id
+
+    strcpy((char *)(msg + 1), name);  // Name follows message header
+
+    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    if (rc != KM_STATUS_OK) {
+        printf("Failed to set owner %u.%u for %s: %s\n",
+               oid, gid, name, smash_err(rc));
+    }
+
+    host_tag_free(msg->hm_hdr.km_tag);
+    free(msg);
+    return (rc);
+}
+
+/*
  * sm_fsetprotect
  * --------------
  * Set access permissions and other attributes on the specified file.

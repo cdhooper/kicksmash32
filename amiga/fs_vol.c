@@ -64,17 +64,33 @@ streqv(const char *str1, const char *str2)
  * Convert UNIX seconds since 1970 to Amiga DateStamp format
  */
 void
-unix_time_to_amiga_datestamp(uint sec, struct DateStamp *ds)
+unix_time_to_amiga_datestamp(uint sec, uint nsec, struct DateStamp *ds)
 {
-#define UNIX_SEC_TO_AMIGA_SEC (2922 * 24 * 60 * 60)  // 1978 - 1970 = 2922 days
-    if (sec >= UNIX_SEC_TO_AMIGA_SEC)
-        sec -= UNIX_SEC_TO_AMIGA_SEC;
+#define AMIGA_SEC_TO_UNIX_SEC (2922 * 24 * 60 * 60)  // 1978 - 1970 = 2922 days
+    if (sec >= AMIGA_SEC_TO_UNIX_SEC)
+        sec -= AMIGA_SEC_TO_UNIX_SEC;
 
     ds->ds_Days   = sec / 86400;
     ds->ds_Minute = (sec % 86400) / 60;
     ds->ds_Tick   = (sec % 60) * TICKS_PER_SECOND;
+    ds->ds_Tick  += nsec / (1000000000 / TICKS_PER_SECOND);
 }
 
+/*
+ * amiga_datestamp_to_unix_time
+ * ----------------------------
+ * Convert Amiga DateStamp to seconds since 1978
+ */
+uint
+amiga_datestamp_to_unix_time(struct DateStamp *ds, uint *nsec)
+{
+    uint secs = ds->ds_Days * 24 * 3600 +       // Days
+                ds->ds_Minute * 60 +            // Minutes
+                ds->ds_Tick / TICKS_PER_SECOND; // Seconds
+    secs += AMIGA_SEC_TO_UNIX_SEC;
+    *nsec = (ds->ds_Tick % TICKS_PER_SECOND) * 1000000000 / TICKS_PER_SECOND;
+    return (secs);
+}
 
 /*
  * name_present_in_dos_devinfo
@@ -172,7 +188,7 @@ volnode_init(char *name, uint32_t access_time, LONG dl_type,
     }
 
     /* Probably only useful if booting from this volume and RTC unavailable */
-    unix_time_to_amiga_datestamp(access_time, &volnode->dl_VolumeDate);
+    unix_time_to_amiga_datestamp(access_time, 0, &volnode->dl_VolumeDate);
 
     volnode->dl_Type     = dl_type;
     volnode->dl_Task     = msgport;

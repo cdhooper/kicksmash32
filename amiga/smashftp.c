@@ -258,19 +258,6 @@ unix_time_to_amiga_datestamp(uint sec, struct DateStamp *ds)
     ds->ds_Tick   = (sec % 60) * TICKS_PER_SECOND;
 }
 
-/*
- * amiga_ds_to_sec()
- *      Convert Amiga DateStamp to seconds since 1978
- */
-uint
-amiga_ds_to_sec(struct DateStamp *ds)
-{
-    uint secs = ds->ds_Days * 24 * 3600 +       // Days
-                ds->ds_Minute * 60 +            // Minutes
-                ds->ds_Tick / TICKS_PER_SECOND; // Seconds
-    return (secs);
-}
-
 static uint32_t
 amiga_perms_from_host(uint host_perms)
 {

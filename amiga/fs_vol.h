@@ -43,7 +43,8 @@ void volume_flush(void);
 void volume_close(void);
 void volume_message(uint mask);
 
-void unix_time_to_amiga_datestamp(uint sec, struct DateStamp *ds);
+void unix_time_to_amiga_datestamp(uint sec, uint nsec, struct DateStamp *ds);
+uint amiga_datestamp_to_unix_time(struct DateStamp *ds, uint *nsec);
 
 extern ULONG volume_msg_masks;
 

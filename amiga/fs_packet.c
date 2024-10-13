@@ -438,7 +438,7 @@ FillInfoBlock(FileInfoBlock_t *fib, fileattr_t *fattr, hm_fdirent_t *dent)
     fib->fib_OwnerUID = dent->hmd_ouid;
     fib->fib_OwnerGID = dent->hmd_ogid;
 
-    unix_time_to_amiga_datestamp(dent->hmd_mtime, &fib->fib_Date);
+    unix_time_to_amiga_datestamp(dent->hmd_mtime, 0, &fib->fib_Date);
     memset(fib->fib_Reserved, 0, sizeof (fib->fib_Reserved));
 
     if (fattr != NULL) {
@@ -1243,6 +1243,125 @@ lock_same:
 }
 
 static ULONG
+action_set_date(void)
+{
+    fs_lock_t        *lock  = (fs_lock_t *) BTOC(GARG2);
+    char             *bname = (char *) BTOC(GARG3);
+    char             *name  = bname + 1;
+    struct DateStamp *ds    = (struct DateStamp *) GARG4;
+    handle_t phandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
+    char     cho;
+    uint     rc;
+    uint     sec;
+    uint     nsec;
+
+    sec = amiga_datestamp_to_unix_time(ds, &nsec);
+
+    /* Example
+     * setdate tt:9 12-10-2024 10:30:02
+     * Fri Oct 12 10:30:02 PDT 2024
+     *     Days 17086
+     *     Min 630
+     *     Tick 100
+     *
+     * 17086 / 365.25 + 1978 = 2024.77891
+     *         0.77891 * 365 = 284.3
+     * This is October 10, 2024 according to date +%j
+     */
+
+    bname = name + *bname;
+    cho = *bname;
+    *bname = '\0';
+    printf("SET_DATE %s %p %u.%u\n", name, ds, sec, nsec);
+    printf("  Days %u\n", ds->ds_Days);
+    printf("  Min %u\n", ds->ds_Minute);
+    printf("  Tick %u\n", ds->ds_Tick);
+
+    rc = sm_fsetdate(phandle, name, 0, &sec, &nsec);
+    *bname = cho;
+
+    if (rc != 0) {
+        printf("failed set_protect with %x\n", rc);
+        gpack->dp_Res2 = km_status_to_amiga_error(rc);
+        return (DOSFALSE);
+    }
+    return (DOSTRUE);
+}
+
+static ULONG
+action_set_dates(void)
+{
+    uint              which = GARG1;
+    fs_lock_t        *lock  = (fs_lock_t *) BTOC(GARG2);
+    char             *bname = (char *) BTOC(GARG3);
+    char             *name  = bname + 1;
+    struct DateStamp *ds    = (struct DateStamp *) GARG4;
+    handle_t phandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
+    char     cho;
+    uint     rc;
+    uint     sec;
+    uint     nsec;
+
+    sec = amiga_datestamp_to_unix_time(ds, &nsec);
+
+    bname = name + *bname;
+    cho = *bname;
+    *bname = '\0';
+    printf("SET_DATES %s %p %u.%u\n", name, ds, sec, nsec);
+    printf("  Days %u\n", ds->ds_Days);
+    printf("  Min %u\n", ds->ds_Minute);
+    printf("  Tick %u\n", ds->ds_Tick);
+
+    rc = sm_fsetdate(phandle, name, which, &sec, &nsec);
+    *bname = cho;
+
+    if (rc != 0) {
+        printf("failed set_protect with %x\n", rc);
+        gpack->dp_Res2 = km_status_to_amiga_error(rc);
+        return (DOSFALSE);
+    }
+
+    if ((which == 1) || (which == 3) || (which == 5)) {
+        /* Get date (1 = modify, 3 = change, 5 = access) */
+        unix_time_to_amiga_datestamp(sec, nsec, ds);
+    }
+
+    return (DOSTRUE);
+}
+
+static ULONG
+action_set_owner(void)
+{
+    fs_lock_t *lock = (fs_lock_t *) BTOC(GARG2);
+    char      *bname = (char *) BTOC(GARG3);
+    char      *name  = bname + 1;
+    ULONG      owner = GARG4;
+    handle_t   phandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
+    char       cho;
+    uint       rc;
+    uint       oid;
+    uint       gid;
+
+    bname = name + *bname;
+    cho = *bname;
+    *bname = '\0';
+    printf("SET_OWNER %s %x\n", name, owner);
+
+    oid = owner >> 16;
+    gid = owner & 0xffff;
+
+    rc = sm_fsetown(phandle, name, oid, gid);
+    *bname = cho;
+
+    if (rc != 0) {
+        printf("failed set_protect with %x\n", rc);
+        gpack->dp_Res2 = km_status_to_amiga_error(rc);
+        return (DOSFALSE);
+    }
+    return (DOSTRUE);
+}
+
+static ULONG
 action_undisk_info(void)
 {
     return (DOSTRUE);
@@ -1378,14 +1497,29 @@ handle_packet(void)
         case ACTION_RENAME_OBJECT:
             res1 = action_rename_object();
             break;
+        case ACTION_SAME_LOCK:
+            res1 = action_same_lock();
+            break;
         case ACTION_SEEK:
             res1 = action_seek();
+            break;
+/* special BFFS packets */
+#define ACTION_CREATE_OBJECT    2346
+#define ACTION_GET_PERMS        2995
+#define ACTION_SET_PERMS        2996
+#define ACTION_SET_TIMES        2997
+#define ACTION_SET_DATES        2998
+        case ACTION_SET_DATE:
+            res1 = action_set_date();
+            break;
+        case ACTION_SET_DATES:
+            res1 = action_set_dates();
             break;
         case ACTION_SET_PROTECT:
             res1 = action_set_protect();
             break;
-        case ACTION_SAME_LOCK:
-            res1 = action_same_lock();
+        case ACTION_SET_OWNER:
+            res1 = action_set_owner();
             break;
         case ACTION_UNDISK_INFO:
             res1 = action_undisk_info();
@@ -1394,9 +1528,7 @@ handle_packet(void)
             res1 = action_write();
             break;
 // Implement next:
-//      ACTION_SET_DATE
 //      ACTION_SET_FILE_SIZE
-//      ACTION_SET_OWNER
         case ACTION_RENAME_DISK:  // probably not
         case ACTION_WAIT_CHAR:   // ?
         case ACTION_MORE_CACHE:  // not necessary
@@ -1405,7 +1537,6 @@ handle_packet(void)
         case ACTION_INHIBIT:
         case ACTION_DISK_TYPE:    // Not needed (obsolete)
         case ACTION_DISK_CHANGE:
-        case ACTION_SET_DATE:
         case ACTION_SCREEN_MODE:  // ?
         case ACTION_READ_RETURN:  // ?
         case ACTION_WRITE_RETURN:  // ?
@@ -1424,7 +1555,6 @@ handle_packet(void)
         case ACTION_ADD_NOTIFY:
         case ACTION_REMOVE_NOTIFY:
         case ACTION_EXAMINE_ALL_END:
-        case ACTION_SET_OWNER:
         case ACTION_SERIALIZE_DISK:
         default:
             printf("UNKNOWN %d\n", gpack->dp_Type);

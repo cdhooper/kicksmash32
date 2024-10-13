@@ -105,7 +105,7 @@
  *        No operation but response indicating success is given
  *   KS_CMD_ID
  *        Provides identification information of Kicksmash, including
- *        firwmare version and compile options. See smash_id_t.
+ *        firmware version and compile options. See smash_id_t.
  *   KS_CMD_UPTIME
  *        Report Kicksmash uptime in microseconds. This is a 64-bit value
  *        which will be in big endian format, suitable for direct use by
@@ -115,7 +115,7 @@
  *        microseconds since 1970). This command will only return 0 values
  *        unless a set has been performed since the last powercycle or
  *        Kicksmash reset (KS_CLOCK_SET option). Use KS_CLOCK_SET_IFNOT to
- *        optionall set if it's not already set.
+ *        optionally set if it's not already set.
  *   KS_CMD_TESTPATT
  *        Kicksmash will send a test pattern which includes 28x 32-bit
  *        values which test all bit values and many combinations. The
@@ -193,8 +193,8 @@
  *        This command will set up a multiple data write sequence for the
  *        flash. It is not currently implemented.
  *   KS_CMD_BANK_INFO
- *        ROM bank information, having structure bank_info_t,  will be
- *        returnsed to the requester. This information includes the current
+ *        ROM bank information, having structure bank_info_t, will be
+ *        returned to the requester. This information includes the current
  *        bank, bank at next reset, bank at cold power-on, the sequence of
  *        banks to step through when a long reset is detected, an encoding
  *        of which banks are merged into larger bank (1M, 2M, 4M, 8M), and

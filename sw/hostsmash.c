@@ -2943,6 +2943,18 @@ get_localtime(time_t rawtime)
     return (rawtime + ptm->tm_gmtoff);
 }
 
+/*
+ * get_utctime
+ * -----------
+ * Undoes local time offset to the specified raw time.
+ */
+time_t
+get_utctime(time_t rawtime)
+{
+    struct tm *ptm = localtime(&rawtime);
+    return (rawtime - ptm->tm_gmtoff);
+}
+
 static char *
 make_amiga_relpath(handle_ent_t **parent, const char *name)
 {
@@ -4859,6 +4871,160 @@ sm_fpath(hm_fhandle_t *hm, uint *status)
     return (rc);
 }
 
+
+static uint
+sm_fsetdate(hm_fsetdate_t *hm, uint *status)
+{
+    /* Resolve handle to Amiga-specific path */
+    handle_ent_t *phandle = handle_get(hm->hm_handle);
+    char         *name    = (char *)(hm + 1);
+    char         *path    = NULL;
+    char         *apath;
+    uint8_t       which   = hm->hm_which;
+    uint32_t      sec     = SWAP32(hm->hm_time);
+    uint32_t      nsec    = SWAP32(hm->hm_time_ns);
+    uint32_t      utcsec  = get_utctime(sec);;
+    struct stat   statbuf;
+    struct timespec times[2];
+
+    fsprintf("fsetdate(%s %u %u.%u)\n", name, which, utcsec, nsec);
+    hm->hm_hdr.km_op |= KM_OP_REPLY;
+
+    if ((apath = make_amiga_relpath(&phandle, name)) == NULL) {
+        fsprintf("fsetdate(%s) relative path failed\n", name);
+reply_setdate_fail:
+        if (apath != NULL)
+            free(apath);
+        if (path != NULL)
+            free(path);
+        hm->hm_handle = 0;
+        if (hm->hm_hdr.km_status == KM_STATUS_OK)
+            hm->hm_hdr.km_status = KM_STATUS_FAIL;
+        return (send_msg(hm, sizeof (*hm), status));
+    }
+
+    if (phandle == NULL) {
+        /* Can't set perms on the volume directory */
+        fsprintf("fsetdate(%s) can't set dateer of the volume directory\n",
+                 name);
+        hm->hm_hdr.km_status = KM_STATUS_INVALID;
+        goto reply_setdate_fail;
+    }
+    path = make_host_path(phandle->he_avolume, apath);
+
+    if (volume_get_by_path(path, 0) != NULL) {
+        fsprintf("fsetdate(%s) can't set owner of a volume\n", path);
+        hm->hm_hdr.km_status = KM_STATUS_PERM;
+        goto reply_setdate_fail;
+    }
+
+    if (lstat(path, &statbuf)) {
+        fsprintf("lstat fail: %d\n", errno);
+        hm->hm_hdr.km_status = errno_to_km_status();
+        goto reply_setdate_fail;
+    }
+
+    times[0] = statbuf.st_atim;  // last access time
+    times[1] = statbuf.st_ctim;  // last modification time
+
+    switch (which) {
+        case 0: // Set the modify date/time
+            times[1].tv_sec  = utcsec;
+            times[1].tv_nsec = nsec;
+            break;
+        case 1: // Get the modify date/time
+            hm->hm_time    = SWAP32(statbuf.st_ctim.tv_sec);
+            hm->hm_time_ns = SWAP32(statbuf.st_ctim.tv_nsec);
+            goto reply_setdate_good;
+        case 2: // Set the change date/time
+            /* Not sure how to set this one */
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
+            goto reply_setdate_fail;
+        case 3: // Get the change date/time
+            hm->hm_time    = SWAP32(statbuf.st_ctim.tv_sec);
+            hm->hm_time_ns = SWAP32(statbuf.st_ctim.tv_nsec);
+            goto reply_setdate_good;
+        case 4: // Set the access date/time
+            times[0].tv_sec  = utcsec;
+            times[0].tv_nsec = nsec;
+            break;
+        case 5: // Get the access date/time
+            hm->hm_time    = SWAP32(statbuf.st_atim.tv_sec);
+            hm->hm_time_ns = SWAP32(statbuf.st_atim.tv_nsec);
+            goto reply_setdate_good;
+        default:
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
+            goto reply_setdate_fail;
+    }
+    if (utimensat(AT_FDCWD, path, times, AT_SYMLINK_NOFOLLOW)) {
+        fsprintf("utimesat fail: %d\n", errno);
+        hm->hm_hdr.km_status = errno_to_km_status();
+        goto reply_setdate_fail;
+    }
+
+reply_setdate_good:
+    free(apath);
+    free(path);
+
+    hm->hm_hdr.km_status = KM_STATUS_OK;
+    return (send_msg(hm, sizeof (*hm), status));
+}
+
+static uint
+sm_fsetown(hm_fsetown_t *hm, uint *status)
+{
+    /* Resolve handle to Amiga-specific path */
+    handle_ent_t *phandle = handle_get(hm->hm_handle);
+    char         *name    = (char *)(hm + 1);
+    char         *path    = NULL;
+    char         *apath;
+    uint32_t      oid = SWAP32(hm->hm_oid);
+    uint32_t      gid = SWAP32(hm->hm_gid);
+
+    fsprintf("fsetown(%s %d %d)\n", name, oid, gid);
+    hm->hm_hdr.km_op |= KM_OP_REPLY;
+
+    if ((apath = make_amiga_relpath(&phandle, name)) == NULL) {
+        fsprintf("fsetown(%s) relative path failed\n", name);
+reply_setown_fail:
+        if (apath != NULL)
+            free(apath);
+        if (path != NULL)
+            free(path);
+        hm->hm_handle = 0;
+        if (hm->hm_hdr.km_status == KM_STATUS_OK)
+            hm->hm_hdr.km_status = KM_STATUS_FAIL;
+        return (send_msg(hm, sizeof (*hm), status));
+    }
+
+    if (phandle == NULL) {
+        /* Can't set perms on the volume directory */
+        fsprintf("fsetown(%s) can't set owner of the volume directory\n",
+                 name);
+        hm->hm_hdr.km_status = KM_STATUS_INVALID;
+        goto reply_setown_fail;
+    }
+    path = make_host_path(phandle->he_avolume, apath);
+
+    if (volume_get_by_path(path, 0) != NULL) {
+        fsprintf("fsetown(%s) can't set owner of a volume\n", path);
+        hm->hm_hdr.km_status = KM_STATUS_PERM;
+        goto reply_setown_fail;
+    }
+
+    if (chown(path, oid, gid)) {
+        fsprintf("chown fail: %d\n", errno);
+        hm->hm_hdr.km_status = errno_to_km_status();
+        goto reply_setown_fail;
+    }
+
+    free(apath);
+    free(path);
+
+    hm->hm_hdr.km_status = KM_STATUS_OK;
+    return (send_msg(hm, sizeof (*hm), status));
+}
+
 static uint
 sm_fsetprotect(hm_fopenhandle_t *hm, uint *status)
 {
@@ -4981,6 +5147,12 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
                 break;
             case KM_OP_FPATH:
                 rc = sm_fpath((hm_fhandle_t *)rxdata, &status);
+                break;
+            case KM_OP_FSETDATE:
+                rc = sm_fsetdate((hm_fsetdate_t *)rxdata, &status);
+                break;
+            case KM_OP_FSETOWN:
+                rc = sm_fsetown((hm_fsetown_t *)rxdata, &status);
                 break;
             case KM_OP_FSETPERMS:
                 rc = sm_fsetprotect((hm_fopenhandle_t *)rxdata, &status);

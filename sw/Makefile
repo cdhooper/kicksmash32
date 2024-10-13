@@ -46,7 +46,6 @@ ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win))
 	PROG2 := $(OBJDIR)/$(PROG2).exe
     endif
 endif
-$(info $(PROG2))
 
 # Linux
 ifeq ($(TARGET_OS),Linux)
