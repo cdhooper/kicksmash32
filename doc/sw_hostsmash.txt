@@ -520,6 +520,31 @@ Debug options
         service messages) from the Amiga through KickSmash.
 
 
+Hostsmash on Windows
+--------------------
+The hostsmash build environment allows cross-compilation of Win32 and
+Win64 versions of the host side software. The Win32 version will run on
+Windows XP, with the caveat that you need a certain older version of
+libwinpthread-1.dll at runtime (7.x or less recent). The Win64 version
+of hostsmash is statically compiled, and doesn't require libwinpthread-1.dll
+to be present on the host.
+
+Build the Win32 version:
+    make TARGET_OS=win32
+Build the Win64 version:
+    make TARGET_OS=win
+
+If you are cross-host developing hostsmash, you can run it under Wine.
+First set up a COM port path to the /dev/ttyACMx device where Kicksmash
+is installed on your host. After that, run it with the reported COM port
+for /dev/ttyACM0. Example:
+    % ./wine_dosdevices
+    com36 /dev/ttyACM0
+    % wine objs.win32/hostsmash.exe -d COM36 -m home $HOME
+
+The Windows port is not well-tested at this point.
+
+
 Hostsmash future development
 ----------------------------
 The message protocol between the Amiga and hostsmash was designed with

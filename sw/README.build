@@ -1,0 +1,8 @@
+To build for Linux, type
+    make
+
+To build for Windows 64-bit, type
+    make win
+
+To build for Windows 32-bit, type
+    make win32

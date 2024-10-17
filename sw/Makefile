@@ -9,8 +9,6 @@ CFLAGS  := -O0 -g -pthread -Wall -Wpedantic -Wno-variadic-macros
 LDFLAGS := -O0 -g -lpthread
 UNAME_S := $(shell uname -s)
 
-QUIET ?= @
-
 #
 # Allowing links opens security risk for remote mounts because anything
 # the user running hostsmash can access may then be potentially linked
@@ -36,15 +34,23 @@ else
 endif
 
 # Windows
-ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win))
-    CFLAGS += -DWIN32
-    OBJDIR := objs.win
-    ifeq ($(OS),Linux)
-	# Cross-compile
-	CC := x86_64-w64-mingw32-gcc
-	PROG := $(OBJDIR)/$(PROG).exe
-	PROG2 := $(OBJDIR)/$(PROG2).exe
-    endif
+ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
+    CFLAGS := $(filter-out -DALLOW_CREATE_LINK, $(CFLAGS))
+    # -static works for Vista+, but doesn't work for XP
+    LDFLAGS += -lws2_32 -static
+    OBJDIR := objs.win64
+    SRCS += mingw-realpath.c
+    CC := x86_64-w64-mingw32-gcc
+endif
+ifneq (,$(filter $(TARGET_OS),win32))
+    # Windows 32-bit
+    LDFLAGS += -Lmingw_7.5.0_i686  # old version of pthread library for Win XP
+    OBJDIR := objs.win32
+    CC := i686-w64-mingw32-gcc
+endif
+ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
+    PROG := $(OBJDIR)/$(PROG).exe
+    PROG2 := $(OBJDIR)/$(PROG2).exe
 endif
 
 # Linux
@@ -95,11 +101,11 @@ $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(OBJS)) Makefile
 
 $(PROG): $(OBJS)
 	@echo Building $@
-	$(QUIET)$(CC) $(LDFLAGS) $(OBJS) -o $@
+	$(QUIET)$(CC) -o $@ $(OBJS) $(LDFLAGS)
 
 $(PROG2): $(OBJS2)
 	@echo Building $@
-	$(QUIET)$(CC) $(LDFLAGS) $(OBJS2) -o $@
+	$(QUIET)$(CC) -o $@ $(OBJS2) $(LDFLAGS)
 
 $(sort $(OBJS) $(OBJS2)): Makefile | $(OBJDIR)
 	@echo Building $@
@@ -118,3 +124,5 @@ $(USB_HDR):
 clean:
 	@echo Cleaning
 	$(QUIET)rm -rf $(PROG) $(OBJDIR)
+
+verbose:

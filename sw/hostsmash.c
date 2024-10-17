@@ -15,8 +15,20 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdarg.h>
+#ifdef __MINGW32__
+#include <sys/utime.h>
+#define handle_t winhandle_t
+#include <shlwapi.h>
+#define strcasestr StrStrI
+#undef handle_t
+typedef unsigned int uint;
+#else
 #include <termios.h>
 #include <sys/ioctl.h>
+#include <err.h>
+#include <poll.h>
+#include <sys/statvfs.h>
+#endif
 #include <sys/file.h>
 #include <signal.h>
 #include <string.h>
@@ -25,15 +37,12 @@
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <errno.h>
-#include <err.h>
-#include <poll.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
 #include <ctype.h>
 #include <inttypes.h>
-#include <sys/statvfs.h>
 #ifdef LINUX
 #include <usb.h>
 #endif
@@ -148,8 +157,9 @@ static uint debug_fs = 0;
 static uint debug_msg = 0;
 
 #ifdef FILE_DEBUG
-__attribute__((format(__printf__, 1, 2)))
-int fsprintf(const char *fmt, ...)
+__attribute__((format(__gnu_printf__, 1, 2)))
+int
+fsprintf(const char *fmt, ...)
 {
     int rc;
     va_list args;
@@ -166,7 +176,8 @@ int fsprintf(const char *fmt, ...)
 
 #ifdef MSG_DEBUG
 __attribute__((format(__printf__, 1, 2)))
-int msgprintf(const char *fmt, ...)
+int
+msgprintf(const char *fmt, ...)
 {
     int rc;
     va_list args;
@@ -252,6 +263,8 @@ typedef enum {
     RC_TIMEOUT = 2,
 } rc_t;
 
+#undef TRUE
+#undef FALSE
 typedef enum {
     TRUE  = 1,
     FALSE = 0,
@@ -308,15 +321,188 @@ static volatile uint    rx_rb_consumer    = 0;
 static volatile uint8_t  tx_rb[TX_RING_SIZE];
 static volatile uint    tx_rb_producer = 0;
 static volatile uint    tx_rb_consumer = 0;
+#ifdef __MINGW32__
+static HANDLE           dev_handle        = INVALID_HANDLE_VALUE;
+#else
 static int              dev_fd            = -1;
 static int              got_terminfo      = 0;
+static struct termios   saved_term;  // good terminal settings
+#endif
 static int              running           = 1;
 static uint             ic_delay          = 0;  // Pacing delay (ms)
 static char             device_name[PATH_MAX];
-static struct termios   saved_term;  // good terminal settings
+static char            *host_device_name  = device_name;
 static bool             terminal_mode     = FALSE;
 static bool             force_yes         = FALSE;
 static uint             swapmode          = 0123;  // no swap
+
+#ifdef __MINGW32__
+#define AT_FDCWD 0
+#define AT_SYMLINK_NOFOLLOW 0
+
+#define S_ISUID 0
+#define S_ISGID 0
+#define S_ISVTX 0
+
+#define mkdir(path, mode) mkdir(path)
+#define UNUSED(x) (void)(x)
+
+#define LOCK_SH 1       /* Shared lock.  */
+#define LOCK_EX 2       /* Exclusive lock.  */
+#define LOCK_UN 8       /* Unlock.  */
+#define LOCK_NB 4       /* Don't block when locking.  */
+
+#define lstat(path, st) stat64(path, st)
+#define stat(path, st) stat64(path, st)
+#undef stat
+#define stat stat64
+enum {
+    DT_UNKNOWN = 0,
+    DT_FIFO = 1,
+    DT_CHR = 2,
+    DT_DIR = 4,
+    DT_BLK = 6,
+    DT_REG = 8,
+    DT_LNK = 10,
+    DT_SOCK = 12,
+    DT_WHT = 14
+};
+
+char *realpath(const char *path, char *resolved_path);
+int flock(int fd, int operation);
+
+void
+err(int ec, const char *fmt, ...)
+{
+    UNUSED(ec);
+    va_list args;
+
+    printf("%d: ", errno);
+    va_start(args, fmt);
+    (void) vprintf(fmt, args);
+    va_end(args);
+    putchar('\n');
+}
+
+void
+errx(int ec, const char *fmt, ...)
+{
+    UNUSED(ec);
+    va_list args;
+
+    va_start(args, fmt);
+    (void) vprintf(fmt, args);
+    va_end(args);
+    putchar('\n');
+}
+
+void
+warn(const char *fmt, ...)
+{
+    va_list args;
+
+    printf("%d: ", errno);
+    va_start(args, fmt);
+    (void) vprintf(fmt, args);
+    va_end(args);
+    putchar('\n');
+}
+
+void
+warnx(const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    (void) vprintf(fmt, args);
+    va_end(args);
+    putchar('\n');
+}
+
+static void
+system_error(char *name)
+{
+    char *ptr = NULL;
+
+    FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                  FORMAT_MESSAGE_FROM_SYSTEM,
+                  0,
+                  GetLastError(),
+                  0,
+                  (char *) &ptr,
+                  1024,
+                  NULL);
+
+    fprintf(stderr, "Error %s: %s\n", name, ptr);
+    LocalFree(ptr);
+}
+
+ssize_t
+readlink(const char *name, char *buf, size_t bufsize)
+{
+    (void) name;
+    (void) buf;
+    (void) bufsize;
+    return (-1);
+}
+
+struct statvfs {
+    unsigned long f_bsize;    // Filesystem block size
+    unsigned long f_frsize;   // Fragment size
+    unsigned long f_blocks;   // Size of fs in f_frsize units
+    unsigned long f_bfree;    // Number of free blocks
+    unsigned long f_bavail;   // Number of free blocks for unprivileged users
+    unsigned long f_files;    // Number of inodes
+    unsigned long f_ffree;    // Number of free inodes
+    unsigned long f_favail;   // Number of free inodes for unprivileged users
+    unsigned long f_fsid;     // Filesystem ID
+    unsigned long f_flag;     // Mount flags
+    unsigned long f_namemax;  // Maximum filename length
+};
+
+int
+statvfs(const char *path, struct statvfs *st)
+{
+    int rc;
+    ULARGE_INTEGER bytesfree_caller;
+    ULARGE_INTEGER totalbytes;
+    ULARGE_INTEGER bytesfree;
+
+    rc = GetDiskFreeSpaceExA(path, &bytesfree_caller, &totalbytes, &bytesfree);
+    if (rc == 0) {
+#define BSIZE_SHIFT 20
+        DWORD bsize = 1U << BSIZE_SHIFT;  // 1 MB
+        uint64_t u_totalbytes = totalbytes.QuadPart;
+        uint64_t u_bytesfree = bytesfree.QuadPart;
+        uint64_t u_bytesfree_caller = bytesfree_caller.QuadPart;
+
+        st->f_bsize = bsize;
+        st->f_frsize = bsize;
+        st->f_blocks = u_totalbytes >> BSIZE_SHIFT;
+        st->f_bfree = u_bytesfree >> BSIZE_SHIFT;
+        st->f_bavail = u_bytesfree_caller >> BSIZE_SHIFT;
+    } else {
+        DWORD csectors, ssize, bfree, blocks, bsize;
+        rc = GetDiskFreeSpace(path, &csectors, &ssize, &bfree, &blocks);
+        bsize = csectors * ssize;
+        st->f_bsize = bsize;
+        st->f_frsize = bsize;
+        st->f_blocks = blocks;
+        st->f_bfree = bfree;
+        st->f_bavail = bfree;
+    }
+    if (rc != 0)
+        return (rc);
+
+    st->f_files = 0;           // inodes in use
+    st->f_ffree = 0;           // free inodes
+    st->f_favail = 0;          // free inodes for users
+    st->f_fsid = 0;            // filesystem Id
+    st->f_flag = 0;            // mount flags
+    st->f_namemax = PATH_MAX;  // maximum filename length
+    return (0);
+}
+#endif
 
 /*
  * atou() converts a numeric string into an integer.
@@ -437,7 +623,8 @@ is_same_path(const char *path1, const char *path2)
     path1 = trim_path(path1, &len1);
     path2 = trim_path(path2, &len2);
 
-    fsprintf("compare '%.*s' %zu with '%.*s' %zu\n", (int)len1, path1, len1, (int)len2, path2, len2);
+    fsprintf("compare '%.*s' %zu with '%.*s' %zu\n",
+             (int)len1, path1, len1, (int)len2, path2, len2);
     if ((len1 == len2) && (strncmp(path1, path2, len1) == 0))
         return (1);
     return (0);
@@ -574,8 +761,12 @@ tx_rb_flushed(void)
 static void
 time_delay_msec(int msec)
 {
+#ifdef __MINGW32__
+    Sleep(msec);
+#else
     if (poll(NULL, 0, msec) < 0)
         warn("poll() failed");
+#endif
 }
 
 /*
@@ -615,6 +806,41 @@ send_ll_bin(const void *buf, size_t len)
  * @param  [in]  fd - Opened file descriptor for serial device.
  * @return       RC_FAILURE - Failed to configure device.
  */
+#ifdef __MINGW32__
+static rc_t
+config_dev(void)
+{
+    COMMTIMEOUTS timeouts;
+    DCB port;
+
+    /* Get the current DCB, and adjust to our liking */
+    memset(&port, 0, sizeof (port));
+    port.DCBlength = sizeof (port);
+    if (GetCommState(dev_handle, &port) == 0)
+        system_error("getting comm state");
+    if (BuildCommDCB("baud=115200 parity=n data=8 stop=1", &port) == 0)
+        system_error("building comm DCB");
+    if (!SetCommState(dev_handle, &port))
+        system_error("adjusting port settings");
+
+    /* Set short timeouts on the COM port */
+    timeouts.ReadIntervalTimeout = 1;
+    timeouts.ReadTotalTimeoutMultiplier = 1;
+    timeouts.ReadTotalTimeoutConstant = 1;
+    timeouts.WriteTotalTimeoutMultiplier = 1;
+    timeouts.WriteTotalTimeoutConstant = 1;
+    if (!SetCommTimeouts(dev_handle, &timeouts))
+        system_error("setting port time-outs.");
+
+    if (!EscapeCommFunction(dev_handle, CLRDTR))
+        system_error("clearing DTR");
+    Sleep(200);
+    if (!EscapeCommFunction(dev_handle, SETDTR))
+        system_error("setting DTR");
+
+    return (RC_SUCCESS);
+}
+#else
 static rc_t
 config_dev(int fd)
 {
@@ -652,14 +878,14 @@ config_dev(int fd)
     }
 
     tty.c_iflag &= IXANY;
-    tty.c_iflag &= (IXON | IXOFF);        // sw flow off
+    tty.c_iflag &= (IXON | IXOFF);            // sw flow off
 
-    tty.c_cflag &= ~CRTSCTS;              // hw flow off
+    tty.c_cflag &= ~CRTSCTS;                  // hw flow off
     tty.c_cflag &= (uint)~CSIZE;              // no bits
-    tty.c_cflag |= CS8;               // 8 bits
+    tty.c_cflag |= CS8;                       // 8 bits
 
     tty.c_cflag &= (uint)~(PARENB | PARODD);  // no parity
-    tty.c_cflag &= (uint)~CSTOPB;         // one stop bit
+    tty.c_cflag &= (uint)~CSTOPB;             // one stop bit
 
     tty.c_iflag  = IGNBRK;                    // raw, no echo
     tty.c_lflag  = 0;
@@ -699,6 +925,7 @@ config_dev(int fd)
     }
     return (RC_SUCCESS);
 }
+#endif
 
 /*
  * reopen_dev() will wait for the serial device to reappear after it has
@@ -707,6 +934,55 @@ config_dev(int fd)
  * @param  [in]  None.
  * @return       None.
  */
+#ifdef __MINGW32__
+static void
+reopen_dev(void)
+{
+    static time_t last_time = 0;
+    time_t        now       = time(NULL);
+    bool_t        printed   = FALSE;
+
+    if (dev_handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(dev_handle);
+        dev_handle = INVALID_HANDLE_VALUE;
+    }
+    if (now - last_time > 5) {
+        printed = TRUE;
+        printf("\n<< Closed %s >>", device_name);
+        fflush(stdout);
+    }
+top:
+    do {
+        if (running == 0)
+            return;
+        time_delay_msec(400);
+        dev_handle = CreateFile(host_device_name,
+                                GENERIC_READ | GENERIC_WRITE,
+                                0,
+                                NULL,
+                                OPEN_EXISTING,
+                                0,
+                                NULL);
+    } while (dev_handle == INVALID_HANDLE_VALUE);
+
+    if (running == 0)
+        return;
+
+    if (config_dev() != RC_SUCCESS) {
+        CloseHandle(dev_handle);
+        dev_handle = INVALID_HANDLE_VALUE;
+        goto top;
+    }
+
+    now = time(NULL);
+    if (now - last_time > 5) {
+        if (printed == FALSE)
+            printf("\n");
+        printf("\r<< Reopened %s >>\n", device_name);
+    }
+    last_time = now;
+}
+#else
 static void
 reopen_dev(void)
 {
@@ -736,10 +1012,12 @@ top:
         if (running == 0)
             return;
         time_delay_msec(400);
-    } while ((temp = open(device_name, oflags | O_RDWR)) == -1);
+    } while ((temp = open(host_device_name, oflags | O_RDWR)) == -1);
 
-    if (config_dev(temp) != RC_SUCCESS)
+    if (config_dev(temp) != RC_SUCCESS) {
+        close(temp);
         goto top;
+    }
 
     /* Hand off the new I/O fd */
     dev_fd = temp;
@@ -752,6 +1030,7 @@ top:
     }
     last_time = now;
 }
+#endif
 
 /*
  * th_serial_reader() is a thread to read from serial port and store it in
@@ -780,17 +1059,22 @@ th_serial_reader(void *arg)
          *     TERM_DEBUG=/dev/pts/4 hostsmash -t
          *     TERM_DEBUG=/tmp/term_debug hostsmash -t -d /dev/ttyACM0
          */
-        log_fp = fopen(log_file, "w");
+        log_fp = fopen(log_file, "wb");
         if (log_fp == NULL)
             warn("Unable to open %s for log", log_file);
         log_hex = (getenv("TERM_DEBUG_HEX") != NULL);
     }
-
     while (running) {
+#ifdef __MINGW32__
+        DWORD len;
+        while (ReadFile(dev_handle, buf, sizeof (buf), &len, NULL))
+#else
         ssize_t len;
-        while ((len = read(dev_fd, buf, sizeof (buf))) >= 0) {
+        while ((len = read(dev_fd, buf, sizeof (buf))) >= 0)
+#endif
+        {
             if (len == 0) {
-#ifdef USE_NON_BLOCKING_TTY
+#if defined(USE_NON_BLOCKING_TTY) || defined(__MINGW32__)
                 /* No input available */
                 time_delay_msec(10);
                 continue;
@@ -876,27 +1160,47 @@ th_serial_writer(void *arg)
             lbuf[pos++] = ch;
         if (((ch < 0) && (pos > 0)) ||
              (pos >= sizeof (lbuf)) || (ic_delay != 0)) {
+#ifdef __MINGW32__
+            DWORD count;
+            if (dev_handle == INVALID_HANDLE_VALUE) {
+                time_delay_msec(500);
+                if (pos >= sizeof (lbuf))
+                    pos--;
+                continue;
+            }
+            if (WriteFile(dev_handle, lbuf, pos, &count, NULL) == 0) {
+                /* Wait for reader thread to close / reopen */
+                time_delay_msec(500);
+                if (pos >= sizeof (lbuf))
+                    pos--;
+                continue;
+            }
+#else
             ssize_t count;
             if (dev_fd == -1) {
                 time_delay_msec(500);
                 if (pos >= sizeof (lbuf))
                     pos--;
                 continue;
-            } else if ((count = write(dev_fd, lbuf, pos)) < 0) {
+            }
+            if ((count = write(dev_fd, lbuf, pos)) < 0) {
                 /* Wait for reader thread to close / reopen */
                 time_delay_msec(500);
                 if (pos >= sizeof (lbuf))
                     pos--;
                 continue;
-            } else if (ic_delay) {
+            }
+#endif
+            if (ic_delay) {
                 /* Inter-character pacing delay was specified */
                 time_delay_msec(ic_delay);
             }
+
 #ifdef DEBUG_TRANSFER
             printf(">%02x\n", lbuf[0]);
 #endif
             if (count < pos) {
-                printf("sent only %zd of %u\n", count, pos);
+                printf("sent only %ld of %u\n", (long) count, pos);
             }
             pos = 0;
         } else if (ch < 0) {
@@ -917,6 +1221,28 @@ th_serial_writer(void *arg)
 static rc_t
 serial_open(bool_t verbose)
 {
+#ifdef __MINGW32__
+    /* Open the COM port */
+    dev_handle = CreateFile(host_device_name,
+                            GENERIC_READ | GENERIC_WRITE,
+                            0,
+                            NULL,
+                            OPEN_EXISTING,
+                            0,
+                            NULL);
+
+    if (dev_handle == INVALID_HANDLE_VALUE) {
+        warnx("Failed to open %s", device_name);
+        system_error("");
+        return (RC_FAILURE);
+    }
+
+    if (config_dev()) {
+        CloseHandle(dev_handle);
+        return (RC_FAILURE);
+    }
+    return (RC_SUCCESS);
+#else
     int oflags = O_NOCTTY;
 
 #ifdef OSX
@@ -924,19 +1250,20 @@ serial_open(bool_t verbose)
 #endif
 
     /* First verify the file exists */
-    dev_fd = open(device_name, oflags | O_RDONLY);
+    dev_fd = open(host_device_name, oflags | O_RDONLY);
     if (dev_fd == -1) {
         warn("Failed to open %s for read", device_name);
         return (RC_FAILURE);
     }
     close(dev_fd);
 
-    dev_fd = open(device_name, oflags | O_RDWR);
+    dev_fd = open(host_device_name, oflags | O_RDWR);
     if (dev_fd == -1) {
         warn("Failed to open %s for write", device_name);
         return (RC_FAILURE);
     }
     return (config_dev(dev_fd));
+#endif
 }
 
 /*
@@ -952,10 +1279,12 @@ serial_open(bool_t verbose)
 static void
 at_exit_func(void)
 {
+#ifndef __MINGW32__
     if (got_terminfo) {
         got_terminfo = 0;
         tcsetattr(0, TCSANOW, &saved_term);
     }
+#endif
 }
 
 /*
@@ -972,6 +1301,7 @@ do_exit(int rc)
     exit(rc);
 }
 
+#ifndef __MINGW32__
 /*
  * sig_exit() will exit on a fatal signal (SIGTERM, etc).
  */
@@ -980,6 +1310,7 @@ sig_exit(int sig)
 {
     do_exit(EXIT_FAILURE);
 }
+#endif
 
 /*
  * create_threads() sets up the communication threads with the programmer.
@@ -1735,7 +2066,7 @@ eeprom_read(const char *filename, uint bank, uint addr, uint len)
     }
     if (rxcount > 0) {
         size_t written;
-        FILE *fp = fopen(filename, "w");
+        FILE *fp = fopen(filename, "wb");
         if (fp == NULL)
             err(EXIT_FAILURE, "Failed to open %s", filename);
         execute_swapmode((uint8_t *)eebuf, rxcount, SWAP_FROM_ROM);
@@ -1777,7 +2108,7 @@ eeprom_write(const char *filename, uint addr, uint len)
     if (filebuf == NULL)
         errx(EXIT_FAILURE, "Could not allocate %u byte buffer", len);
 
-    fp = fopen(filename, "r");
+    fp = fopen(filename, "rb");
     if (fp == NULL)
         errx(EXIT_FAILURE, "Failed to open %s", filename);
     if (fread(filebuf, len, 1, fp) != 1)
@@ -1893,7 +2224,7 @@ eeprom_verify(const char *filename, uint addr, uint len, uint miscompares_max)
     if ((eebuf == NULL) || (filebuf == NULL))
         errx(EXIT_FAILURE, "Could not allocate %u byte buffer", len);
 
-    fp = fopen(filename, "r");
+    fp = fopen(filename, "rb");
     if (fp == NULL)
         errx(EXIT_FAILURE, "Failed to open %s", filename);
     if (fread(filebuf, len, 1, fp) != 1)
@@ -1972,19 +2303,105 @@ eeprom_verify(const char *filename, uint addr, uint len, uint miscompares_max)
 static void
 run_terminal_mode(void)
 {
-    struct termios   term;
+    int              ch         = 0;
     bool_t           literal    = FALSE;
 #ifdef USE_NON_BLOCKING_TTY
     int              enable     = 1;
 #endif
 
+#ifdef __MINGW32__
+    HANDLE ihandle = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD inputtype;
+
+    if (ihandle == INVALID_HANDLE_VALUE) {
+        printf("Bad input handle\n");
+        do_exit(EXIT_FAILURE);
+    }
+    inputtype = GetFileType(ihandle);
+    if (inputtype == FILE_TYPE_CHAR) {
+        /* Set ihandle to raw input */
+        DWORD mode;
+        if (!GetConsoleMode(ihandle, &mode))
+            system_error("getting input mode");
+        mode &= ~ENABLE_PROCESSED_INPUT;
+        mode |= ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT;
+        if (!SetConsoleMode(ihandle, mode))
+            system_error("setting input mode");
+
+        printf("<< Type ^X to exit.  Opened %s >>\n", device_name);
+    }
+
+    while (running) {
+        INPUT_RECORD inbuffer[120];
+        char buffer[256];
+        DWORD cur;
+        DWORD read_count;
+
+        while (tx_rb_space() == 0)
+            time_delay_msec(20);
+
+        if (inputtype == FILE_TYPE_CHAR) {
+            if (PeekConsoleInput(ihandle, inbuffer, 128, &read_count) == 0) {
+                system_error("PeekConsoleInput");
+                running = 0;
+                break;
+            }
+            if (read_count == 0)
+                continue;
+            if (ReadConsoleInput(ihandle, inbuffer, 128, &read_count) == 0) {
+                system_error("ReadConsoleInput");
+                running = 0;
+                break;
+            }
+            for (cur = 0; cur < read_count; cur++) {
+                if (inbuffer[cur].EventType == KEY_EVENT) {
+                    if (inbuffer[cur].Event.KeyEvent.bKeyDown) {
+                        ch = inbuffer[cur].Event.KeyEvent.uChar.AsciiChar;
+                        if (ch == 0)
+                            continue;
+                        if (literal == TRUE) {
+                            literal = FALSE;
+                            tx_rb_put(ch);
+                            ch = 0;
+                            continue;
+                        }
+                        if (ch == 0x16) {        // ^V
+                            literal = TRUE;
+                            ch = 0;
+                            continue;
+                        }
+                        if (ch == 0x18)  // ^X
+                            do_exit(EXIT_SUCCESS);
+                        tx_rb_put(ch);
+                    }
+                }
+                if (ch == 0x18)  // ^X
+                    break;
+            }
+        } else {
+            uint pos;
+            if (ReadFile(ihandle, buffer, sizeof (buffer),
+                         &read_count, NULL) == 0) {
+                system_error("ReadFile");
+            }
+            if (read_count == 0)
+                break;
+            for (pos = 0; pos < read_count; pos++) {
+                ch = buffer[pos];
+                tx_rb_put(ch);
+            }
+        }
+    }
+#else
     if (isatty(fileno(stdin))) {
+        struct termios term;
         if (tcgetattr(0, &saved_term))
             errx(EXIT_FAILURE, "Could not get terminal information");
 
         got_terminfo = 1;
 
         term = saved_term;
+        printf("Need Windows cfmakeraw\n");
         cfmakeraw(&term);
         term.c_oflag |= OPOST;
 #ifdef DEBUG_CTRL_C_KILL
@@ -1995,13 +2412,10 @@ run_terminal_mode(void)
         if (ioctl(fileno(stdin), FIONBIO, &enable))  // Set input non-blocking
             warn("FIONBIO failed for stdin");
 #endif
+        printf("<< Type ^X to exit.  Opened %s >>\n", device_name);
     }
 
-    if (isatty(fileno(stdin)))
-        printf("<< Type ^X to exit.  Opened %s >>\n", device_name);
-
     while (running) {
-        int ch = 0;
         ssize_t len;
 
         while (tx_rb_space() == 0)
@@ -2040,6 +2454,7 @@ run_terminal_mode(void)
         if (ch >= 0)
             tx_rb_put(ch);
     }
+#endif
     printf("not running\n");
     running = 0;
 }
@@ -2203,7 +2618,7 @@ handle_new(const char *name, const char *path, handle_ent_t *parent,
     handle_t handle;
     handle_ent_t *node = malloc(sizeof (*node));
     if (node == NULL) {
-        fsprintf("alloc %ju bytes failed\n", sizeof (*node));
+        fsprintf("alloc %zu bytes failed\n", sizeof (*node));
         return (0);
     }
     memset(node, 0, sizeof (*node));
@@ -2531,25 +2946,27 @@ send_ks_cmd_core(uint cmd, uint len, void *buf)
     crc = crc32r(0, &txlen, 2);
     crc = crc32r(crc, &txcmd, 2);
 #if 0
-if (len > 0) {
-    uint32_t crc1a = crc32s(crc, buf, len & ~1);
-    uint32_t crc1b = crc32s(crc1a, (uint8_t *)buf + len, 1);
-    uint32_t crc1c = crc32s(crc1a, (uint8_t *)buf + len - 1, 1);
-    printf("crc1=%08x crc1a=%08x crc1b=%08x crc1c=%08x last=%02x %02x\n", crc, crc1a, crc1b, crc1c, ((uint8_t *)buf)[len - 1], ((uint8_t *)buf)[len]);
-}
+    if (len > 0) {
+        uint32_t crc1a = crc32s(crc, buf, len & ~1);
+        uint32_t crc1b = crc32s(crc1a, (uint8_t *)buf + len, 1);
+        uint32_t crc1c = crc32s(crc1a, (uint8_t *)buf + len - 1, 1);
+        printf("crc1=%08x crc1a=%08x crc1b=%08x crc1c=%08x last=%02x %02x\n",
+               crc, crc1a, crc1b, crc1c, ((uint8_t *)buf)[len - 1],
+               ((uint8_t *)buf)[len]);
+    }
 #endif
     crc = crc32s(crc, buf, len);
 #if 0
-if (len > 0) {
-    printf("crc2=%08x len=%x buf=", crc, len);
-    uint8_t *bufp = (uint8_t *)buf;
-    if (buf != NULL) {
-    uint cur;
-    for (cur = 0; cur < 16; cur++)
-        printf("%02x ", bufp[cur]);
+    if (len > 0) {
+        printf("crc2=%08x len=%x buf=", crc, len);
+        uint8_t *bufp = (uint8_t *)buf;
+        if (buf != NULL) {
+        uint cur;
+        for (cur = 0; cur < 16; cur++)
+            printf("%02x ", bufp[cur]);
+        }
+        printf("\n");
     }
-    printf("\n");
-}
 #endif
 
     crc = (crc << 16) | (crc >> 16);  // Convert to match Amiga format
@@ -2640,10 +3057,10 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
                 }
                 if (pos - KS_MSG_HEADER_LEN < len) {
                     printf(" [data short by %ld bytes]\n",
-                           len - (pos - KS_MSG_HEADER_LEN));
+                           (long) (len - (pos - KS_MSG_HEADER_LEN)));
                 } else if (pos - KS_MSG_HEADER_LEN < len + 4) {
                     printf(" [CRC short by %ld bytes]\n",
-                           len + 4 - (pos - KS_MSG_HEADER_LEN));
+                           (long) (len + 4 - (pos - KS_MSG_HEADER_LEN)));
                 } else {
                     printf("%08x got CRC???", crc_rx);
                 }
@@ -2939,8 +3356,12 @@ keep_app_state(void)
 time_t
 get_localtime(time_t rawtime)
 {
+#ifdef __MINGW32__
+    return (rawtime);
+#else
     struct tm *ptm = localtime(&rawtime);
     return (rawtime + ptm->tm_gmtoff);
+#endif
 }
 
 /*
@@ -2951,8 +3372,12 @@ get_localtime(time_t rawtime)
 time_t
 get_utctime(time_t rawtime)
 {
+#ifdef __MINGW32__
+    return (rawtime);
+#else
     struct tm *ptm = localtime(&rawtime);
     return (rawtime - ptm->tm_gmtoff);
+#endif
 }
 
 static char *
@@ -3125,6 +3550,14 @@ merge_host_paths(const char *base, const char *append)
         }
     }
     strcpy(pathbuf + len, append);
+
+#ifdef __MINGW32__
+    /* Windows does not like to stat directory paths which end in '/' */
+    char *ptr = pathbuf + strlen(pathbuf) - 1;
+    if (*ptr == '/')
+        *ptr = '\0';
+#endif
+
     return (strdup(pathbuf));
 }
 
@@ -3446,15 +3879,17 @@ st_mode_to_hm_type(uint st_mode)
         case S_IFIFO:
             hm_type = HM_TYPE_FIFO;
             break;
-        case S_IFLNK:
-            hm_type = HM_TYPE_LINK;
-            break;
         case S_IFREG:
             hm_type = HM_TYPE_FILE;
+            break;
+#ifndef __MINGW32__
+        case S_IFLNK:
+            hm_type = HM_TYPE_LINK;
             break;
         case S_IFSOCK:
             hm_type = HM_TYPE_SOCKET;
             break;
+#endif
         default:
             fsprintf("unknown dir type(%x)\n", st_mode & S_IFMT);
             hm_type = HM_TYPE_UNKNOWN;
@@ -4045,11 +4480,13 @@ dir_read_common:
             hm_fdirent_t *hm_dirent = (hm_fdirent_t *)ndata;
             uint maxlen = hm_length - pos;
             char *host_path = NULL;
+            char d_name[256];
+            uint d_type = 0;
 
             if (pos > hm_length)  // Safeguard
                 maxlen = 0;
             if ((sizeof (*hm_dirent) +
-                 sizeof (dp->d_name) + 2 > maxlen) && (pos > 0)) {
+                 sizeof (d_name) + 2 > maxlen) && (pos > 0)) {
                 /*
                  * Next entry might not fit, so stop here.
                  *
@@ -4080,11 +4517,11 @@ dir_read_common:
                     dp = NULL;
                 } else {
                     dp = &ldp;
-                    dp->d_type = DT_DIR;
-                    strcpy(dp->d_name, vol->av_volume);
+                    d_type = DT_DIR;
+                    strcpy(d_name, vol->av_volume);
                     if (handle->he_mode & HM_MODE_DIR) {
                         if (handle->he_entnum == 0) {
-                            strcpy(dp->d_name, "Volume Directory");
+                            strcpy(d_name, "Volume Directory");
                         } else {
                             dp = NULL;
                         }
@@ -4121,9 +4558,9 @@ dir_read_common:
                                 break;
                     }
                     dp = &ldp;
-                    dp->d_type = DT_REG;
+                    d_type = DT_REG;
                     dp->d_ino = 0;
-                    strcpy(dp->d_name, sname);
+                    strcpy(d_name, sname);
                 }
             } else {
                 uint skip = 0;
@@ -4131,9 +4568,17 @@ dir_read_common:
                     dp = readdir(handle->he_dir);
                     skip = 0;
                     if (dp != NULL) {
+                        char *end;
+                        strcpy(d_name, dp->d_name);
+#ifdef __MINGW32__
+                        d_type = DT_UNKNOWN;
+#else
+                        d_type = dp->d_type;
+#endif
+
                         /* Skip .uaem files */
-                        char *end = dp->d_name + strlen(dp->d_name);
-                        if (((end - dp->d_name) >= 6) &&
+                        end = d_name + strlen(d_name);
+                        if (((end - d_name) >= 6) &&
                             (strcmp(end - 5, ".uaem") == 0)) {
                             skip = 1;
                         }
@@ -4141,7 +4586,7 @@ dir_read_common:
 #define IS_DOT(x)     (((x)[0] == '.') && ((x)[1] == '\0'))
 #define IS_DOT_DOT(x) (((x)[0] == '.') && ((x)[1] == '.') && ((x)[2] == '\0'))
                         /* Skip . and .. files */
-                        if (IS_DOT(dp->d_name) || IS_DOT_DOT(dp->d_name)) {
+                        if (IS_DOT(d_name) || IS_DOT_DOT(d_name)) {
                             skip = 1;
                         }
                     }
@@ -4152,8 +4597,8 @@ dir_read_common:
                 rc = KM_STATUS_EOF;  // end of directory
                 break;
             }
-            strcpy(pathbuf + pathlen, dp->d_name);
-            switch (dp->d_type) {
+            strcpy(pathbuf + pathlen, d_name);
+            switch (d_type) {
                 default:
                 case DT_UNKNOWN:
                     hmd_type = HM_TYPE_UNKNOWN;
@@ -4234,7 +4679,7 @@ dir_read_common:
                 host_path = make_host_path(avol, handle->he_name);
                 if ((handle->he_mode & HM_MODE_DIR) == 0) {
                     char *temp_path = host_path;
-                    host_path = merge_host_paths(temp_path, dp->d_name);
+                    host_path = merge_host_paths(temp_path, d_name);
                     free(temp_path);
                 }
 
@@ -4281,13 +4726,23 @@ dir_read_common:
                     hm_dirent->hmd_atime = SWAP32(time_a);
                     hm_dirent->hmd_ctime = SWAP32(time_c);
                     hm_dirent->hmd_mtime = SWAP32(time_m);
+#ifdef __MINGW32__
+                    uint blksize = 1 << 20;
+                    hm_dirent->hmd_blksize = SWAP32(blksize);
+                    hm_dirent->hmd_blks = SWAP32(st.st_size / blksize);
+#else
                     hm_dirent->hmd_blksize = SWAP32(st.st_blksize);
                     hm_dirent->hmd_blks = SWAP32(st.st_blocks);
+#endif
                     hm_dirent->hmd_ouid = SWAP32(st.st_uid);
                     hm_dirent->hmd_ogid = SWAP32(st.st_gid);
                     hm_dirent->hmd_mode = SWAP32(st.st_mode);
 
+#ifdef __MINGW32__
+                    size_hi = ((uint64_t) st.st_size) >> 32;
+#else
                     size_hi = st.st_size >> 32;
+#endif
                     size_lo = (uint32_t) st.st_size;
                     hmd_type = st_mode_to_hm_type(st.st_mode);
                     amiga_perms = amiga_perms_from_host(st.st_mode);
@@ -4308,8 +4763,8 @@ dir_read_common:
             hm_dirent->hmd_rsvd[1] = 0;
 
             nptr = (char *) (hm_dirent + 1);
-            nlen = strlen(dp->d_name) + 1;  // Include NIL
-            memcpy(nptr, dp->d_name, nlen);
+            nlen = strlen(d_name) + 1;  // Include NIL
+            memcpy(nptr, d_name, nlen);
             if (hmd_type == HM_TYPE_LINK) {
                 char  lbuf[PATH_MAX];
                 char *path;
@@ -4344,7 +4799,7 @@ dir_read_common:
             /* Regular file */
             if (hm_flag & HM_FLAG_SEEK0) {
                 hm_flag &= ~HM_FLAG_SEEK0;
-                (void) lseek(handle->he_fd, 0, SEEK_SET);
+                (void) lseek64(handle->he_fd, 0, SEEK_SET);
             }
 
             rc = read(handle->he_fd, ndata, len);
@@ -4470,7 +4925,7 @@ reply_write_fail:
         if (rc == RC_SUCCESS) {
             if (hm_flag & HM_FLAG_SEEK0) {
                 hm_flag &= ~HM_FLAG_SEEK0;
-                (void) lseek(handle->he_fd, 0, SEEK_SET);
+                (void) lseek64(handle->he_fd, 0, SEEK_SET);
             }
             rc = write(handle->he_fd, rdata, hm_length);
         }
@@ -4520,9 +4975,9 @@ sm_fseek(hm_fseek_t *hm, uint *status)
         uint32_t hi = SWAP32(hm->hm_off_hi);
         uint32_t lo = SWAP32(hm->hm_off_lo);
         int seek_mode = hm->hm_seek;
-        off_t oldpos;
-        off_t offset = ((uint64_t) hi << 32) | lo;
-        off_t newpos;
+        off64_t oldpos;
+        off64_t offset = ((uint64_t) hi << 32) | lo;
+        off64_t newpos;
         int whence;
 
         switch (seek_mode) {
@@ -4541,12 +4996,12 @@ sm_fseek(hm_fseek_t *hm, uint *status)
                 break;
         }
 
-        oldpos = lseek(handle->he_fd, 0, SEEK_CUR);
-        newpos = lseek(handle->he_fd, offset, whence);
+        oldpos = lseek64(handle->he_fd, 0, SEEK_CUR);
+        newpos = lseek64(handle->he_fd, offset, whence);
         if (newpos < 0) {
             /* Seek failed */
-            fsprintf("Seek %x to %jd failed\n",
-                     hm->hm_handle, (intmax_t)offset);
+            fsprintf("Seek %x to %jd (%u) failed\n",
+                     hm->hm_handle, (intmax_t)offset, whence);
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
         } else {
             hi = newpos >> 32;
@@ -4612,10 +5067,16 @@ reply_create_fail:
         case HM_TYPE_FILE:   // Regular file
             ftype = S_IFREG;
 create_node:
+#ifdef __MINGW32__
+            (void) ftype;
+            (void) dev;
+            printf("mknod() not supported in Windows\n");
+#else
             if (mknod(host_path, ftype | umode, dev)) {
                 hm->hm_hdr.km_status = errno_to_km_status();
                 goto reply_create_fail;
             }
+#endif
             break;
         case HM_TYPE_DIR:    // Directory
             if (mkdir(host_path, umode)) {
@@ -4666,9 +5127,11 @@ create_node:
         case HM_TYPE_FIFO:   // FIFO
             ftype = S_IFIFO;
             goto create_node;
+#ifndef __MINGW32__
         case HM_TYPE_SOCKET: // Socket
             ftype = S_IFSOCK;
             goto create_node;
+#endif
         case HM_TYPE_WHTOUT: // Whiteout entry
         case HM_TYPE_VOLUME: // Disk volume
         case HM_TYPE_VOLDIR: // Volume directory
@@ -4738,9 +5201,11 @@ reply_delete_fail:
         case S_IFBLK:   // Block device
         case S_IFCHR:   // Character device
         case S_IFIFO:   // FIFO (Pipe)
-        case S_IFLNK:   // Symlink
         case S_IFREG:   // Regular file
+#ifndef __MINGW32__
+        case S_IFLNK:   // Symlink
         case S_IFSOCK:  // Socket
+#endif
             /* Use unlink() */
             if (unlink(host_path)) {
                 fsprintf("unlink(%s) failed: %d\n", host_path, errno);
@@ -4883,9 +5348,8 @@ sm_fsetdate(hm_fsetdate_t *hm, uint *status)
     uint8_t       which   = hm->hm_which;
     uint32_t      sec     = SWAP32(hm->hm_time);
     uint32_t      nsec    = SWAP32(hm->hm_time_ns);
-    uint32_t      utcsec  = get_utctime(sec);;
+    uint32_t      utcsec  = get_utctime(sec);
     struct stat   statbuf;
-    struct timespec times[2];
 
     fsprintf("fsetdate(%s %u %u.%u)\n", name, which, utcsec, nsec);
     hm->hm_hdr.km_op |= KM_OP_REPLY;
@@ -4924,6 +5388,46 @@ reply_setdate_fail:
         goto reply_setdate_fail;
     }
 
+#ifdef __MINGW32__
+    struct _utimbuf times;
+    times.actime  = statbuf.st_atime;  // last access time
+    times.modtime = statbuf.st_mtime;  // last modification time
+
+    switch (which) {
+        case 0: // Set the modify date/time
+            times.modtime = (((uint64_t) utcsec) << 32) | nsec;
+            break;
+        case 1: // Get the modify date/time
+            hm->hm_time    = SWAP32((uint32_t) (statbuf.st_ctime >> 32));
+            hm->hm_time_ns = SWAP32((uint32_t) statbuf.st_ctime);
+            goto reply_setdate_good;
+        case 2: // Set the change date/time
+            /* Not sure how to set this one */
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
+            goto reply_setdate_fail;
+        case 3: // Get the change date/time
+            hm->hm_time    = SWAP32((uint32_t) (statbuf.st_ctime >> 32));
+            hm->hm_time_ns = SWAP32((uint32_t) statbuf.st_ctime);
+            goto reply_setdate_good;
+        case 4: // Set the access date/time
+            times.actime = (((uint64_t) utcsec) << 32) | nsec;
+            break;
+        case 5: // Get the access date/time
+            hm->hm_time    = SWAP32((uint32_t) (statbuf.st_atime >> 32));
+            hm->hm_time_ns = SWAP32((uint32_t) statbuf.st_atime);
+            goto reply_setdate_good;
+        default:
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
+            goto reply_setdate_fail;
+    }
+
+    if (_utime(path, &times)) {
+        fsprintf("utimesat fail: %d\n", errno);
+        hm->hm_hdr.km_status = errno_to_km_status();
+        goto reply_setdate_fail;
+    }
+#else
+    struct timespec times[2];
     times[0] = statbuf.st_atim;  // last access time
     times[1] = statbuf.st_ctim;  // last modification time
 
@@ -4961,6 +5465,7 @@ reply_setdate_fail:
         hm->hm_hdr.km_status = errno_to_km_status();
         goto reply_setdate_fail;
     }
+#endif
 
 reply_setdate_good:
     free(apath);
@@ -5012,11 +5517,16 @@ reply_setown_fail:
         goto reply_setown_fail;
     }
 
+#ifdef __MINGW32__
+    hm->hm_hdr.km_status = KM_STATUS_PERM;
+    goto reply_setown_fail;
+#else
     if (chown(path, oid, gid)) {
         fsprintf("chown fail: %d\n", errno);
         hm->hm_hdr.km_status = errno_to_km_status();
         goto reply_setown_fail;
     }
+#endif
 
     free(apath);
     free(path);
@@ -5418,6 +5928,7 @@ main(int argc, char * const *argv)
     uint             report_max = 64;
     char            *filename   = NULL;
     uint             mode       = MODE_UNKNOWN;
+#ifndef __MINGW32__
     struct sigaction sa;
 
     memset(&sa, 0, sizeof (sa));
@@ -5426,6 +5937,7 @@ main(int argc, char * const *argv)
     (void) sigaction(SIGINT,  &sa, NULL);
     (void) sigaction(SIGQUIT, &sa, NULL);
     (void) sigaction(SIGPIPE, &sa, NULL);
+#endif
 
     device_name[0] = '\0';
 
@@ -5593,6 +6105,13 @@ errx(EXIT_FAILURE, "how did we get here?");
     }
     if (len == 0)
         errx(EXIT_USAGE, "Invalid length 0x%x", len);
+
+#ifdef __MINGW32__
+    host_device_name = malloc(strlen(device_name) + 16);
+    if (host_device_name == NULL)
+        err(EXIT_FAILURE, "malloc failed");
+    sprintf(host_device_name, "\\\\.\\%s", device_name);
+#endif
 
     atexit(at_exit_func);
 

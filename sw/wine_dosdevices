@@ -1,0 +1,38 @@
+#!/bin/sh
+#
+# To set up Wine COM1, COM2, etc to target /dev/ttyACM devices:
+#
+
+DOSDEVS=$HOME/.wine/dosdevices
+mkdir -p $DOSDEVS
+DEVCOUNT=0
+for DEV in /dev/ttyACM*; do
+    if [ -e $DEV ]; then
+        LOC=`ls -l $DOSDEVS/ | grep -w $DEV | awk '{print $9}'`
+        if [ -z "$LOC" ]; then
+            COMPATH=
+            for NUM in {1..99}; do
+                if [ ! -h $DOSDEVS/com$NUM ]; then
+                    COMPATH=$DOSDEVS/com$NUM
+                    LOC=com$NUM
+                    break
+                fi
+            done
+            if [ -z "$COMPATH" ]; then
+                echo "Could not find unused COM slot in $DOSDEVS for $DEV"
+                exit 1
+            fi
+            ln -s $DEV $COMPATH
+            echo $LOC $DEV "(new)"
+        else
+            for L in $LOC; do
+                echo $L $DEV
+            done
+        fi
+        ((DEVCOUNT++))
+    fi
+done
+
+if [ $DEVCOUNT == 0 ]; then
+    echo "No /dev/ttyUSB or /dev/ttyACM devices present in system"
+fi
