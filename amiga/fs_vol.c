@@ -13,8 +13,10 @@
 #include <exec/nodes.h>
 #include <exec/libraries.h>
 
-#include <devices/timer.h>
+#include <inline/dos.h>
+#include <inline/exec.h>
 
+#include <devices/timer.h>
 #include <libraries/dos.h>
 #include <libraries/dosextens.h>
 #include <libraries/filehandler.h>
@@ -26,6 +28,7 @@
 
 #define ID_SMASHFS_DISK (0x536d4653L)  /* 'SmFS' filesystem */
 
+extern struct ExecBase *SysBase;
 extern struct DosLibrary *DOSBase;
 
 static vollist_t *vollist = NULL;
@@ -366,7 +369,8 @@ volume_flush(void)
                     vollist = next;
                 else
                     prev->vl_next = next;
-                sm_fclose(cur->vl_handle);
+                if (sm_fservice())
+                    sm_fclose(cur->vl_handle);
                 volume_msg_masks &= ~BIT(cur->vl_msgport->mp_SigBit);
                 DeletePort(cur->vl_msgport);
 

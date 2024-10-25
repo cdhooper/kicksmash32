@@ -24,7 +24,7 @@
 #define BTOC(x) ((void *)(((unsigned long) x)<<2))
 #endif
 
-uint8_t grunning;        // 1=running, 0=stopping
-uint8_t gvolumes_inuse;  // 0=no volumes
+extern uint8_t grunning;        // 1=running, 0=stopping
+extern uint8_t gvolumes_inuse;  // 0=no volumes
 
 #endif /* _FS_HAND_H */

@@ -251,6 +251,7 @@ uint8_t
 CDC_Transmit_FS(uint8_t *buf, uint len)
 {
 #ifndef DEBUG_NO_USB
+    static uint usb_drops = 0;
     uint tlen = USB_MAX_EP2_SIZE;  // 64 bytes
     uint64_t timeout = 0;
 
@@ -333,6 +334,8 @@ transmit_success:
                     goto transmit_success;
                 usb_drop_packets++;
                 usb_drop_bytes += tlen;
+                if (usb_drops++ > 4)
+                    usb_console_active = false;
                 return (-1);  // Timeout
             }
             continue;
@@ -341,6 +344,7 @@ transmit_success:
             len -= count;
             buf += count;
             timeout = timer_tick_plus_msec(50);
+            usb_drops = 0;
         }
     }
 #endif

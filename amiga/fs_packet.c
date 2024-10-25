@@ -1557,7 +1557,7 @@ handle_packet(void)
         case ACTION_EXAMINE_ALL_END:
         case ACTION_SERIALIZE_DISK:
         default:
-            printf("UNKNOWN %d\n", gpack->dp_Type);
+            printf("UNKNOWN %ld\n", gpack->dp_Type);
             res1 = DOSFALSE;
             gpack->dp_Res2 = ERROR_ACTION_NOT_KNOWN;
             break;

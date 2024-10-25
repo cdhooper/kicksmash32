@@ -4,8 +4,10 @@
 
 SMASH_PROG   := smash
 FS_PROG      := smashfs
+FSROM_PROG   := smashfsrom
 FTP_PROG     := smashftp
 OBJDIR       := objs
+ROM_OBJDIR   := objs.rom
 SMASH_SRCS   := smash.c crc32.c sm_msg.c cpu_control.c
 SMASH_HDRS   := smash_cmd.h host_cmd.h crc32.h cpu_control.h sm_msg.h sm_file.h
 SMASH_OBJS   := $(SMASH_SRCS:%.c=$(OBJDIR)/%.o)
@@ -17,17 +19,31 @@ FTP_SRCS     := smashftp.c smashftp_cli.c crc32.c sm_msg.c cpu_control.c \
 		readline.c sm_file.c
 FTP_HDRS     := smashftp.h smashftp_cli.h readline.h
 FTP_OBJS     := $(FTP_SRCS:%.c=$(OBJDIR)/%.o)
+FSROM_ASRCS    :=
+#FSROM_ASRCS    := fs_rom_asm.S
+FSROM_AOBJS    := $(FSROM_ASRCS:%.S=$(ROM_OBJDIR)/%.o)
+FSROM_CSRCS    := fs_rom.c $(FS_SRCS) fs_rom_end.c
+FSROM_COBJS    := $(FSROM_CSRCS:%.c=$(ROM_OBJDIR)/%.o)
+FSROM_OBJS     := $(FSROM_AOBJS) $(FSROM_COBJS)
 
 CC      := m68k-amigaos-gcc
-CFLAGS  := -Wall -Wextra -Wno-pointer-sign -fomit-frame-pointer
-CFLAGS  += -Wno-strict-aliasing -Wno-sign-compare
-LDFLAGS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -mcrt=clib2 -lgcc -lc -lamiga
-#LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -nostdlib -lgcc -lamiga -ldebug -lc
-LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lgcc -lamiga -ldebug -lc -noixemul
+STRIP   := m68k-amigaos-strip
+CFLAGS  := -Wall -Wextra -Wno-pointer-sign -Wno-format -Wno-strict-aliasing
+CFLAGS  += -Wno-sign-compare -fomit-frame-pointer
+SMASH_LDFLAGS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -mcrt=clib2 -lgcc -lc -lamiga
+#LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -nostdlib -lgcc -lamiga -lc
+LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lgcc -lamiga -lc -noixemul
 LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -mcrt=clib2 -lgcc -lc -lamiga
+
 # The below makes smashftp huge
 #LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lgcc -lc -lamiga -noixemul
+
+#LDFLAGS_FSROM = -Xlinker -Map=$(ROM_OBJDIR)/$@.map -Wa,-a > $(ROM_OBJDIR)/$@.lst -nostartfiles -nostdlib -lgcc -lc -lamiga -Xlinker -v -Xlinker --verbose -Tfs_rom.ld -noixemul -fbaserel
+LDFLAGS_FSROM = -Xlinker -Map=$(ROM_OBJDIR)/$@.map -Wa,-a > $(ROM_OBJDIR)/$@.lst -nostartfiles -nostdlib -lgcc -lc -lamiga -Xlinker -v -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
 PROGVER := $(SMASH_PROG)_$(shell awk '/char[[:space:]]*\*version =/{print $$7}' smash.c)
+
+NDK_PATH := /opt/amiga/m68k-amigaos/ndk-include
+VASM     := vasmm68k_mot
 
 CFLAGS  += -Os
 QUIET   := @
@@ -58,10 +74,10 @@ QUIET   :=
 endif
 
 ifeq (, $(shell which $(CC) 2>/dev/null ))
-$(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga/bin")
+$(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga13/bin")
 endif
 
-all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG)
+all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG)
 
 gdb:
 	m68k-amigaos-gdb $(SMASH_PROG)
@@ -72,32 +88,48 @@ define DEPEND_SRC
 $(patsubst %,$(OBJDIR)/%,$(filter-out $(OBJDIR)/%,$(basename $(1)).o)) $(filter $(OBJDIR)/%,$(basename $(1)).o): $(1)
 endef
 $(foreach SRCFILE,$(SMASH_SRCS) $(FS_SRCS) $(FTP_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE))))
+define DEPEND_ROMSRC
+$(patsubst %,$(ROM_OBJDIR)/%,$(filter-out $(ROM_OBJDIR)/%,$(basename $(1)).o)) $(filter $(ROM_OBJDIR)/%,$(basename $(1)).o): $(1)
+endef
+$(foreach SRCFILE,$(FSROM_ASRCS) $(FSROM_CSRCS),$(eval $(call DEPEND_ROMSRC,$(SRCFILE))))
 
-OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS))
+OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_COBJS))
+
+$(FSROM_COBJS):: CFLAGS += -fbaserel
+$(FSROM_COBJS): | $(ROM_OBJDIR)
 
 $(OBJS): Makefile $(SMASH_HDRS) | $(OBJDIR)
 	@echo Building $@
 	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -o $@
+
+$(FSROM_AOBJS): Makefile $(SMASH_HDRS) | $(ROM_OBJDIR)
+	@echo Building $@
+	$(QUIET)$(VASM) -quiet -m68020 -Fhunk $(filter %.S,$^) -I $(OBJDIR) -I $(NDK_PATH) $(ROMDRIVER) -o $@
 
 $(FS_OBJS): $(FS_HDRS)
 $(FTP_OBJS): $(FTP_HDRS)
 
 $(SMASH_PROG): $(SMASH_OBJS)
 $(FTP_PROG): $(FTP_OBJS)
+$(FSROM_PROG): $(FSROM_OBJS) fs_rom.ld
 
 $(SMASH_PROG):
 	@echo Building $@
-	$(QUIET)$(CC) $^ $(LDFLAGS) -o $@
+	$(QUIET)$(CC) $^ $(SMASH_LDFLAGS) -o $@
 
 $(FTP_PROG):
 	@echo Building $@
 	$(QUIET)$(CC) $^ $(LDFLAGS_FTP) -o $@
 
+$(FSROM_PROG):
+	@echo Building $@
+	$(QUIET)$(CC) $(filter %.o,$^) $(LDFLAGS_FSROM) -o $@
+
 $(FS_PROG): $(FS_OBJS)
 	@echo Building $@
 	$(QUIET)$(CC) $(FS_OBJS) $(LDFLAGS_FS) -o $@
 
-$(OBJDIR):
+$(OBJDIR) $(ROM_OBJDIR):
 	mkdir -p $@
 
 zip:
@@ -117,7 +149,7 @@ lha:
 	$(QUIET)rm -rf $(PROGVER)
 
 clean:
-	rm -f $(OBJS) $(OBJDIR)/*.map $(OBJDIR)/*.lst
+	rm -f $(OBJS) $(OBJDIR)/*.map $(OBJDIR)/*.lst $(ROM_OBJDIR)/*.map $(ROM_OBJDIR)/*.lst
 
 FLINT_FILE=flexelint.lnt
 flint:

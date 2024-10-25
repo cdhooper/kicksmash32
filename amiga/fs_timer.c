@@ -1,23 +1,11 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <ctype.h>
-#include <string.h>
-#include <clib/dos_protos.h>
 #include <clib/exec_protos.h>
 #include <clib/alib_protos.h>
-#include <fcntl.h>
-#include <exec/execbase.h>
-#include <exec/memory.h>
-#include <exec/types.h>
-#include <exec/ports.h>
-#include <exec/nodes.h>
-#include <exec/libraries.h>
-
 #include <devices/timer.h>
 
-#include <libraries/dos.h>
-#include <libraries/dosextens.h>
-#include <libraries/filehandler.h>
+#include <inline/exec.h>
+#include <inline/dos.h>
+extern struct ExecBase *SysBase;
+
 #include "printf.h"
 #include "fs_hand.h"
 #include "fs_timer.h"
@@ -54,6 +42,7 @@ void
 timer_open(void)
 {
     int rc;
+
     if (timerport != NULL) {
         printf("Attempted to re-open timer\n");
         return;

@@ -33,13 +33,13 @@
 const char *version = "\0$VER: smashfs 0.1 ("__DATE__") � Chris Hooper";
 
 BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
-void __chkabort(void) { }             // Disable gcc libnix ^C break handling
 
-struct ExecBase *SysBase;
-struct DosLibrary *DOSBase;
+extern struct ExecBase *SysBase;
+extern struct DosLibrary *DOSBase;
 
-uint flag_debug = 0;
-uint flag_output = 1;
+uint    flag_debug = 0;
+uint8_t flag_output = 1;
+uint8_t sm_file_active = 0;
 uint8_t grunning = 0;
 uint8_t gvolumes_inuse = 0;
 static uint runtime_max = 0;
@@ -60,6 +60,11 @@ refresh_volume_list(void)
     uint8_t       *data;
     char          *dname;
     hm_fdirent_t  *dent;
+
+    if (sm_fservice() == 0) {
+        volume_flush();
+        return;  // file service is not active
+    }
 
     rc = sm_fopen(phandle, "::", HM_MODE_READ, &type, 0, &handle);
     if (handle == 0) {
@@ -99,7 +104,7 @@ gvl_fail:
     volume_flush();
 }
 
-static void
+void
 handle_messages(void)
 {
     ULONG waitmask = volume_msg_masks | timer_msg_mask | SIGBREAKF_CTRL_C;
@@ -127,6 +132,8 @@ handle_messages(void)
                                                             LDF_WRITE);
                     if (dl != NULL) {
                         refresh_volume_list();
+                        waitmask = volume_msg_masks | timer_msg_mask |
+                                   SIGBREAKF_CTRL_C;
                         UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
                         do_refresh = 0;
                     } else {
@@ -155,35 +162,30 @@ handle_messages(void)
         if (mask & volume_msg_masks)
             volume_message(mask & volume_msg_masks);
 
-        if (mask & SIGBREAKF_CTRL_C)
+        if (mask & SIGBREAKF_CTRL_C) {
+            printf("Signal exit\n");
             grunning = 0;
+        }
     }
 }
 
-#if 0
-void
-start(register struct DosPacket *start_pkt asm("%a0"))
-{
-    printf("startup %x %x\n", start_pkt->dp_Arg1, start_pkt->dp_Arg2);
-}
-
-#if 0
-void
-_exit(int arg)
-{
-    (void) arg;
-}
-#endif
-#endif
+void __chkabort(void) { }             // Disable gcc libnix ^C break handling
 
 int
 main(int argc, char *argv[])
 {
     int arg;
     int rc = 0;
-    uint output_flag = 0;
+    uint8_t output_flag = 0;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds="
     SysBase = *(struct ExecBase **)4;
+#pragma GCC diagnostic pop
     DOSBase = (struct DosLibrary *)OpenLibrary(DOSNAME, 0);
+    if (DOSBase == NULL) {
+        printf("Failed to open %s\n", DOSNAME);
+        return (1);
+    }
 
     for (arg = 1; arg < argc; arg++) {
         const char *ptr = argv[arg];

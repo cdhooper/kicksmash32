@@ -24,7 +24,7 @@
 unsigned int irq_disabled = 0;
 unsigned int cpu_type = 0;
 
-struct ExecBase *SysBase;
+extern struct ExecBase *SysBase;
 
 static uint
 cia_ticks(void)
@@ -155,7 +155,10 @@ void
 cpu_control_init(void)
 {
 #ifndef _DCC
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds="
     SysBase = *(struct ExecBase **)4UL;
+#pragma GCC diagnostic pop
 #endif
 
     cpu_type = get_cpu();

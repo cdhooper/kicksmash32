@@ -68,6 +68,7 @@ static char *cwd = NULL;
 static handle_t cwd_handle = 0xffffffff;
 BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
 uint flag_debug = 0;
+uint8_t sm_file_active = 0;
 
 static const char cmd_get_help[] =
 "Usage:\n"
@@ -2648,9 +2649,13 @@ main(int argc, char *argv[])
     char *cmdbuf;
 
     cwd = strdup("");
-#ifndef _DCC
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds="
     SysBase = *(struct ExecBase **)4UL;
-#endif
+#pragma GCC diagnostic pop
+
+
     cpu_control_init();  // cpu_type, SysBase
 
     cmdbuf = cmd_string_from_argv(argc - 1, argv + 1);

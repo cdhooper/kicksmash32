@@ -1354,6 +1354,10 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 expire_update_amiga_app = timer_tick_plus_msec(expire);
 //printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
             }
+            if (timer_tick_has_elapsed(expire_update_amiga_app))
+                state_amiga_app = 0;
+            if (timer_tick_has_elapsed(expire_update_usb_app))
+                state_usb_app = 0;
             reply[0] = SWAP16(state_amiga_app);
             reply[1] = SWAP16(state_usb_app);
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);

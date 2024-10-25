@@ -46,8 +46,6 @@
 #include "printf.h"
 
 #define USE_SERIAL_OUTPUT
-#include <clib/debug_protos.h>
-#include <clib/dos_protos.h>
 
 #include <string.h>
 #include <stdarg.h>
@@ -76,6 +74,14 @@
 #undef printf
 #endif
 
+#include <exec/types.h>
+#include <inline/exec.h>
+#include <inline/dos.h>
+extern struct ExecBase *SysBase;
+extern struct DosLibrary *DOSBase;
+
+#define RawPutChar(___c) \
+        LP1NR(0x204, RawPutChar , UBYTE, ___c, d0, , SysBase)
 
 /* Output buffer structure */
 typedef struct {
@@ -83,7 +89,7 @@ typedef struct {
     char *buf_end;
 } buf_t;
 
-extern uint flag_output;
+extern uint8_t flag_output;
 
 int
 putchar(int ch)
@@ -92,7 +98,7 @@ putchar(int ch)
     if (flag_output == 1) {
         FPutC(Output(), ch);
     } else if (flag_output) {
-        KPutChar(ch);
+        RawPutChar(ch);
     }
 #endif
     return (ch);
@@ -106,8 +112,11 @@ puts(const char *str)
         PutStr(str);
         FPutC(Output(), '\n');
     } else if (flag_output) {
-        KPutS(str);
-        KPutChar('\n');
+        while (*str != '\0') {
+            RawPutChar(*str);
+            str++;
+        }
+        RawPutChar('\n');
     }
 #else
     (void) str;

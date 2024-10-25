@@ -1994,6 +1994,82 @@ eeprom_erase(uint bank, uint addr, uint len)
     return (0);
 }
 
+static int
+eeprom_not_erased(uint bank, uint addr, uint len)
+{
+    int  pos = 0;
+    int  spos;
+    int  rxcount;
+    char cmd_output[1024];
+    char cmd[64];
+    uint complen = len;
+    uint curpos;
+    uint value;
+    uint paddr;
+
+    if (len > 0x8000)
+        printf("Verifying EEPROM area has been erased\n");
+    if (bank != BANK_NOT_SPECIFIED) {
+        if (addr == ADDR_NOT_SPECIFIED)
+            addr = 0;
+        addr += bank * len;
+    }
+
+    /* Manually check the first 32 bytes */
+    if (complen > 0x20)
+        complen = 0x20;
+    sprintf(cmd, "dr prom %x %x", addr, complen);
+    if (send_cmd(cmd))
+        return (-1);  // send_cmd() reported "timeout" in this case
+    if (recv_output(cmd_output, sizeof (cmd_output), &rxcount, 80))
+        return (-1); // "timeout" was reported in this case
+
+    for (curpos = 0; curpos < (complen + 3) / 4; curpos++) {
+        if ((sscanf(cmd_output + pos, "%x%n", &value, &spos) != 1) ||
+            (spos == 0)) {
+            printf("scan failed at %s\n", cmd_output + pos);
+            return (-1);
+        }
+        if (spos == 0) {
+            return (-1);
+        }
+        if (value != 0xffffffff)
+            return (1);  // Value not erased
+        pos += spos;
+    }
+
+    paddr = addr;
+    addr += complen;
+    len  -= complen;
+    if (len == 0)
+        return (0);  // All data checked
+
+    /* First 32 bytes passed. Now scale up to compare remainder. */
+    while (len > 0) {
+        if (complen > len)
+            complen = len;
+
+        sprintf(cmd, "comp prom %x prom %x %x", paddr, addr, complen);
+        if (send_cmd(cmd))
+            return (-1);  // send_cmd() reported "timeout" in this case
+        if (recv_output(cmd_output, sizeof (cmd_output), &rxcount,
+                        complen / 256)) {
+            return (-1); // "timeout" was reported in this case
+        }
+
+        if (strstr(cmd_output, "mismatch") != NULL)
+            return (1);  // found mismatch
+
+        paddr = addr;
+        addr += complen;
+        len -= complen;
+        complen *= 2;
+    }
+    /* Completely erased */
+    return (0);
+}
+
+
 /*
  * eeprom_id() sends a command to the programmer to request the EEPROM id.
  *             Response output is displayed for the user.
@@ -2293,8 +2369,43 @@ eeprom_verify(const char *filename, uint addr, uint len, uint miscompares_max)
 }
 
 /*
- * run_terminatl_mode() implements a terminal interface with the programmer's
- *                      command line.
+ * amiga_is_in_reset
+ * -----------------
+ * Returns 1 if the Amiga is in reset.
+ * Returns 0 if the Amiga is not in reset.
+ * Returns -1 if there was an error communicating with Kicksmash.
+ */
+static int
+amiga_is_in_reset(void)
+{
+    char cmd_output[100];
+    int  rxcount;
+    if (send_cmd("prom id"))
+        return (-1); // "timeout" was reported in this case
+    if (recv_output(cmd_output, sizeof (cmd_output), &rxcount, 80))
+        return (-1); // "timeout" was reported in this case
+    if (rxcount == 0) {
+        printf("Receive timeout\n");
+        return (-1);
+    }
+    if (strstr(cmd_output, "not in reset") != NULL)
+        return (0);
+    return (1);
+}
+
+static int
+reset_amiga(int hold)
+{
+    const char *cmd = hold ? "reset amiga hold" : "reset amiga";
+
+    if (send_cmd(cmd))
+        return (1);
+    return (0);
+}
+
+/*
+ * run_terminal_mode() implements a terminal interface with the programmer's
+ *                     command line.
  *
  * @param  [in]  None.
  * @global [in]  device_name[] is the path to the device which was opened.
@@ -2401,7 +2512,6 @@ run_terminal_mode(void)
         got_terminfo = 1;
 
         term = saved_term;
-        printf("Need Windows cfmakeraw\n");
         cfmakeraw(&term);
         term.c_oflag |= OPOST;
 #ifdef DEBUG_CTRL_C_KILL
@@ -3529,10 +3639,12 @@ merge_host_paths(const char *base, const char *append)
 {
     char pathbuf[KS_PATH_MAX];
     uint len = strlen(base);
-    if (len == 0)
+    if (len == 0)                   // no base
         return (strdup(append));
-    if (strlen(append) == 0)
+    if (strlen(append) == 0)        // no append
         return (strdup(base));
+    if (append[0] == '/')           // append starts at root directory
+        return (strdup(append));
     strcpy(pathbuf, base);
     if (base[len - 1] != '/') {
         if (base[len - 1] != ':') {
@@ -3633,10 +3745,9 @@ realpath_parent(char *path)
     int   tlen;
 
     do {
-        while (eptr > path) {
+        while (--eptr > path) {
             if (*eptr == '/')
                 break;
-            eptr--;
         }
         if (eptr == path)
             return (strdup(path));
@@ -5730,6 +5841,9 @@ run_message_mode(void)
     uint16_t app_state = MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_LOOPBACK;
     smash_msg_info_t mi;
 
+    if (amiga_vol_head != NULL)
+        app_state |= MSG_STATE_HAVE_FILE;
+
     msgprintf("Message mode\n");
     app_state_send[0] = SWAP16(0xffff);     // Affect all bits
     app_state_send[1] = SWAP16(app_state);  // Message service up
@@ -5821,6 +5935,9 @@ int
 run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
          bool fill, const char *filename)
 {
+    int amiga_was_put_in_reset = 0;
+    int rc;
+
     if (mode == MODE_UNKNOWN) {
         warnx("You must specify one of: -e -i -r -t or -w");
         usage(stderr);
@@ -5845,6 +5962,22 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
         return (1);
     }
 
+    if (mode & (MODE_WRITE | MODE_VERIFY)) {
+        struct stat statbuf;
+        if (stat(filename, &statbuf))
+            errx(EXIT_FAILURE, "Failed to stat %s", filename);
+
+        if (len == EEPROM_SIZE_NOT_SPECIFIED) {
+            len = EEPROM_SIZE_DEFAULT;
+            if (len > statbuf.st_size)
+                len = statbuf.st_size;
+        }
+        if (len > statbuf.st_size) {
+            errx(EXIT_FAILURE, "Length 0x%x is greater than %s size %jx",
+                 len, filename, (intmax_t)statbuf.st_size);
+        }
+    }
+
     if (bank != BANK_NOT_SPECIFIED) {
         if ((mode & MODE_READ) && (len == EEPROM_SIZE_NOT_SPECIFIED)) {
             warnx("You must specify a length with -r and -b together\n");
@@ -5858,6 +5991,20 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
         }
     }
 
+    switch (amiga_is_in_reset()) {
+        case -1:
+            errx(EXIT_FAILURE, "Reset check failed");
+        case 0:
+            if (!are_you_sure("Put Amiga in reset"))
+                exit(0);
+            amiga_was_put_in_reset = 1;
+            if (reset_amiga(1))
+                errx(EXIT_FAILURE, "Failed to put Amiga in reset");
+            break;
+        default:
+            break;
+    }
+
     if (mode & MODE_READ) {
         eeprom_read(filename, bank, baseaddr, len);
         return (0);
@@ -5865,43 +6012,59 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
     if (mode & MODE_ERASE) {
         if (eeprom_erase(bank, baseaddr, len))
             return (1);
+    } else if (mode & MODE_WRITE) {
+        uint temp;
+        switch (eeprom_not_erased(bank, baseaddr, len)) {
+            case -1:
+                errx(EXIT_FAILURE, "Failed to check PROM area erased");
+            case 0:
+                break;
+            default:
+                printf("EEPROM area has not been erased\n");
+                if (are_you_sure("Erase area before write?")) {
+                    temp = force_yes;
+                    force_yes = 1;
+                    if (eeprom_erase(bank, baseaddr, len))
+                        return (1);
+                    force_yes = temp;
+                }
+                break;
+        }
     }
 
+    rc = 0;
     if (mode & (MODE_WRITE | MODE_VERIFY)) {
-        struct stat statbuf;
         if (baseaddr == ADDR_NOT_SPECIFIED)
             baseaddr = 0x000000;  // Start of EEPROM
 
-        if (stat(filename, &statbuf))
-            errx(EXIT_FAILURE, "Failed to stat %s", filename);
-
-        if (len == EEPROM_SIZE_NOT_SPECIFIED) {
-            len = EEPROM_SIZE_DEFAULT;
-            if (len > statbuf.st_size)
-                len = statbuf.st_size;
-        }
-        if (len > statbuf.st_size) {
-            errx(EXIT_FAILURE, "Length 0x%x is greater than %s size %jx",
-                 len, filename, (intmax_t)statbuf.st_size);
-        }
         if (bank != BANK_NOT_SPECIFIED)
             baseaddr += bank * len;
 
         do {
             if ((mode & MODE_WRITE) &&
-                (eeprom_write(filename, baseaddr, len) != 0))
-                return (1);
+                (eeprom_write(filename, baseaddr, len) != 0)) {
+                rc = 1;
+                break;
+            }
 
             if ((mode & MODE_VERIFY) &&
-                (eeprom_verify(filename, baseaddr, len, report_max) != 0))
-                return (1);
+                (eeprom_verify(filename, baseaddr, len, report_max) != 0)) {
+                rc = 1;
+                break;
+            }
 
             baseaddr += len;
             if (baseaddr >= EEPROM_SIZE_DEFAULT)
                 break;
         } while (fill);
     }
-    return (0);
+    if (amiga_was_put_in_reset) {
+        reset_amiga(0);
+        time_delay_msec(100);
+        if (reset_amiga(0))
+            warnx("Failed to take Amiga out of reset");
+    }
+    return (rc);
 }
 
 /*

@@ -227,7 +227,7 @@ long_to_short_t long_to_short_readwrite[] = {
 
 BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
 uint flag_debug = 0;
-uint flag_quiet = 0;
+uint8_t flag_quiet = 0;
 uint8_t *test_loopback_buf = NULL;
 
 /*
@@ -3317,9 +3317,10 @@ main(int argc, char *argv[])
     uint     do_multiple = 0;
     uint32_t addr;
 
-#ifndef _DCC
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds="
     SysBase = *(struct ExecBase **)4UL;
-#endif
+#pragma GCC diagnostic pop
     cpu_control_init();  // cpu_type, SysBase
 
     for (arg = 1; arg < argc; arg++) {

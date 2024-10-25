@@ -12,6 +12,7 @@
 #ifndef _SM_FILE_H
 #define _SM_FILE_H
 
+uint sm_fservice(void);
 uint sm_fopen(handle_t parent_handle, const char *name, uint mode,
               uint *hm_type, uint create_perms, handle_t *handle);
 uint sm_fclose(handle_t handle);
@@ -33,6 +34,8 @@ uint sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid);
 uint sm_fsetprotect(handle_t parent_handle, const char *name, uint perms);
 
 const char *km_status(uint km_status);
+
+extern uint8_t sm_file_active;
 
 #define SEEK_OFFSET_BEGINNING (-1)
 #define SEEK_OFFSET_CURRENT   (0)

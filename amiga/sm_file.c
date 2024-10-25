@@ -20,12 +20,30 @@
 #include "sm_msg.h"
 #include "sm_file.h"
 
-extern struct ExecBase *SysBase;
-
-extern uint     flag_debug;
-
 static uint     sm_mbuf_size = 0;
 static uint8_t *sm_mbuf      = NULL;
+
+/*
+ * sm_fservice
+ * -----------
+ * Returns non-zero if the host is connected and providing file service.
+ */
+uint
+sm_fservice(void)
+{
+    uint16_t states[2];
+    uint rc;
+    uint rxlen;
+    rc = send_cmd(KS_CMD_MSG_STATE, 0, 0, states, sizeof (states), &rxlen);
+    if ((rc == 0) &&
+        ((states[1] & (MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_FILE)) ==
+                      (MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_FILE))) {
+        sm_file_active = 1;
+        return (1);
+    }
+    sm_file_active = 0;
+    return (0);
+}
 
 /*
  * sm_fopen
@@ -82,6 +100,9 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
 
     *handle = 0;
 
+    if ((sm_file_active == 0) && (sm_fservice() == 0))
+        return (KM_STATUS_UNAVAIL);
+
     if (namelen > 2000) {
         printf("Path \"%s\" too long\n", name);
         return (KM_STATUS_FAIL);
@@ -111,6 +132,10 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
         *hm_type = rdata->hm_type;
     host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
+
+    if (rc == KS_STATUS_NODATA)
+        sm_fservice();  // Check if file service is still active
+
     return (rc);
 }
 
@@ -129,6 +154,9 @@ sm_fclose(handle_t handle)
     hm_fopenhandle_t *rdata;
     hm_fopenhandle_t msg;
 
+    if ((sm_file_active == 0) && (sm_fservice() == 0))
+        return (KM_STATUS_UNAVAIL);
+
     msg.hm_hdr.km_op     = KM_OP_FCLOSE;
     msg.hm_hdr.km_status = 0;
     msg.hm_hdr.km_tag    = host_tag_alloc();
@@ -141,6 +169,10 @@ sm_fclose(handle_t handle)
         free(sm_mbuf);
         sm_mbuf = NULL;
     }
+
+    if (rc == KS_STATUS_NODATA)
+        sm_fservice();  // Check if file service is still active
+
     return (rc);
 }
 
@@ -164,6 +196,9 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
     hm_freadwrite_t *rdata;
     uint rcvlen;
 
+    if ((sm_file_active == 0) && (sm_fservice() == 0))
+        return (KM_STATUS_UNAVAIL);
+
     msg.hm_hdr.km_op     = KM_OP_FREAD;
     msg.hm_hdr.km_status = 0;
     msg.hm_hdr.km_tag    = host_tag_alloc();
@@ -174,13 +209,11 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
 
     rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rcvlen);
 
-//  printf("read rc=%d rlen=%x\n", rc, rcvlen);
     if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF)) {
         rcvlen = 0;
         goto sm_read_fail;
     }
 
-// printf("sm_fread(%x) rawlen=%x", readsize, rcvlen);
 #if 0
     // Need to remove this so that single dirents can be read
     if (rcvlen > readsize + sizeof (msg)) {
@@ -200,7 +233,6 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
         uint total_len = rdata->hm_length;
         uint tag = msg.hm_hdr.km_tag;
 
-//      printf("got %x of %x\n", cur_len, total_len);
         if ((sm_mbuf == NULL) || (total_len >= sm_mbuf_size))  {
             if (sm_mbuf != NULL)
                 free(sm_mbuf);
@@ -222,10 +254,11 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
 sm_read_fail:
     if (rlen != NULL)
         *rlen = rcvlen;
-    if ((rc != KM_STATUS_OK) && (flag_debug > 2))
-        dump_memory(rdata, rcvlen, DUMP_VALUE_UNASSIGNED);
 
     host_tag_free(msg.hm_hdr.km_tag);
+
+    if (rc == KS_STATUS_NODATA)
+        sm_fservice();  // Check if file service is still active
     return (rc);
 }
 
@@ -255,6 +288,9 @@ sm_fwrite(handle_t handle, void *buf, uint writelen, uint padded_header,
     uint rcvlen;
     uint rc;
     uint8_t chunk_header[sizeof (*msg) + 32];
+
+    if ((sm_file_active == 0) && (sm_fservice() == 0))
+        return (KM_STATUS_UNAVAIL);
 
     if (padded_header)
         msg = buf;
@@ -301,6 +337,9 @@ sm_fwrite(handle_t handle, void *buf, uint writelen, uint padded_header,
         }
     }
     host_tag_free(msg->hm_hdr.km_tag);
+
+    if (rc == KS_STATUS_NODATA)
+        sm_fservice();  // Check if file service is still active
     return (rc);
 }
 
@@ -320,6 +359,9 @@ sm_fpath(handle_t handle, char **name)
     uint rlen;
     hm_fhandle_t *rdata;
     hm_fhandle_t msg;
+
+    if ((sm_file_active == 0) && (sm_fservice() == 0))
+        return (KM_STATUS_UNAVAIL);
 
     msg.hm_hdr.km_op     = KM_OP_FPATH;
     msg.hm_hdr.km_status = 0;
@@ -634,10 +676,10 @@ sm_fsetdate(handle_t parent_handle, const char *name,
     }
 
     host_tag_free(msg->hm_hdr.km_tag);
-    free(msg);
 
     *sec  = msg->hm_time;
     *nsec = msg->hm_time_ns;
+    free(msg);
 
     return (rc);
 }
