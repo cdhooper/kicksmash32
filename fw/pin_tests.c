@@ -153,6 +153,10 @@ check_board_standalone(void)
         gpio_setv(KBRST_PORT, KBRST_PIN, 0);
     }
 
+    /* Can't do further tests without clobbering a running Amiga */
+    if (kbrst_in_amiga)
+        return;
+
     /*
      * Test whether D31 is connected to the Amiga.
      *

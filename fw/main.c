@@ -70,21 +70,23 @@ main(void)
     identify_cpu();
     show_reset_reason();
     config_read();
+    ee_update_bank_at_poweron();
     usb_startup();
     led_power(1);
     check_board_standalone();
-
-    rl_initialize();  // Enable command editing and history
-    using_history();
 
     adc_init();
     ee_init();
     msg_init();
 
-    if (board_is_standalone)
+    if (board_is_standalone) {
         printf("Standalone\n");
-    else
+    } else {
         printf("in Amiga\n");
+    }
+
+    rl_initialize();  // Enable command editing and history
+    using_history();
 
     while (1) {
         main_poll();

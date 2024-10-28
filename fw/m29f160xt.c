@@ -118,7 +118,7 @@ ee_address_override(uint8_t bits, uint override)
 {
     uint           bit;
     static uint8_t old  = 0xff;
-    static uint8_t last = 0;
+    static uint8_t last = 0xff;  // first override call should set I/O state
     static const uint32_t ports[] =
                           { FLASH_A17_PORT, FLASH_A18_PORT, FLASH_A19_PORT };
     static const uint32_t pins[]  =
