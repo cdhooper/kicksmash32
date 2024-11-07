@@ -44,8 +44,6 @@ uint8_t grunning = 0;
 uint8_t gvolumes_inuse = 0;
 static uint runtime_max = 0;
 
-struct DeviceNode *gdevnode;
-
 static void
 refresh_volume_list(void)
 {
@@ -121,8 +119,10 @@ handle_messages(void)
             WaitIO(&timerio->tr_node);
             printf(".");
             if (grunning) {
-                if ((runtime++ == runtime_max) && (runtime_max != 0))
+                if ((runtime++ == runtime_max) && (runtime_max != 0)) {
+                    printf("Runtime max %d\n", runtime_max);
                     grunning = 0;
+                }
                 if ((runtime & 7) == 0)
                     do_refresh++;
                 if (do_refresh) {
@@ -186,6 +186,7 @@ main(int argc, char *argv[])
         printf("Failed to open %s\n", DOSNAME);
         return (1);
     }
+    cpu_control_init();
 
     for (arg = 1; arg < argc; arg++) {
         const char *ptr = argv[arg];
@@ -225,6 +226,7 @@ show_usage:
     }
     flag_output = output_flag;
     printf("\n%s\n", version + 7);
+
     grunning = 1;
     timer_open();
     refresh_volume_list();

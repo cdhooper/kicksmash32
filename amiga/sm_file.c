@@ -125,11 +125,12 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
     strcpy((char *)(msg + 1), name);  // Name follows message header
 
     rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
-    if (rc == KM_STATUS_OK)
+    if (rc == KM_STATUS_OK) {
         *handle = rdata->hm_handle;
 
-    if (hm_type != NULL)
-        *hm_type = rdata->hm_type;
+        if (hm_type != NULL)
+            *hm_type = rdata->hm_type;
+    }
     host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
 

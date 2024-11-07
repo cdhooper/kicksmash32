@@ -2396,7 +2396,7 @@ amiga_is_in_reset(void)
 static int
 reset_amiga(int hold)
 {
-    const char *cmd = hold ? "reset amiga hold" : "reset amiga";
+    const char *cmd = hold ? "reset amiga hold" : "reset prom";
 
     if (send_cmd(cmd))
         return (1);
@@ -4257,12 +4257,8 @@ reply_open_fail:
 
         handle = handle_new(name, "", NULL, HM_TYPE_VOLDIR, hm_mode);
         /* Volume directory has no he_volume or he_avolume pointers */
-
-        hm->hm_hdr.km_status = KM_STATUS_OK;
-        hm->hm_handle = handle->he_handle;
-        hm->hm_mode   = 0;
         free(name);
-        return (send_msg(hm, sizeof (*hm), status));
+        goto open_success;
     }
     host_path = make_host_path(phandle->he_avolume, name);
 
@@ -4305,12 +4301,7 @@ reply_open_fail:
                  (phandle != NULL) ? phandle->he_handle : 0,
                  handle->he_handle, handle->he_avolume->av_volume, name);
         free(name);
-
-        hm->hm_hdr.km_status = KM_STATUS_OK;
-        hm->hm_handle = handle->he_handle;
-        hm->hm_mode   = 0;
-        fsprintf("  dir/link handle=%x\n", handle->he_handle);
-        return (send_msg(hm, sizeof (*hm), status));
+        goto open_success;
     } else if (hm_type == HM_TYPE_DIR) {
         DIR *dir;
         if ((hm_mode & ~HM_MODE_DIR) != HM_MODE_READ) {
@@ -4327,14 +4318,10 @@ reply_open_fail:
 
         handle = handle_new(name, "", phandle, hm_type, hm_mode);
         handle->he_dir = dir;
-        fsprintf("  opendir(%s %s) = %x %p\n",
+        fsprintf("  opendir(%s \"%s\") = %x %p\n",
                  host_path, name, handle->he_handle, (void *) dir);
         free(name);
-
-        hm->hm_hdr.km_status = KM_STATUS_OK;
-        hm->hm_handle = handle->he_handle;
-        hm->hm_mode   = 0;
-        return (send_msg(hm, sizeof (*hm), status));
+        goto open_success;
     }
     switch (hm_mode & HM_MODE_RDWR) {
         case HM_MODE_READ:
@@ -4378,10 +4365,11 @@ reply_open_fail:
     handle->he_fd = fd;
     free(name);
 
-    fsprintf("  file handle=%x\n", handle->he_handle);
+open_success:
     hm->hm_hdr.km_status = KM_STATUS_OK;
     hm->hm_handle = handle->he_handle;
     hm->hm_mode   = 0;
+    fsprintf("  handle=%x\n", hm->hm_handle);
     return (send_msg(hm, sizeof (*hm), status));
 }
 

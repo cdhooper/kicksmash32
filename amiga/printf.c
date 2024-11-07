@@ -95,11 +95,16 @@ int
 putchar(int ch)
 {
 #ifdef USE_SERIAL_OUTPUT
+#ifdef ROMFS
+    if (flag_output)
+        RawPutChar(ch);
+#else
     if (flag_output == 1) {
         FPutC(Output(), ch);
     } else if (flag_output) {
         RawPutChar(ch);
     }
+#endif
 #endif
     return (ch);
 }
@@ -108,6 +113,15 @@ int
 puts(const char *str)
 {
 #ifdef USE_SERIAL_OUTPUT
+#ifdef ROMFS
+    if (flag_output) {
+        while (*str != '\0') {
+            RawPutChar(*str);
+            str++;
+        }
+        RawPutChar('\n');
+    }
+#else
     if (flag_output == 1) {
         PutStr(str);
         FPutC(Output(), '\n');
@@ -118,6 +132,7 @@ puts(const char *str)
         }
         RawPutChar('\n');
     }
+#endif
 #else
     (void) str;
 #endif

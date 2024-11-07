@@ -110,17 +110,10 @@ mmu_get_tc_030(void)
 __attribute__ ((noinline)) void
 mmu_set_tc_030(register uint32_t tc asm("%d0"))
 {
-#if 0
-    __asm__ __volatile__("adda.l #4,sp \n\t"
-                         ".long 0xf0174000 \n\t"  // pmove.l (sp),tc
-                         "suba.l #4,sp"
-                         : "=d" (tc));
-#elif 1
     __asm__ __volatile__("move.l %0,-(sp) \n\t"
                          ".long 0xf0174000 \n\t"  // pmove.l (sp),tc
                          "adda.l #4,sp \n\t"
                          : "=d" (tc));
-#endif
 }
 
 /*

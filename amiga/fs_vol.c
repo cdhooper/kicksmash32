@@ -226,9 +226,12 @@ volnode_init(char *name, uint32_t access_time, LONG dl_type,
 static void
 volnode_new(char *name, uint32_t access_time, vollist_t *vol)
 {
-// XXX: For WB to see it, we need DLT_VOLUME
-//      For info to show it, we need DLT_DEVICE
-
+    /*
+     * For Workbench to see it, we need DLT_VOLUME
+     * For Info to show it, we need DLT_DEVICE
+     *
+     * So create both a device and a volume.
+     */
     vol->vl_devnode = volnode_init(name, access_time, DLT_DEVICE,
                                    vol->vl_msgport, NULL);
     vol->vl_volnode = volnode_init(name, access_time, DLT_VOLUME,

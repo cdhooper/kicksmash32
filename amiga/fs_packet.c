@@ -647,7 +647,6 @@ action_findinput(void)
     uint          type;
     uint          hm_mode = HM_MODE_READ;
     uint          create_perms = 0;
-    uint          findupdate = 0;
 
     /* Temporarily NIL-terminate name */
     bname = name + *bname;
@@ -655,12 +654,11 @@ action_findinput(void)
     *bname = '\0';
 
     if (gpack->dp_Type == ACTION_FINDUPDATE) {
-        findupdate = 1;
         hm_mode = HM_MODE_READ | HM_MODE_WRITE;
     }
 
     printf("FIND%s p=%x %p '%s'\n",
-           findupdate ? "UPDATE" : "INPUT", phandle, lock, name);
+           (hm_mode & HM_MODE_WRITE) ? "UPDATE" : "INPUT", phandle, lock, name);
 
     rc = sm_fopen(phandle, name, hm_mode, &type, create_perms, &handle);
     *bname = cho;

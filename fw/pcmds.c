@@ -667,9 +667,12 @@ cmd_reset(int argc, char * const *argv)
     } else if (strcmp(argv[1], "prom") == 0) {
         printf("Resetting Amiga and flash ROM\n");
         kbrst_amiga(0, 0);
+        timer_delay_msec(200);
         amiga_not_in_reset = 0;
-        ee_address_override(0, 2);  // Restore previous A19-A18-A17 override
+        ee_enable();
         ee_read_mode();
+        ee_set_bank(config.bi.bi_bank_current);
+        ee_disable();
         return (RC_SUCCESS);
     } else {
         printf("Unknown argument %s\n", argv[1]);

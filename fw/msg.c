@@ -1682,7 +1682,7 @@ new_cmd_post:
                 /* Length phase */
                 messages_amiga++;
                 cons_start = rx_consumer;
-                len = cmd_len = buffer_rxa_lo[rx_consumer];
+                cmd_len = buffer_rxa_lo[rx_consumer];
                 len = (cmd_len + 1) / 2;
                 magic_pos++;
                 break;

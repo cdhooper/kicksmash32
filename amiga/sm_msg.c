@@ -31,6 +31,7 @@
 uint smash_cmd_shift = 2;
 extern uint flag_debug;
 
+#ifndef ROMFS
 static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
 
 static char
@@ -286,9 +287,13 @@ scc_cleanup:
             return (MSG_STATUS_BAD_CRC);
         }
     }
-
     return (replystatus);
 }
+#endif
+
+#ifdef ROMFS
+#define send_cmd_core esend_cmd_core
+#endif
 
 /*
  * send_cmd
@@ -358,13 +363,14 @@ msg_init(void)
  *
  * This function will return KS_STATUS_NODATA on timeout.
  */
-static uint
+uint
 recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
 {
     uint rc;
     rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
+    timeout_ms /= 2;
     while (rc == KS_STATUS_NODATA) {
-        cia_spin(CIA_USEC(400));
+        cia_spin(CIA_USEC(600));
         rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
         if (timeout_ms-- == 0)
             break;
@@ -373,8 +379,10 @@ recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
         rc = KM_STATUS_OK;
     if (rc != KM_STATUS_OK) {
         printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
+#ifndef ROMFS
         if (flag_debug > 2)
             dump_memory(buf, 0x40, DUMP_VALUE_UNASSIGNED);
+#endif
     }
     return (rc);
 }
@@ -477,8 +485,10 @@ host_send_msg(void *smsg, uint len)
     if (rc != 0) {
         printf("Send message l=%u failed: %d (%s)\n",
                len, rc, smash_err(rc));
+#ifndef ROMFS
         if (flag_debug > 2)
             dump_memory(rbuf, sizeof (rbuf), DUMP_VALUE_UNASSIGNED);
+#endif
     }
     return (rc);
 }
@@ -504,7 +514,7 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
     uint count;
 
     for (count = 0; count < 50; count++) {
-        rc = recv_msg(buf, sizeof (buf), &rxlen, 1000);
+        rc = recv_msg(buf, sizeof (buf), &rxlen, 500);  // 500 ms timeout
         if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF))
             return (rc);
         if (tag == msg->km_tag) {
@@ -618,7 +628,8 @@ static const char *const km_status_s[] = {
     "INVALID",                          // KM_STATUS_INVALID
     "NOTEMPTY",                         // KM_STATUS_NOTEMPTY
     "NOEXIST",                          // KM_STATUS_NOEXIST
-    "EXIST"                             // KM_STATUS_EXIST
+    "EXIST",                            // KM_STATUS_EXIST
+    "UNAVAIL"                           // KM_STATUS_UNAVAIL
 };
 STATIC_ASSERT(ARRAY_SIZE(km_status_s) == KM_STATUS_LAST_ENTRY);
 

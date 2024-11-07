@@ -128,7 +128,7 @@ ee_address_override(uint8_t bits, uint override)
         default:
         case 0:  // Record new override
             break;
-        case 1:  // Temporily disable override
+        case 1:  // Temporarily disable override
             if (old == 0xff)
                 old = last;
             bits = 0;
@@ -139,10 +139,14 @@ ee_address_override(uint8_t bits, uint override)
             bits = old;
             old = 0xff;
             break;
+        case 3:  // Force restore previous override
+            bits = last;
+            last = 0xff;
+            break;
     }
+
     if (bits == last)
         return;
-    last = bits;
 
     for (bit = 0; bit < 3; bit++) {
         uint32_t port  = ports[bit];
@@ -154,7 +158,7 @@ ee_address_override(uint8_t bits, uint override)
             GPIO_BSRR(port) = pin << shift;
 #undef ADDR_OVERRIDE_DEBUG
 #ifdef ADDR_OVERRIDE_DEBUG
-            if (override == 0)
+            if ((override == 0) && (bits != last))
                 printf(" A%u=%u", 17 + bit, !shift);
 #endif
         } else {
@@ -162,7 +166,7 @@ ee_address_override(uint8_t bits, uint override)
             GPIO_BSRR(port) = pin << 16;
             gpio_setmode(port, pin, GPIO_SETMODE_INPUT_PULLUPDOWN);
 #ifdef ADDR_OVERRIDE_DEBUG
-            if (override == 0)
+            if ((override == 0) && (bits != last))
                 printf(" !A%u", 17 + bit);
 #endif
         }
@@ -171,6 +175,7 @@ ee_address_override(uint8_t bits, uint override)
     if (override == 0)
         printf("\n");
 #endif
+    last = bits;
 }
 
 /*
@@ -209,7 +214,7 @@ address_output_disable(void)
         GPIO_CRH(SOCKET_A0_PORT)   = 0x44444444;
         GPIO_CRL(SOCKET_A13_PORT)  = 0x44444448;  // PA0=SOCKET_OE = Input PU
     }
-    ee_address_override(0, 2);  // Restore previous A19-A18-A17 override
+    ee_address_override(0, 3);  // Restore previous A19-A18-A17 override
 }
 
 /*
@@ -391,12 +396,15 @@ ee_enable(void)
 void
 ee_disable(void)
 {
+    if (ee_enabled == false)
+        return;
     we_output(1);
     oe_output_disable();
     address_output_disable();
     data_output_disable();
     timer_delay_usec(50);
     ee_enabled = false;
+    ee_last_access = 0;
 }
 
 /*
@@ -1107,9 +1115,8 @@ ee_poll(void)
 {
     if (ee_last_access != 0) {
         uint64_t usec = timer_tick_to_usec(timer_tick_get() - ee_last_access);
-        if (usec > 1000000) {
+        if (usec > 100000) {  // 100 ms
             ee_disable();
-            ee_last_access = 0;
         }
     }
 }

@@ -1,6 +1,6 @@
+#if 0
 #include <stdio.h>
 
-#if 0
 #define STR2(x) #x
 #define STR(x) STR2(x)
 
@@ -41,5 +41,6 @@ __asm("_smashfs_start:");
 INCBIN(incbin, smashfs, "smashfs.strip");
 #endif
 
-__asm("xdef _rom_end");
-__asm("_rom_end:");
+__asm__(".section .rom_end \n"
+        "xdef _rom_end \n"
+        "_rom_end:");

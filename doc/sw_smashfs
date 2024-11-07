@@ -1,0 +1,41 @@
+smashfs - Amiga Filesystem for host-exported volumes
+----------------------------------------------------
+The smashfs filesystem is started like a regular Amiga program. Once started,
+it will automatically detect and mount exported volumes from the remote host.
+Most standard Amiga programs such as Workbench, Info, List, and Textedit may
+be used to access files and directories on the remote host.
+
+The smashfs program can normally be shut down by pressing ^C in the window
+where it was started. To run the program in the background, use the "Run"
+command. If you need to shut it down in that case, you can use the CLI
+"Status" command to find smashfs and the "Break" command to shut it down.
+
+In order to export a volume to the Amiga, you will use the hostsmash
+program on your host computer. This command may be executed before or
+after starting up smashfs. While smashfs is running, it will occasionally
+poll the host for exported volumes.
+
+Here's a simple command to get you started (run it from the sw directory
+in the KickSmash repository):
+    ./hostsmash -d /dev/ttyACM0 -m amiga: ../amiga
+
+If you execute the Info command after smashfs is started, you will see
+a new "amiga" Mounted disk and Volume have appeared:
+    9.OS322:> info
+
+    Mounted disks:
+    Unit      Size       Used       Free Full Errs   Status   Name
+    amiga    1760G     434817    1368225  24%   0  Read/Write amiga
+    RAM        15M         35      15868   0%   0  Read/Write RAM Disk
+    S0       1019M      78688     965535   8%   0  Read/Write OS322
+    S1       1011M     147724     111322  57%   0  Read/Write Work
+
+    Volumes available:
+    amiga [Mounted]
+    OS322 [Mounted]
+    RAM Disk [Mounted]
+    Work [Mounted]
+
+The Workbench desktop should also show a new "amiga" volume. You can
+open this volume and access files just as you would any other Amiga
+volume.

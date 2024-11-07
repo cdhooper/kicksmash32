@@ -5,6 +5,8 @@
  * between Amiga and Kicksmash.
  *
  * cc -o crcit crcit.c crc32.c
+ *
+ * Expected format is 16-bit words, little endian
  */
 #include <stdio.h>
 #include <stdint.h>

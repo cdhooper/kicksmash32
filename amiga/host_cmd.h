@@ -42,7 +42,7 @@
 #define KM_STATUS_NOEXIST     0x07  // Object does not exist
 #define KM_STATUS_EXIST       0x08  // Object already exists
 #define KM_STATUS_UNAVAIL     0x09  // Service not available
-#define KM_STATUS_LAST_ENTRY  0x09  // Fake status: must always be last + 1
+#define KM_STATUS_LAST_ENTRY  0x0a  // Fake status: must always be last + 1
 
 #define HM_TYPE_ANY         0x0000  // Any type of file (for open)
 #define HM_TYPE_UNKNOWN     0x0000  // Unknown (for reported type)

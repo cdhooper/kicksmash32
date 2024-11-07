@@ -2,7 +2,7 @@
 
 OUTPUT_FORMAT("amiga")
 OUTPUT_ARCH(m68k)
-SEARCH_DIR("/opt/amiga13/m68k-amigaos/lib");
+/* SEARCH_DIR("/opt/amiga13/m68k-amigaos/lib"); */
 SECTIONS
 {
   PROVIDE(___machtype = 0x0);
@@ -12,10 +12,14 @@ SECTIONS
     __stext = .;
     *(.text)
     *(.text.main)
+    _copy_to_ram_start = .;
+    *(.text_to_ram)
+    _copy_to_ram_end = .;
     *(.text*)
     *(_*)
     *(.rodata*)
     *(.data.rel.ro*)
+    *sm_msg_comm.c.obj(.text)
     *(.gnu.linkonce.t.*)
     *(.gnu.linkonce.r.*)
     *(.gcc_except_table*)
@@ -23,8 +27,8 @@ SECTIONS
     *(SORT_BY_NAME(.list_*))
     *(.end_of_lists)
     ___datadata_relocs = .;
-    __etext = .;
   }
+    __etext = .;
   ___text_size = SIZEOF(.text);
   . = ALIGN(0x0);
   .data :
@@ -40,6 +44,7 @@ SECTIONS
     *(.gnu.linkonce.d.*)
 /*  ___a4_init = 0x7ffe; */
     __edata = .;
+    *(.rom_end)
   }
   .bss :
   {
@@ -50,9 +55,8 @@ SECTIONS
     *(COMMON)
     __end = .;
   }
-  ___data_size = SIZEOF(.data) + SIZEOF(.bss);
-  ___bss_size = 0x0;
-  ___bss_init_size = SIZEOF(.bss);
+  ___data_size = SIZEOF(.data);
+  ___bss_size = SIZEOF(.bss);
   .datachip :
   {
     *(.datachip)

@@ -30,7 +30,7 @@
             uint32_t oldcachestate = \
             CacheControl(0L, CACRF_EnableD) & (CACRF_EnableD | CACRF_DBE)
 #define CACHE_RESTORE_STATE() \
-            CacheControl(oldcachestate, CACRF_EnableD | CACRF_DBE); \
+            CacheControl(oldcachestate, CACRF_EnableD | CACRF_DBE | CACRF_ClearD); \
         }
 
 /* MMU_DISABLE() and MMU_RESTORE() must be called from Supervisor state */

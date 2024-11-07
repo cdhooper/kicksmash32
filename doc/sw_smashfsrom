@@ -1,0 +1,12 @@
+smashfsrom - ROMable Amiga Filesystem for host-exported volumes
+---------------------------------------------------------------
+See the documentation on smashfs for an overview of what smashfs is.
+
+smashfsrom is a version of smashfs which can be included in the
+Kickstart ROM in order to provide smashfs at boot. It currently does
+not support booting from a smashfs volume, but that might be added in
+the future.
+
+There is also smashfsrom_d, which is smashfsrom, but also emits file
+access debug output on the Amiga serial point.
+
