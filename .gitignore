@@ -15,6 +15,8 @@ generated.*.ld
 cscope.out
 .cscope_cmd.*
 objs/
+objs.rom/
+objs.rom_d/
 rev1/
 rev2/
 rev3/
@@ -24,5 +26,7 @@ photos
 amiga/smash
 amiga/smashfs
 amiga/smashftp
+amiga/smashfsrom
+amiga/smashfsrom_d
 sw/hostsmash
 sw/crcit

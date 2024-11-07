@@ -428,22 +428,14 @@ volume_close(void)
 }
 
 static void
-reply_packet(struct MsgPort *mp)
+reply_packet(void)
 {
 #undef PACKET_MSG_DEBUG
 #ifdef PACKET_MSG_DEBUG
     struct MsgPort *reply_port = gpack->dp_Port;
-#else
-    (void) mp;
 #endif
 
-#if 0
-    // XXX: Does not seem to always wake caller
-    gpack->dp_Port = mp;
-    PutMsg(reply_port, gpack->dp_Link);
-#else
     ReplyPkt(gpack, gpack->dp_Res1, gpack->dp_Res2);
-#endif
 
 #ifdef PACKET_MSG_DEBUG
     printf("<- Put msg (");
@@ -452,7 +444,8 @@ reply_packet(struct MsgPort *mp)
     } else {
         printf("0x%x", gpack->dp_Res1);
     }
-    printf(") to port %p from my port %p\n", reply_port, mp);
+    printf(") to port %p\n", reply_port);
+    (void) reply_port;
 #endif
 }
 
@@ -469,10 +462,10 @@ volume_message(uint mask)
             while ((sp = (struct StandardPacket *) GetMsg(mp)) != NULL) {
                 gpack = (struct DosPacket *) (sp->sp_Msg.mn_Node.ln_Name);
                 handle_packet();
-                reply_packet(mp);
+                reply_packet();
 #ifdef PACKET_MSG_DEBUG
                 printf("-> Get msg (%u) for %s: on port %p\n",
-                       gpack->dp_Type, cur->vl_volname, mp);
+                       gpack->dp_Type, cur->vl_name, mp);
 #else
                 printf("\n");
 #endif

@@ -2208,6 +2208,7 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             break;
         }
         case KS_CMD_MSG_SEND: {
+            uint64_t new_expire;
             uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
             uint rc;
 
@@ -2225,9 +2226,15 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
                 usb_msg_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
             else
                 usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+
+            /* Extend state expiration when transfer in progress */
+            new_expire = timer_tick_plus_msec(1000);
+            if (expire_update_usb_app < new_expire)
+                expire_update_usb_app = new_expire;
             break;
         }
         case KS_CMD_MSG_RECEIVE: {
+            uint64_t new_expire;
             uint     len;
             uint     len1;
             uint     len2;
@@ -2277,6 +2284,11 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
                 cons_atou = (cons_atou + len) & (sizeof (msg_atou) - 1);
             else
                 cons_utoa = (cons_utoa + len) & (sizeof (msg_utoa) - 1);
+
+            /* Extend state expiration when transfer in progress */
+            new_expire = timer_tick_plus_msec(1000);
+            if (expire_update_usb_app < new_expire)
+                expire_update_usb_app = new_expire;
             break;
         }
         case KS_CMD_MSG_LOCK: {

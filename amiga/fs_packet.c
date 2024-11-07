@@ -645,7 +645,7 @@ action_findinput(void)
     char          cho;
     uint          rc;
     uint          type;
-    uint          hm_mode = HM_MODE_READ;
+    uint          hm_mode = HM_MODE_READ | HM_MODE_WRITE;
     uint          create_perms = 0;
 
     /* Temporarily NIL-terminate name */
@@ -654,7 +654,7 @@ action_findinput(void)
     *bname = '\0';
 
     if (gpack->dp_Type == ACTION_FINDUPDATE) {
-        hm_mode = HM_MODE_READ | HM_MODE_WRITE;
+        hm_mode = HM_MODE_READ | HM_MODE_WRITE | HM_MODE_CREATE;
     }
 
     printf("FIND%s p=%x %p '%s'\n",
