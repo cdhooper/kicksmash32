@@ -84,7 +84,14 @@ endif
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
 OBJS2  := $(SRCS2:%.c=$(OBJDIR)/%.o)
 
-all: $(PROG) $(PROG2)
+nativeprog: $(PROG) $(PROG2)
+
+all: $(PROG) $(PROG2) win32 win64
+
+win32:
+	$(MAKE) TARGET_OS=win32
+win win64:
+	$(MAKE) TARGET_OS=win64
 
 define DEPEND_SRC
 # The following line creates a rule for an object file to depend on a
