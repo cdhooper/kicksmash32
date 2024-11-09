@@ -12,4 +12,4 @@
 #include "version.h"
 
 const char * const version_str =
-    "Version 0.2 built "BUILD_DATE" "BUILD_TIME;
+    "Version 1.1 built "BUILD_DATE" "BUILD_TIME;

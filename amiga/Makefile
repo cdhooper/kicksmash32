@@ -79,6 +79,7 @@ $(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga13/bin")
 endif
 
 all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D)
+	@:
 
 gdb:
 	m68k-amigaos-gdb $(SMASH_PROG)
@@ -149,14 +150,15 @@ zip:
 
 lha:
 	@echo Building $(PROGVER).lha
-	$(QUIET)rm -rf $(SMASH_PROG).zip $(PROGVER)
+	$(QUIET)rm -rf $(SMASH_PROG).lha $(PROGVER)
 	$(QUIET)mkdir $(PROGVER)
 	$(QUIET)cp -p $(SMASH_PROG) $(PROGVER)/
 	$(QUIET)lha -aq2 $(PROGVER).lha $(PROGVER)
 	$(QUIET)rm -rf $(PROGVER)
 
-clean:
-	rm -rf $(OBJS) $(OBJDIR) $(ROM_OBJDIR) $(ROM_OBJDIR_D)
+clean clean-all:
+	@echo Cleaning
+	@rm -rf $(OBJS) $(OBJDIR) $(ROM_OBJDIR) $(ROM_OBJDIR_D)
 
 FLINT_FILE=flexelint.lnt
 flint:

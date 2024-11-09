@@ -1,0 +1,93 @@
+# Kicksmash installer
+#
+# Program using dfu:     make dfu
+# Program using st-link: make flash
+
+# Firmware name
+BINARY = fw
+
+DFU_UTIL=dfu-util
+ST_BUILD_DIR=stutils
+ST_TOOLS_PATH=$(ST_BUILD_DIR)/build/Release/bin
+
+all:
+	@echo Use \"make dfu\" to program via USB DFU
+	@echo Use \"make flash\" to program via ST-Link
+	@echo Other options: just-dfu stinfo stlink stinfo gdb
+
+UDEV_DIR        := /etc/udev/rules.d
+UDEV_FILENAMES  := 70-st-link.rules 70-ttymxprog.rules
+UDEV_FILE_PATHS := $(UDEV_FILENAMES:%=$(UDEV_DIR)/%)
+ifneq (,$(wildcard $(UDEV_FILE_PATHS)))
+$(UDEV_FILE_PATHS) &:
+	sudo cp -np udev/* $(UDEV_DIR)
+	sudo udevadm control --reload
+else
+$(UDEV_FILE_PATHS) &:
+endif
+
+# Write STM32 flash using DFU mode
+just-dfu:
+	$(DFU_UTIL) --device 0483:df11 --alt 0 --download $(BINARY).bin --dfuse-address 0x08000000:leave
+
+dfu-unprotect: $(UDEV_FILE_PATHS)
+	$(DFU_UTIL) -s 0:force:unprotect -a 0 --device 0483:df11 --alt 0 --download $(BINARY).bin
+
+dfu-clobber: $(UDEV_FILE_PATHS)
+	$(DFU_UTIL) -s 0:force:unprotect --alt 1 --download flash_clobber.bin -Z 0x10 --dfuse-address 0x1ffff800:leave
+
+#dfu-clobber: $(UDEV_FILE_PATHS)
+#	$(DFU_UTIL) -s 0:force:unprotect --alt 1 --download flash_clobber.bin -Z 0xd --dfuse-address 0x1ffff800:leave
+
+# Write STM32 flash using ST-Link
+just-flash: $(ST_TOOLS_PATH)/st-flash | $(BINARY).bin $(UDEV_FILE_PATHS)
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write $(BINARY).bin 0x08000000
+
+# Erase STM32 flash using ST-Link
+just-erase: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --flash=0x100000 erase 0x08000000 0x3c000
+
+just-mxprog:
+	./mxprog -d /dev/ttyACM0 -e -a 0x000000 -l 0x80000
+	./mxprog -d /dev/ttyACM0 -wv A3000.47.111.rom -a 0x000000 -s 3210
+
+# Protect/unprotect/clobber flash by writing the option byte area
+# The following can also be done by the STM32CubeProgrammer.
+# F105 unlocked  1ffff800: a5 5a 07 f8 00 ff 00 ff ff 00 ff 00 ff 00 ff 00
+# F105 protect   1ffff800: 00 ff 07 f8 ff 00 ff 00 00 ff 00 ff 00 ff 00 ff
+# F105 clobber   1ffff800: 00 00 00 00 00 03 00 03 00 ff 00 ff 00 ff 00 ff
+
+# Select specific programmer ("make stinfo" to get serial)
+# export ST_ARGS="--serial 57FF6E064975545225502187"		# amiga1
+# export ST_ARGS="--serial 303030303030303030303031"		# amiga2
+
+just-unprotect: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_unprotect.bin 0x1ffff800
+just-protect: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_protect.bin 0x1ffff800
+just-clobber: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
+	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_clobber.bin 0x1ffff800
+
+dfu: all $(UDEV_FILE_PATHS) just-dfu
+flash: all just-flash
+
+# Connect to remote STM32 via ST-Link (follow with "make gdb")
+stlink: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
+	$(ST_TOOLS_PATH)/st-util $(ST_ARGS) --no-reset
+
+stinfo reset: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
+	$(ST_TOOLS_PATH)/st-info --probe
+
+# Get ST-TOOLS
+$(ST_BUILD_DIR) get-stutils:
+	git clone https://github.com/texane/stlink.git stutils
+
+# Build ST-TOOLS
+$(ST_TOOLS_PATH)/st-flash build-stutils: | $(ST_BUILD_DIR)
+	make -C $(ST_BUILD_DIR) CMAKEFLAGS=-DCMAKE_INSTALL_PREFIX=.
+	ln -s ../../config $(ST_BUILD_DIR)/build/Release/stlink
+
+gdb:
+	gdb -q -x .gdbinit $(BINARY).elf
+
+.PHONY: get-stutils build_stutils stlink dfu flash just-dfu just-flash just-unprotect just-dfu dfu-unprotect size elf bin hex srec list udev-files

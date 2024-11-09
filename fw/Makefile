@@ -29,17 +29,17 @@ LDSCRIPT = stm32f1.ld  # Also works for STM32F4
 BOARD_TYPE := STM32F107
 
 ifeq ($(BOARD_TYPE), STM32F4)
-$(info Building for STM32F4)
+#$(info Building for STM32F4)
 LIBNAME		:= opencm3_stm32f4
 ARCH_FLAGS	:= -mthumb -mcpu=cortex-m4 -mhard-float
 DEFS		+= -DSTM32F4 -DSTM32F407xx
 else ifeq ($(BOARD_TYPE), STM32F103)
-$(info Building for STM32F103)
+#$(info Building for STM32F103)
 LIBNAME		:= opencm3_stm32f1
 ARCH_FLAGS	:= -mthumb -mcpu=cortex-m3 -msoft-float
 DEFS		+= -DSTM32F1 -DSTM32F103xE
 else
-$(info Building for STM32F107)
+#$(info Building for STM32F107)
 LIBNAME		:= opencm3_stm32f1
 ARCH_FLAGS	:= -mthumb -mcpu=cortex-m3 -msoft-float
 DEFS		+= -DSTM32F1 -DSTM32F107xC
@@ -204,7 +204,7 @@ $(OPENCM3_LIB): | $(OPENCM3_DIR)
 		-x bmp_flash.scr \
 		$(OBJDIR)/$*.elf
 
-clean:
+clean clean-all:
 	@echo Cleaning
 	$(QUIET)$(RM) $(GENERATED_BINARIES) generated.* $(OBJS) $(OBJS:%.o=%.d)
 
@@ -214,12 +214,16 @@ clean:
 UDEV_DIR        := /etc/udev/rules.d
 UDEV_FILENAMES  := 70-st-link.rules 70-ttymxprog.rules
 UDEV_FILE_PATHS := $(UDEV_FILENAMES:%=$(UDEV_DIR)/%)
+ifneq (,$(wildcard $(UDEV_FILE_PATHS)))
 $(UDEV_FILE_PATHS) &:
 	sudo cp -np udev/* $(UDEV_DIR)
 	sudo udevadm control --reload
+else
+$(UDEV_FILE_PATHS) &:
+endif
 
 # Write STM32 flash using DFU mode
-just-dfu: $(UDEV_FILE_PATHS)
+just-dfu:
 	$(DFU_UTIL) --device 0483:df11 --alt 0 --download $(BINARY).bin --dfuse-address 0x08000000:leave
 
 dfu-unprotect: $(UDEV_FILE_PATHS)
@@ -260,7 +264,7 @@ just-protect: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 just-clobber: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --reset write flash_clobber.bin 0x1ffff800
 
-dfu: all just-dfu
+dfu: all $(UDEV_FILE_PATHS) just-dfu
 flash: all just-flash
 
 # Connect to remote STM32 via ST-Link (follow with "make gdb")
@@ -282,4 +286,4 @@ $(ST_TOOLS_PATH)/st-flash build-stutils: | $(ST_BUILD_DIR)
 gdb:
 	gdb -q -x .gdbinit $(BINARY).elf
 
-.PHONY: images clean get-stutils build_stutils stlink dfu flash just-dfu just-flash just-unprotect just-dfu dfu-unprotect clean size elf bin hex srec list udev-files
+.PHONY: images clean get-stutils build_stutils stlink dfu flash just-dfu just-flash just-unprotect just-dfu dfu-unprotect size elf bin hex srec list udev-files

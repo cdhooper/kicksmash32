@@ -23,6 +23,8 @@ that system enough to confirm.
     screwdriver, be very careful to not damage traces on your motherboard.
 
 4. Install KickSmash in place of the ROMs
+    The USB connector of KickSmash should face the same side of the ROM
+    sockets as the notch of the ROMs you've removed.
     In the Amiga 3000, KickSmash will be oriented with the USB-C
     connector facing Gary.
     In the Amiga 4000, KickSmash will be oriented with the USB-C
@@ -34,8 +36,8 @@ that system enough to confirm.
 5. Attach your KBRST wire to the KBRST pin on KickSmash
 
 6. Optionally attach your ST-Link
-    You can do this if you plan to do firmware programming. Ensure the
-    cable is oriented correctly.
+    It's not necessary unless you plan to do firmware programming. Ensure
+    the cable is oriented correctly.
 
 7. Optionally attach a USB-C cable to your KickSmash
     This cable would be routed out the back of your Amiga and then

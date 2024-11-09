@@ -9,3 +9,5 @@ and Amiga 4000 computer systems. Features include:
 ![Alt text](photos/2024_11_07_kicksmash32_rev5_profile_view_2.jpg?raw=true "Kicksmash32")
 
 All hardware, firmware, and software is open source.
+
+View files in the doc directory for complete documentation.

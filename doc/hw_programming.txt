@@ -8,7 +8,15 @@ There are two ways to program firmware on your KickSmash.
 I prefer using the ST-Link for rapid programming cycles because it's
 fast and requires less manual intervention to get new firmware loaded.
 An advantage of using USB DFU mode is that it does not require any
-programmer hardware. You just need a computer which has a DFU downloader.
+programmer hardware. You just need a computer which has a DFU updater.
+On Linux, dfu-util is the recommended DFU updater. Depending on your
+Linux distribution, you might use one of the following commands to
+install it:
+    dnf install dfu-util
+    yum install dfu-util
+    apt-get install dfu-util
+On MacOS, you can install dfu-util using brew:
+    brew install dfu-util
 
 In either case, you will need a computer that you can connect by
 USB-C to your KickSmash. You will also need to build firmware for
@@ -62,6 +70,10 @@ Get all the source code from here:
     If you are using DFU mode, and the board is already connected and
     shows up on your computer, type:
         make dfu
+
+    if you are on MacOS, you might need to first build the firmware and
+    then type:
+        make just-dfu
 
     When programming in DFU mode, you should see output including the
     following:

@@ -1,0 +1,54 @@
+* What problem does KickSmash32 solve?
+
+If you need to occasionally change ROMs in your Amiga, this can be a
+tedious process with most Amiga systems. It often involves opening the
+case, removing the drives and drive tray, and may also include removing
+the CPU or removing all expansion cards.
+
+ROM images can be programmed by KickSmash32 in system by running a
+program on the Amiga. Up to eight 512 KB ROM images may be stored and
+switched between using either an Amiga command or by performing a long
+(Control-Amiga-Amiga) reset.
+
+In addition, the USB port on KickSmash32 maybe connected permanently
+to an external host so that ROM images can be programmed even when the
+Amiga is not able to boot. The Amiga must be held in reset in this case.
+
+========================================================================
+
+* Which Amiga models are supported by KickSmash32?
+
+KickSmash32 is currently only tested in Amiga 3000 rev 9 and
+Amiga 4000 rev B motherboards. It will likely work in Amiga 3000T and
+Amiga 4000T systems, but has not been tested. It will not work in
+Amiga 3000 rev 7 and below motherboards, as those require a ROM Tower.
+An Amiga 3000 ROM tower replacement with spacing identical to the
+rev 9 motherboard is in development, but is not available yet.
+
+KickSmash32 might also work in the Amiga 1200, but this has not been
+tested. With further software development, it can probably be made to
+support the Amiga 500 and 2000. A lower cost version could be made
+which supports those Amiga models.
+
+========================================================================
+
+* How do I install KickSmash32?
+
+It's recommended to connect KickSmash by USB to your PC first before
+installing it in the Amiga. This will allow you to update KickSmash
+firmware, if necessary, and program an initial Kickstart ROM image.
+See doc/sw_install.txt for instructions. Read doc/sw_hostsmash.txt for
+further information on programming Kickstart images.
+
+KickSmash requires a connection to the Amiga's KBRST signal. You will
+need to attach a jumper from a spot on the board to the KBRST pin on
+KickSmash. See doc/hw_install.txt for details on this.
+
+Download the latest software release from the KickSmash github repository:
+    https://github.com/cdhooper/kicksmash32
+
+Install files in the amiga directory on your Amiga. The sw directory
+contains hostsmash executables for Linux, Windows, and MacOS. This
+utility is used to program firmware images on KickSmash over USB.
+
+========================================================================

@@ -1,12 +1,12 @@
-PROG=hostsmash
-SRCS=hostsmash.c crc32.c version.c
+PROG1=hostsmash
+SRCS1=hostsmash.c crc32.c version.c
 PROG2=crcit
 SRCS2=crcit.c crc32.c
 CC := gcc
 #CFLAGS  := -O2 -g -pthread -Wall -Wpedantic
 #LDFLAGS := -O2 -g -lpthread
-CFLAGS  := -O0 -g -pthread -Wall -Wpedantic -Wno-variadic-macros
-LDFLAGS := -O0 -g -lpthread
+CFLAGS  := -O2 -pthread -Wall -Wpedantic -Wno-variadic-macros
+LDFLAGS := -O2 -lpthread
 UNAME_S := $(shell uname -s)
 
 #
@@ -39,7 +39,7 @@ ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
     # -static works for Vista+, but doesn't work for XP
     LDFLAGS += -lws2_32 -static
     OBJDIR := objs.win64
-    SRCS += mingw-realpath.c
+    SRCS1 += mingw-realpath.c
     CC := x86_64-w64-mingw32-gcc
 endif
 ifneq (,$(filter $(TARGET_OS),win32))
@@ -49,8 +49,8 @@ ifneq (,$(filter $(TARGET_OS),win32))
     CC := i686-w64-mingw32-gcc
 endif
 ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
-    PROG := $(OBJDIR)/$(PROG).exe
-    PROG2 := $(OBJDIR)/$(PROG2).exe
+    PROG1 := $(PROG1).exe
+    PROG2 := $(PROG2).exe
 endif
 
 # Linux
@@ -67,9 +67,12 @@ ifeq ($(TARGET_OS),Darwin)
     OBJDIR := objs.mac
 endif
 
-ifneq ($(TARGET_OS),$(OS))
-    $(info HOST=$(OS) TARGET=$(TARGET_OS))
-endif
+OPROG1 := $(OBJDIR)/$(PROG1)
+OPROG2 := $(OBJDIR)/$(PROG2)
+
+#ifneq ($(TARGET_OS),$(OS))
+#    $(info HOST=$(OS) TARGET=$(TARGET_OS))
+#endif
 
 # If verbose is specified with no other targets, then build everything
 ifeq ($(MAKECMDGOALS),verbose)
@@ -81,12 +84,14 @@ else
 QUIET   :=
 endif
 
-OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
+OBJS1  := $(SRCS1:%.c=$(OBJDIR)/%.o)
 OBJS2  := $(SRCS2:%.c=$(OBJDIR)/%.o)
 
-nativeprog: $(PROG) $(PROG2)
+nativeprog: $(OPROG1) $(OPROG2)
+	@:
 
-all: $(PROG) $(PROG2) win32 win64
+all: $(OPROG1) $(OPROG2) win32 win64
+	@:
 
 win32:
 	$(MAKE) TARGET_OS=win32
@@ -98,23 +103,27 @@ define DEPEND_SRC
 # given source file.
 $(patsubst %,$(OBJDIR)/%,$(filter-out $(OBJDIR)/%,$(basename $(1)).o)) $(filter $(OBJDIR)/%,$(basename $(1)).o): $(1)
 endef
-$(foreach SRCFILE,$(SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE))))
+$(foreach SRCFILE,$(SRCS1),$(eval $(call DEPEND_SRC,$(SRCFILE))))
 $(foreach SRCFILE,$(SRCS2),$(eval $(call DEPEND_SRC,$(SRCFILE))))
 
 
-$(OBJS) $(OBJS2): Makefile smash_cmd.h version.h crc32.h host_cmd.h
+$(OBJS1) $(OBJS2): Makefile smash_cmd.h version.h crc32.h host_cmd.h
 $(OBJDIR)/hostsmash.o: | $(USB_HDR)
-$(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(OBJS)) Makefile
+$(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(OBJS1)) Makefile
 
-$(PROG): $(OBJS)
+$(OPROG1): $(OBJS1)
 	@echo Building $@
-	$(QUIET)$(CC) -o $@ $(OBJS) $(LDFLAGS)
+	$(QUIET)$(CC) -o $@ $(OBJS1) $(LDFLAGS)
+	@rm -f $(PROG1)
+	@ln -s $@
 
-$(PROG2): $(OBJS2)
+$(OPROG2): $(OBJS2)
 	@echo Building $@
 	$(QUIET)$(CC) -o $@ $(OBJS2) $(LDFLAGS)
+	@rm -f $(PROG2)
+	@ln -s $@
 
-$(sort $(OBJS) $(OBJS2)): Makefile | $(OBJDIR)
+$(sort $(OBJS1) $(OBJS2)): Makefile | $(OBJDIR)
 	@echo Building $@
 	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -o $@
 
@@ -130,6 +139,12 @@ $(USB_HDR):
 
 clean:
 	@echo Cleaning
-	$(QUIET)rm -rf $(PROG) $(OBJDIR)
+	$(QUIET)rm -rf $(OPROG1) $(OPROG2) $(OBJDIR)
+
+clean-all: clean
+	@$(MAKE) TARGET_OS=win32 clean
+	@$(MAKE) TARGET_OS=win64 clean
 
 verbose:
+
+.PHONY: all clean clean-all verbose nativeprog

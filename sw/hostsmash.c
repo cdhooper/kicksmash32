@@ -15,6 +15,9 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdarg.h>
+#ifdef OSX
+#include <sys/time.h>
+#endif
 #ifdef __MINGW32__
 #include <sys/utime.h>
 #define handle_t winhandle_t
@@ -51,6 +54,17 @@ typedef unsigned int uint;
 #include "smash_cmd.h"
 #include "host_cmd.h"
 #include "version.h"
+
+#ifdef __clang__
+#define ATTRIBUTE_PRINTF __attribute__((format(printf, 1, 2)))
+#else
+#define ATTRIBUTE_PRINTF __attribute__((format(__gnu_printf__, 1, 2)))
+#endif
+
+#ifdef OSX
+#define lseek64 lseek
+#define off64_t off_t
+#endif
 
 #define FILE_DEBUG
 #ifndef FILE_DEBUG
@@ -157,11 +171,11 @@ static uint debug_fs = 0;
 static uint debug_msg = 0;
 
 #ifdef FILE_DEBUG
-__attribute__((format(__gnu_printf__, 1, 2)))
+ATTRIBUTE_PRINTF
 int
 fsprintf(const char *fmt, ...)
 {
-    int rc;
+    int rc = 0;
     va_list args;
 
     if (debug_fs) {
@@ -175,11 +189,11 @@ fsprintf(const char *fmt, ...)
 #endif
 
 #ifdef MSG_DEBUG
-__attribute__((format(__printf__, 1, 2)))
+ATTRIBUTE_PRINTF
 int
 msgprintf(const char *fmt, ...)
 {
-    int rc;
+    int rc = 0;
     va_list args;
 
     if (debug_msg) {
@@ -189,6 +203,15 @@ msgprintf(const char *fmt, ...)
     }
 
     return (rc);
+}
+#endif
+
+#ifdef OSX
+static void
+timespec_to_timeval(struct timeval *tv, struct timespec *ts)
+{
+    tv->tv_sec = ts->tv_sec;
+    tv->tv_usec = ts->tv_nsec / 1000;
 }
 #endif
 
@@ -5525,7 +5548,48 @@ reply_setdate_fail:
         hm->hm_hdr.km_status = errno_to_km_status();
         goto reply_setdate_fail;
     }
+#elif defined (OSX)
+    /* MacOS */
+    struct timeval times[2];
+    timespec_to_timeval(&times[0], &statbuf.st_atimespec);  // last access time
+    timespec_to_timeval(&times[1], &statbuf.st_ctimespec);  // last modify time
+
+    switch (which) {
+        case 0: // Set the modify date/time
+            times[1].tv_sec  = utcsec;
+            times[1].tv_usec = nsec / 1000;
+            break;
+        case 1: // Get the modify date/time
+            hm->hm_time    = SWAP32(statbuf.st_ctimespec.tv_sec);
+            hm->hm_time_ns = SWAP32(statbuf.st_ctimespec.tv_nsec);
+            goto reply_setdate_good;
+        case 2: // Set the change date/time
+            /* Not sure how to set this one */
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
+            goto reply_setdate_fail;
+        case 3: // Get the change date/time
+            hm->hm_time    = SWAP32(statbuf.st_ctimespec.tv_sec);
+            hm->hm_time_ns = SWAP32(statbuf.st_ctimespec.tv_nsec);
+            goto reply_setdate_good;
+        case 4: // Set the access date/time
+            times[0].tv_sec  = utcsec;
+            times[0].tv_usec = nsec / 1000;
+            break;
+        case 5: // Get the access date/time
+            hm->hm_time    = SWAP32(statbuf.st_atimespec.tv_sec);
+            hm->hm_time_ns = SWAP32(statbuf.st_atimespec.tv_nsec);
+            goto reply_setdate_good;
+        default:
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
+            goto reply_setdate_fail;
+    }
+    if (utimes(path, times)) {
+        fsprintf("utimes fail: %d\n", errno);
+        hm->hm_hdr.km_status = errno_to_km_status();
+        goto reply_setdate_fail;
+    }
 #else
+    /* Linux */
     struct timespec times[2];
     times[0] = statbuf.st_atim;  // last access time
     times[1] = statbuf.st_ctim;  // last modification time
