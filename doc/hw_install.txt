@@ -15,8 +15,7 @@ that system enough to confirm.
     1 or pin 3 of U713. You can also attach to pin 6 of RP701 if you
     want to be more discrete. I usually solder this side and then run a
     wire to a Dupont connector for attaching to the KickSmash.
-    For the Amiga 4000, I recommend using U141 pin 1 or pin 3, or attach
-    to one side (NOT the 5V side) of R120.
+    For the Amiga 4000, I recommend using U141 pin 1 or pin 3.
 
 3. Remove your old Kickstart ROMs
     It's best to use a chip extractor to remove the ROM chips. If you must use a flat head

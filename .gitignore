@@ -8,6 +8,7 @@
 *.hex
 *.map
 *.swp
+*.dis
 *.stylecheck
 generated.*.ld
 .gdb_history
