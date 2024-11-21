@@ -67,6 +67,8 @@ ifeq ($(TARGET_OS),Darwin)
     OBJDIR := objs.mac
 endif
 
+#CFLAGS += -fanalyzer
+
 OPROG1 := $(OBJDIR)/$(PROG1)
 OPROG2 := $(OBJDIR)/$(PROG2)
 

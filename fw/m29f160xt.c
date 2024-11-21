@@ -657,9 +657,16 @@ ee_wait_for_done_status(uint32_t timeout_usec, int verbose, int mode)
                 return (0);
             }
         } else {
-            if (same_count)
+            if (same_count) {
+                /*
+                 * Read a different status value after flash status stopped
+                 * updating. This should not happen unless a flash data line
+                 * is floating or the flash is somehow responding to OE from
+                 * phantom sources.
+                 */
                 printf("S");
-            same_count = 0;
+                same_count = 0;
+            }
             lstatus = status;
         }
 

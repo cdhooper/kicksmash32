@@ -9,6 +9,13 @@ The hostsmash utility has three main functions:
     * Program Kickstart ROM firmware stored in KickSmash flash
     * Serve local file storage to the Amiga
 
+Other documentation sections:
+    * Provide current time to the Amiga
+    * Hostsmash command arguments
+    * Hostsmash on Windows
+    * Hostsmash future development
+
+===========================================================================
 
 Connecting to the KickSmash firmware CLI
 ----------------------------------------
@@ -363,6 +370,19 @@ you can return to the volume directory using "cd ::"
         9.OS322:>
 
 
+Provide current time to the Amiga
+---------------------------------
+The hostsmash command can be used to set the current time for KickSmash,
+which can then provide that clock to the Amiga via the smash command.
+Since KickSmash does not have a battery-backed RTC, it will need the time
+set at each power cycle, unless it's also connected to your USB host.
+Use the following command to set the KickSmash clock:
+    hostsmash -c set
+
+From your Amiga, you can retrieve the current time from Kicksmash using
+    smash -c load
+
+
 Hostsmash command arguments
 ---------------------------
 This section documents all hostsmash command arguments, including
@@ -372,6 +392,7 @@ All hostsmash command options:
     -A --all                show all verify miscompares
     -a --addr <addr>        starting EEPROM address
     -b --bank <num>         starting EEPROM address as multiple of file size
+    -c --clock [show|set]   show or set Kicksmash time of day clock
     -D --delay <msec>       pacing delay between sent characters (ms)
     -d --device <filename>  serial device to use (e.g. /dev/ttyACM0)
     -e --erase              erase EEPROM (use -a <addr> for sector erase)
@@ -518,6 +539,11 @@ Debug options
         Output from KickSmash should be also dumped in hexadecimal.
         This is useful if you are debugging binary data (such as
         service messages) from the Amiga through KickSmash.
+
+Other options
+    -c --clock [show|set]   show or set Kicksmash time of day clock
+        Hostsmash can provide the current local time to KickSmash, which
+        can then be read from the Amiga using the "smash -c load" command.
 
 
 Hostsmash on Windows

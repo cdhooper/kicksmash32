@@ -65,7 +65,8 @@ void usb_rb_put(uint ch);
  */
 int input_break_pending(void);
 
-int uart_putchar(int ch);
+void uart_putchar(int ch);
+void uart_puts(const char *str);
 void uart_flush(void);
 int puts_binary(const void *buf, uint32_t len);
 

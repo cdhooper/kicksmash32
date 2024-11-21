@@ -532,11 +532,11 @@ Length 0x8000 is 32 KB.
 Clock
 -----
 The smash clock command may also be used to save and restore the Amiga
-system clock from KickSmash. This is not currently terribly useful because
-KickSmash does not have battery backup. It will lose the current time
-at a power cycle, unless it is also being powered by USB-C. In the
-future, the hostsmash utility will be able to set the KickSmash clock
-from your host PC's own system clock.
+system clock from KickSmash. This is not terribly useful unless your Amiga
+is connected to a USB host, as KickSmash does not have battery backup. It
+will lose the current time at a power cycle, unless it is also being powered
+by USB-C. The hostsmash utility is able to set the KickSmash clock from your
+host PC's own system clock with the "hostsmash -c set" command.
 
 The smash clock command has several options:
     9.OS322:> smash clock help
@@ -558,6 +558,18 @@ around +/- 20 ppm (pulses per million). At 20 ppm, the worst case drift
 should be about 1.72 seconds per day.
 
 The smash clock load command will set the Amiga's time based on the
-KickSmash board's current time.  The loadifset command is similar, but
+KickSmash board's current time. The loadifset command is similar, but
 will not generate an error message (and of course not perform the load)
-if the KickSmash clock has not been set.
+if the KickSmash clock has not been set. If your Amiga's RTC is not
+functioning, you can put the following in your Startup-Sequence to
+acquire the time from KickSmash if it has been set there:
+    smash -c loadifset
+
+If your Amiga's RTC is functioning, and assuming hostsmash has provided
+the current time to KickSmash, you can use "smash -c load" followed by
+"SetClock save" to accurately set your Amiga RTC. Example:
+    8.OS322:> smash -c load
+    15-Nov-24 12:14:22.536350
+    8.OS322:> SetClock save
+    8.OS322:> date
+    Friday 15-Nov-24 12:14:30

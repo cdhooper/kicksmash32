@@ -14,7 +14,7 @@
  * THE AUTHOR ASSUMES NO LIABILITY FOR ANY DAMAGE ARISING OUT OF THE USE
  * OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
  */
-const char *version = "\0$VER: smashftp 1.0 ("__DATE__") © Chris Hooper";
+const char *version = "\0$VER: smashftp 1.1 ("__DATE__") © Chris Hooper";
 
 #include <stdio.h>
 #include <stdint.h>
@@ -107,6 +107,17 @@ is_user_abort(void)
     if (SetSignal(0, 0) & SIGBREAKF_CTRL_C)
         return (1);
     return (0);
+}
+
+/*
+ * clear_user_abort
+ * ----------------
+ * Clear any pending user abort signal.
+ */
+void
+clear_user_abort(void)
+{
+    SetSignal(0, SIGBREAKF_CTRL_C);
 }
 
 static uint64_t
@@ -920,6 +931,7 @@ get_file(const char *src, const char *dst)
         }
         rc = sm_fread(handle, buflen, (void **) &data, &rlen, 0);
         if (rlen == 0) {
+failed_to_read:
             printf("Failed to read %s at pos %x: %s\n",
                    src, (uint) pos, smash_err(rc));
             break;
@@ -934,6 +946,8 @@ get_file(const char *src, const char *dst)
             break;
         }
         pos += rlen;
+        if (rc != RC_SUCCESS)
+            goto failed_to_read;
     }
     time_end = smash_time();
     diff = (uint) (time_end - time_start);

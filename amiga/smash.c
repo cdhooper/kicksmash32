@@ -14,7 +14,7 @@
  * THE AUTHOR ASSUMES NO LIABILITY FOR ANY DAMAGE ARISING OUT OF THE USE
  * OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
  */
-const char *version = "\0$VER: smash 1.0 ("__DATE__") © Chris Hooper";
+const char *version = "\0$VER: smash 1.1 ("__DATE__") © Chris Hooper";
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -3233,11 +3233,11 @@ cmd_clock(int argc, char *argv[])
                 switch (*ptr) {
                     case 'h':  // load
                         goto usage;
+                    case 'k':  // load if set
+                        flag_load_if_set++;
+                        break;
                     case 'l':  // load
                         flag_load++;
-                        break;
-                    case 'L':  // load if set
-                        flag_load_if_set++;
                         break;
                     case 'n':  // save if not set
                         flag_save_if_not_set++;
@@ -3262,7 +3262,8 @@ usage:
             return (rc);
         }
     }
-    if ((flag_load == 0) && (flag_save == 0) && (flag_save_if_not_set == 0))
+    if ((flag_load == 0) && (flag_load_if_set == 0) &&
+        (flag_save == 0) && (flag_save_if_not_set == 0))
         flag_show++;
 
     if (flag_load || flag_load_if_set) {
@@ -3412,7 +3413,7 @@ main(int argc, char *argv[])
                         exit(1);
                 }
             }
-        } else if ((*ptr >= '0') && (*ptr < '4') && (ptr[1] == '\0')) {
+        } else if ((*ptr >= '0') && (*ptr <= '4') && (ptr[1] == '\0')) {
             flag_test_mask |= BIT(*ptr - '0');
             flag_test++;
         } else {

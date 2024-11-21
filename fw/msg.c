@@ -920,7 +920,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             break;  // End processing
         case KS_CMD_ID: {
-            /* Send Kickflash identification and configuration */
+            /* Send KickSmash identification and configuration */
             smash_id_t reply;
             uint temp[3];
             uint pos = 0;
@@ -2080,7 +2080,7 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             break;  // End processing
         case KS_CMD_ID: {
-            /* Send Kickflash identification and configuration */
+            /* Send KickSmash identification and configuration */
             smash_id_t reply;
             uint temp[3];
             int  pos = 0;
@@ -2320,6 +2320,41 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
                 cons_utoa = prod_utoa;
             usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             break;
+        case KS_CMD_CLOCK: {
+            uint64_t  now  = timer_tick_get();
+            uint64_t  usec = timer_tick_to_usec(now);
+            uint32_t  am_time[2];
+
+            if (cmd & (KS_CLOCK_SET | KS_CLOCK_SET_IFNOT)) {
+                uint32_t t_usec;
+                uint32_t t_sec;
+
+                if (cmd_len != 8) {
+                    usb_msg_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                    break;
+                }
+                memcpy(am_time, buf, sizeof (am_time));
+                t_sec  = am_time[0];
+                t_usec = am_time[1];
+                if (((cmd & KS_CLOCK_SET_IFNOT) == 0) || (amiga_time == 0))
+                    amiga_time = t_sec * 1000000ULL + t_usec - usec;
+                usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            } else {
+                if (amiga_time == 0) {
+                    am_time[0] = 0;
+                    am_time[1] = 0;
+                } else {
+                    uint64_t both   = usec + amiga_time;
+                    uint32_t t_usec = both % 1000000;
+                    uint32_t t_sec  = both / 1000000;
+                    am_time[0] = t_sec;
+                    am_time[1] = t_usec;
+                }
+                usb_msg_reply(0, KS_STATUS_OK, sizeof (am_time), &am_time,
+                              0, NULL);
+            }
+            break;
+        }
         default:
             fail_cmd_u++;
             break;

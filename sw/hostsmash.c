@@ -15,9 +15,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdarg.h>
-#ifdef OSX
 #include <sys/time.h>
-#endif
 #ifdef __MINGW32__
 #include <sys/utime.h>
 #define handle_t winhandle_t
@@ -112,6 +110,7 @@ static char short_opts[] = {
     'A',         // --all
     'a', ':',    // --addr <addr>
     'b', ':',    // --bank <num>
+    'c', ':',    // --clock [show|set]
     'D', ':',    // --delay <num>
     'd', ':',    // --device <filename>
     'e',         // --erase
@@ -136,6 +135,7 @@ static const char usage_text[] =
 "    -A --all                show all verify miscompares\n"
 "    -a --addr <addr>        starting EEPROM address\n"
 "    -b --bank <num>         starting EEPROM address as multiple of file size\n"
+"    -c --clock [show|set]   show or set Kicksmash time of day clock\n"
 "    -D --delay <msec>       pacing delay between sent characters (ms)\n"
 "    -d --device <filename>  serial device to use (e.g. /dev/ttyACM0)\n"
 #ifdef FILE_DEBUG
@@ -216,14 +216,16 @@ timespec_to_timeval(struct timeval *tv, struct timespec *ts)
 #endif
 
 /* Command line modes which may be specified by the user */
-#define MODE_UNKNOWN 0x00
-#define MODE_ERASE   0x01
-#define MODE_ID      0x02
-#define MODE_READ    0x04
-#define MODE_TERM    0x08
-#define MODE_VERIFY  0x10
-#define MODE_WRITE   0x20
-#define MODE_MSG     0x40
+#define MODE_UNKNOWN   0x0000
+#define MODE_ERASE     0x0001
+#define MODE_ID        0x0002
+#define MODE_READ      0x0004
+#define MODE_TERM      0x0008
+#define MODE_VERIFY    0x0010
+#define MODE_WRITE     0x0020
+#define MODE_MSG       0x0040
+#define MODE_CLOCK_GET 0x0100
+#define MODE_CLOCK_SET 0x0200
 
 /* XXX: Need to register USB device ID at http://pid.codes */
 #define MX_VENDOR 0x1209
@@ -551,10 +553,6 @@ usage(FILE *fp)
     (void) fputs(usage_text, fp);
 }
 
-
-#if defined(DEBUG_READ_DATA)
-#define VALUE_UNASSIGNED 0xffffffff
-
 static char
 printable_ascii(uint8_t ch)
 {
@@ -564,6 +562,9 @@ printable_ascii(uint8_t ch)
         return (' ');
     return ('.');
 }
+
+#if defined(DEBUG_READ_DATA)
+#define VALUE_UNASSIGNED 0xffffffff
 
 static void
 dump_memory(void *buf, uint len, uint dump_base)
@@ -773,6 +774,13 @@ tx_rb_flushed(void)
         return (FALSE);  // Ring buffer has output pending
 }
 
+#ifdef WIN32
+#include <windows.h>
+#elif _POSIX_C_SOURCE >= 199309L
+#include <time.h>   // for nanosleep
+#else
+#include <unistd.h> // for usleep
+#endif
 
 /*
  * time_delay_msec() will delay for a specified number of milliseconds.
@@ -786,9 +794,18 @@ time_delay_msec(int msec)
 {
 #ifdef __MINGW32__
     Sleep(msec);
-#else
+#elif _POSIX_C_SOURCE >= 199309L
+    struct timespec ts;
+    ts.tv_sec = msec / 1000;
+    ts.tv_nsec = (msec % 1000) * 1000000;
+    nanosleep(&ts, NULL);
+#elif 0
     if (poll(NULL, 0, msec) < 0)
         warn("poll() failed");
+#else
+    if (msec >= 1000)
+        sleep(msec / 1000);
+    usleep((msec % 1000) * 1000);
 #endif
 }
 
@@ -2152,10 +2169,10 @@ eeprom_read(const char *filename, uint bank, uint addr, uint len)
     snprintf(cmd, sizeof (cmd) - 1, "prom read %x %x", addr, len);
     cmd[sizeof (cmd) - 1] = '\0';
     if (send_cmd(cmd))
-        return; // "timeout" was reported in this case
+        goto read_fail; // "timeout" was reported in this case
     rxcount = receive_ll_crc(eebuf, len);
     if (rxcount == -1)
-        return;  // Send error was reported
+        goto read_fail;  // Send error was reported
     if (rxcount < len) {
         printf("Receive failed at byte 0x%x.\n", rxcount);
         if (strncmp(eebuf + rxcount - 11, "FAILURE", 8) == 0) {
@@ -2176,6 +2193,7 @@ eeprom_read(const char *filename, uint bank, uint addr, uint len)
         printf("Read 0x%x bytes from device and wrote to file %s\n",
                rxcount, filename);
     }
+read_fail:
     free(eebuf);
 }
 
@@ -2333,18 +2351,23 @@ eeprom_verify(const char *filename, uint addr, uint len, uint miscompares_max)
 
     snprintf(cmd, sizeof (cmd) - 1, "prom read %x %x", addr, len);
     cmd[sizeof (cmd) - 1] = '\0';
-    if (send_cmd(cmd))
-        return (1); // "timeout" was reported in this case
+    if (send_cmd(cmd)) {
+        /* "timeout" was reported in this case */
+fail_verify_read:
+        free(eebuf);
+        free(filebuf);
+        return (1);
+    }
     rxcount = receive_ll_crc(eebuf, len);
     if (rxcount <= 0)
-        return (1); // "timeout" was reported in this case
+        goto fail_verify_read; // "timeout" was reported in this case
     if (rxcount < len) {
         if (strncmp(eebuf + rxcount - 11, "FAILURE", 8) == 0) {
             rxcount -= 11;
             printf("Read %.11s\n", eebuf + rxcount);
         }
         printf("Only read 0x%x bytes of expected 0x%x\n", rxcount, len);
-        return (1);
+        goto fail_verify_read;
     }
 
     /* Compare two buffers */
@@ -3147,7 +3170,7 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
     uint     pos = 0;
     uint32_t crc = 0;
     uint8_t *bufp = (uint8_t *)buf;
-    const uint timeout = 1000;
+    const uint timeout = 500;
     uint32_t crc_rx = 0;
     int timeout_count = 0;
     uint8_t  localbuf[4096];
@@ -3155,6 +3178,7 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
     if (buf == NULL) {
         bufp = localbuf;
         buflen = sizeof (localbuf);
+        memset(localbuf, 0, buflen);
     }
 
     while (1) {
@@ -3181,12 +3205,14 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
                     printf("%04x ", len);
                 if (pos > sizeof (sm_magic) + 4)
                     printf("%04x ", status);
-                for (cur = 0; cur < pos - KS_MSG_HEADER_LEN; cur++) {
-                    if (cur >= (buflen - 1)) {
-                        printf("...\n");
-                        break;
+                if (pos > KS_MSG_HEADER_LEN) {
+                    for (cur = 0; cur < pos - KS_MSG_HEADER_LEN; cur++) {
+                        if (cur >= (buflen - 1)) {
+                            printf("...\n");
+                            break;
+                        }
+                        printf(" %02x", bufp[cur ^ 1]);
                     }
-                    printf(" %02x", bufp[cur ^ 1]);
                 }
                 if (pos - KS_MSG_HEADER_LEN < len) {
                     printf(" [data short by %ld bytes]\n",
@@ -3230,10 +3256,12 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
             case 5:  // Magic
             case 6:  // Magic
             case 7:  // Magic
-                if (ch != sm_magic_b[pos])
+                if (ch != sm_magic_b[pos]) {
                     pos = 0;
-                else
+                    printf("[%02x %c]", ch, printable_ascii(ch));
+                } else {
                     pos++;
+                }
                 break;
             case 8:  // Length phase 1
                 len = ch;
@@ -3317,16 +3345,10 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
     }
 }
 
-#ifdef STATIC_SEND_KS_CMD
-static uint
-send_ks_cmd(uint cmd, void *txbuf, uint txlen, void *rxbuf, uint rxmax,
-            uint *rxstatus, uint *rxlen, uint flags)
-#else
 __attribute__((noinline))
 static uint
 send_ks_cmd(uint cmd, void *txbuf, uint txlen, void *rxbuf, uint rxmax,
             uint *rxstatus, uint *rxlen, uint flags)
-#endif
 {
     uint rc;
     rc = send_ks_cmd_core(cmd, txlen, txbuf);
@@ -3430,6 +3452,33 @@ send_msg(void *buf, uint len, uint *status)
             memcpy(msgbuf + sizeof (km_msg_hdr_t),
                    (uint8_t *)buf + pos, bodylen_rounded);
             sendlen = bodylen + sizeof (km_msg_hdr_t);
+
+#undef DO_REMOTE_SPACE_CHECK
+#ifdef DO_REMOTE_SPACE_CHECK
+            /*
+             * The check for space significantly impacts file send time
+             * (dropping from ~85 KB/sec to ~60 KB/sec. It is not really
+             * needed based on the current protocol, so it is skipped.
+             */
+            uint timeout = 100;
+            do {
+                /* Wait for space */
+                smash_msg_info_t mi;
+                rc = send_ks_cmd(KS_CMD_MSG_INFO, NULL, 0, &mi, sizeof (mi),
+                                 status, NULL, 0);
+                mi.smi_utoa_avail = SWAP16(mi.smi_utoa_avail);
+                if (mi.smi_utoa_avail >= sendlen)
+                    break;
+                time_delay_msec(1);
+            } while (timeout--);
+
+            if (timeout == 0) {
+                printf("Send timeout waiting for len=%x buffer at %x of %x\n",
+                       sendlen, pos - SEND_MSG_MAX, len - SEND_MSG_MAX);
+                rc = RC_TIMEOUT;
+                break;
+            }
+#endif
             rc = send_ks_cmd(KS_CMD_MSG_SEND, msgbuf, sendlen, NULL, 0,
                              status, NULL, 0);
             if (rc != 0) {
@@ -3581,7 +3630,6 @@ make_amiga_relpath(handle_ent_t **parent, const char *name)
                     ((pathname[0] == '.') && (pathname[1] == '.') &&
                      (pathname[2] == ':') && (pathname[3] == '\0'))) {
                     /* Got "" or "." or ".." at volume directory */
-                    tptr = pathname;
                     goto get_rel_restart;
                 }
 #ifdef REL_PATH_DEBUG
@@ -3794,7 +3842,7 @@ make_host_relative_path(char *target_path, char *link_path)
     char         *target_path_save;
     char         *link_path_save;
     char         *target_next;
-    char         *link_next;
+    char         *link_next = NULL;
     uint          pcount;
 
     fsprintf("start: tpath=%s lpath=%s\n", target_path, link_path);
@@ -4322,7 +4370,9 @@ reply_open_fail:
         handle = handle_new(name, host_path, phandle, hm_type, hm_mode);
         fsprintf("dirmode phandle %x handle %x avolume=%s name=%s\n",
                  (phandle != NULL) ? phandle->he_handle : 0,
-                 handle->he_handle, handle->he_avolume->av_volume, name);
+                 handle->he_handle,
+                 (handle->he_avolume != NULL) ? handle->he_avolume->av_volume :
+                 "(NULL)", name);
         free(name);
         goto open_success;
     } else if (hm_type == HM_TYPE_DIR) {
@@ -4687,7 +4737,12 @@ dir_read_common:
             } else {
                 uint skip = 0;
                 do {
-                    dp = readdir(handle->he_dir);
+                    if (handle->he_dir == NULL) {
+                        printf("NULL dir handle for %x\n", handle->he_handle);
+                        dp = NULL;
+                    } else {
+                        dp = readdir(handle->he_dir);
+                    }
                     skip = 0;
                     if (dp != NULL) {
                         char *end;
@@ -4783,8 +4838,13 @@ dir_read_common:
                 size_lo = (uint32_t) fs_used;
                 hm_dirent->hmd_blksize = SWAP32(fs_blksize);
                 hm_dirent->hmd_blks    = SWAP32(size_lo);
-                hm_dirent->hmd_ino     = vol->av_flags;
-                hm_dirent->hmd_nlink   = vol->av_bootpri;
+                if (vol == NULL) {
+                    hm_dirent->hmd_ino   = 0;
+                    hm_dirent->hmd_nlink = 1;
+                } else {
+                    hm_dirent->hmd_ino   = vol->av_flags;
+                    hm_dirent->hmd_nlink = vol->av_bootpri;
+                }
                 size_hi = (uint32_t) (fs_size >> 32);
                 size_lo = (uint32_t) fs_size;
 
@@ -4860,11 +4920,7 @@ dir_read_common:
                     hm_dirent->hmd_ogid = SWAP32(st.st_gid);
                     hm_dirent->hmd_mode = SWAP32(st.st_mode);
 
-#ifdef __MINGW32__
                     size_hi = ((uint64_t) st.st_size) >> 32;
-#else
-                    size_hi = st.st_size >> 32;
-#endif
                     size_lo = (uint32_t) st.st_size;
                     hmd_type = st_mode_to_hm_type(st.st_mode);
                     amiga_perms = amiga_perms_from_host(st.st_mode);
@@ -5282,6 +5338,8 @@ sm_fdelete(hm_fhandle_t *hm, uint *status)
     if ((name = make_amiga_relpath(&phandle, hm_name)) == NULL) {
         fsprintf("fdelete(%s) relative path failed\n", hm_name);
 reply_delete_fail:
+        if (host_path != NULL)
+            free(host_path);
         if (name != NULL)
             free(name);
         hm->hm_handle = 0;
@@ -5297,8 +5355,6 @@ reply_delete_fail:
         goto reply_delete_fail;
     }
     host_path = make_host_path(phandle->he_avolume, name);
-    free(name);
-    name = NULL;
 
     if (lstat(host_path, &st) != 0) {
         fsprintf("fdelete(%s) stat fail errno=%d\n", host_path, errno);
@@ -5336,6 +5392,8 @@ reply_delete_fail:
             }
             break;
     }
+    free(name);
+    free(host_path);
     return (send_msg(hm, sizeof (*hm), status));
 }
 
@@ -5347,8 +5405,8 @@ sm_frename(hm_frename_t *hm, uint *status)
     char         *name_old     = (char *)(hm + 1);
     uint          len_old_name = strlen(name_old) + 1;
     char         *name_new     = name_old + len_old_name;
-    char         *path_old;
-    char         *path_new;
+    char         *path_old     = NULL;
+    char         *path_new     = NULL;
     char         *apath_old    = NULL;
     char         *apath_new    = NULL;
 
@@ -5364,6 +5422,10 @@ reply_rename_fail:
             free(apath_old);
         if (apath_new != NULL)
             free(apath_new);
+        if (path_old != NULL)
+            free(path_old);
+        if (path_new != NULL)
+            free(path_new);
         hm->hm_shandle = 0;
         hm->hm_dhandle = 0;
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
@@ -5408,6 +5470,8 @@ reply_rename_fail:
         hm->hm_hdr.km_status = errno_to_km_status();
         goto reply_rename_fail;
     }
+    free(path_old);
+    free(path_new);
     free(apath_old);
     free(apath_new);
 
@@ -5703,8 +5767,8 @@ sm_fsetprotect(hm_fopenhandle_t *hm, uint *status)
 {
     /* Resolve handle to Amiga-specific path */
     handle_ent_t *phandle = handle_get(hm->hm_handle);
-    char         *name   = (char *)(hm + 1);
-    char         *path;
+    char         *name    = (char *)(hm + 1);
+    char         *path    = NULL;
     char         *apath;
     uint32_t      aperms = SWAP32(hm->hm_aperms);
     uint          uperms;
@@ -5715,6 +5779,8 @@ sm_fsetprotect(hm_fopenhandle_t *hm, uint *status)
     if ((apath = make_amiga_relpath(&phandle, name)) == NULL) {
         fsprintf("fsetprotect(%s) relative path failed\n", name);
 reply_setprotect_fail:
+        if (path != NULL)
+            free(path);
         if (apath != NULL)
             free(apath);
         hm->hm_handle = 0;
@@ -5747,6 +5813,7 @@ reply_setprotect_fail:
     }
 
     free(apath);
+    free(path);
 
     hm->hm_hdr.km_status = KM_STATUS_OK;
     return (send_msg(hm, sizeof (*hm), status));
@@ -5842,6 +5909,7 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
 
         printf("KS send_msg failure op=%x status=%02x: %d (%s)\n",
                km->km_op, status, rc, smash_err(rc));
+        time_delay_msec(100);
     } while (retry-- > 0);
 }
 
@@ -5969,6 +6037,75 @@ run_message_mode(void)
     }
 }
 
+/* Amiga time is in seconds since 1978 */
+#define AMIGA_SEC_TO_UNIX_SEC (2922 * 24 * 60 * 60)  // 1978 - 1970 = 2922 days
+
+static rc_t
+clock_ks_set(int enter)
+{
+    rc_t rc = 0;
+    uint32_t amtime[2];
+    struct timeval tv;
+    struct timezone tz;
+    uint rxlen;
+    uint status;
+
+    if (gettimeofday(&tv, &tz)) {
+        printf("gettimeofday failed: %d\n", errno);
+        return (RC_FAILURE);
+    }
+    amtime[0] = get_localtime(tv.tv_sec - AMIGA_SEC_TO_UNIX_SEC);
+    amtime[1] = tv.tv_usec;
+
+    if (enter && send_cmd("prom service")) {
+        printf("could not enter prom service\n");
+        return (RC_TIMEOUT); // "timeout" was reported in this case
+    }
+    rc = send_ks_cmd(KS_CMD_CLOCK | KS_CLOCK_SET, amtime, sizeof (amtime),
+                     NULL, 0, &status, &rxlen, 0);
+    if (rc != 0) {
+        printf("KS clock set failed: %d (%s)\n", rc, smash_err(rc));
+        return (rc);
+    }
+    return (rc);
+}
+
+static rc_t
+clock_ks_show(int enter)
+{
+    time_t timev;
+    uint32_t amtime[2];
+    struct tm *tm;
+    uint rxlen;
+    uint status;
+    rc_t rc;
+
+    if (enter && send_cmd("prom service")) {
+        printf("could not enter prom service\n");
+        return (RC_TIMEOUT); // "timeout" was reported in this case
+    }
+    rc = send_ks_cmd(KS_CMD_CLOCK, NULL, 0, amtime, sizeof (amtime), &status,
+                     &rxlen, 0);
+    if (rc != 0) {
+        printf("KS clock request failed: %d (%s)\n", rc, smash_err(rc));
+        return (rc);
+    }
+
+    if ((amtime[0] == 0) && (amtime[1] == 0)) {
+        printf("Kicksmash time has not been set\n");
+        return (RC_FAILURE);
+    }
+
+    timev = get_utctime(amtime[0] + AMIGA_SEC_TO_UNIX_SEC);
+    tm = localtime(&timev);
+
+    printf("%04u-%02u-%02u %02u:%02u:%02u.%06u\n",
+            tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+            tm->tm_hour, tm->tm_min, tm->tm_sec, amtime[1]);
+    return (0);
+}
+
+
 /*
  * run_mode() handles command line options provided by the user.
  *
@@ -6006,6 +6143,14 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
     if (mode & MODE_MSG) {
         run_message_mode();
         return (0);
+    }
+    if (mode & (MODE_CLOCK_GET | MODE_CLOCK_SET)) {
+        int enter = 1;
+        if (mode & MODE_CLOCK_SET)
+            clock_ks_set(enter--);
+
+        // XXX: Also add regular clock set service to message mode
+        return (clock_ks_show(enter));
     }
     if (((filename == NULL) || (filename[0] == '\0')) &&
         (mode & (MODE_READ | MODE_VERIFY | MODE_WRITE))) {
@@ -6178,16 +6323,27 @@ errx(EXIT_FAILURE, "how did we get here?");
             case 'A':
                 report_max = 0xffffffff;
                 break;
-            case 'a':
+            case 'a':  // address
                 if ((sscanf(optarg, "%i%n", (int *)&baseaddr, &pos) != 1) ||
                     (optarg[pos] != '\0') || (pos == 0)) {
                     errx(EXIT_FAILURE, "Invalid address \"%s\"", optarg);
                 }
                 break;
-            case 'b':
+            case 'b':  // bank
                 if ((sscanf(optarg, "%i%n", (int *)&bank, &pos) != 1) ||
                     (optarg[pos] != '\0') || (pos == 0)) {
                     errx(EXIT_FAILURE, "Invalid bank \"%s\"", optarg);
+                }
+                break;
+            case 'c':
+                if (strcmp(optarg, "set") == 0) {
+                    mode |= MODE_CLOCK_GET;
+                } else if ((strcmp(optarg, "show") == 0) ||
+                           (strcmp(optarg, "get") == 0)) {
+                    mode |= MODE_CLOCK_SET;
+                } else {
+                    errx(EXIT_FAILURE, "Invalid clock '%s': use set or show\n",
+                         optarg);
                 }
                 break;
             case 'D':

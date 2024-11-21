@@ -17,6 +17,7 @@
 #include "timer.h"
 #include "irq.h"
 #include "usb.h"
+#include "gpio.h"
 
 #if defined(STM32F1)
 #include <libopencm3/stm32/f1/nvic.h>
@@ -30,13 +31,12 @@ typedef uint32_t USART_TypeDef_P;
 
 
 #if defined(STM32F1)
-/* STM32F1XX on Rev2+ uses PA9 for CONS_TX and PA10 for CONS_RX */
-/* STM32F1XX on Rev4+ uses PB6 for CONS_TX and PB7 for CONS_RX */
+/* STM32F1XX uses PB6 for CONS_TX and PB7 for CONS_RX */
 #define CONSOLE_USART       USART1
 #define CONSOLE_IRQn        NVIC_USART1_IRQ
 #define CONSOLE_IRQHandler  usart1_isr
 #elif defined(STM32F4)
-/* STM32F407 Discovery on Rev1 uses PA10 for CONS_TX and PA11 for CONS_RX */
+/* STM32F407 Discovery uses PA10 for CONS_TX and PA11 for CONS_RX */
 #define CONSOLE_USART       USART3
 #define CONSOLE_IRQn        NVIC_USART3_IRQ
 #define CONSOLE_IRQHandler  usart3_isr
@@ -44,7 +44,7 @@ typedef uint32_t USART_TypeDef_P;
 
 static volatile uint cons_in_rb_producer; // Console input current writer pos
 static uint          cons_in_rb_consumer; // Console input current reader pos
-static uint8_t       cons_in_rb[1024];    // Console input ring buffer (FIFO)
+static uint8_t       cons_in_rb[4096];    // Console input ring buffer (FIFO)
 static uint8_t       usb_out_buf[4096];   // USB output buffer
 static uint16_t      usb_out_bufpos = 0;  // USB output buffer position
 static bool          uart_console_active = false;
@@ -72,11 +72,17 @@ static void uart_send_blocking(USART_TypeDef_P usart, uint16_t data)
     uart_send(usart, data);
 }
 
-int
+void
 uart_putchar(int ch)
 {
     uart_send_blocking(CONSOLE_USART, (uint16_t) ch);
-    return (0);
+}
+
+void
+uart_puts(const char *str)
+{
+    while (*str != '\0')
+        uart_putchar(*str);
 }
 
 static uint16_t
@@ -295,7 +301,8 @@ putchar(int ch)
     usb_putchar_wait(ch);
     if (usb_console_active && !uart_console_active)
         return (0);
-    return (uart_putchar(ch));
+    uart_putchar(ch);
+    return (0);
 }
 
 int
@@ -366,8 +373,14 @@ uart_init(void)
 
     gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
                   GPIO_CNF_OUTPUT_ALTFN_PUSHPULL, GPIO6); // CONS_TX
+
+#undef FLOATING_CONS_RX
+#ifdef FLOATING_CONS_RX
     gpio_set_mode(GPIOB, GPIO_MODE_INPUT,
                   GPIO_CNF_INPUT_FLOAT, GPIO7);           // CONS_RX
+#else
+    gpio_setmode(GPIOB, GPIO7, GPIO_SETMODE_INPUT_PULLUPDOWN);  // CONS_RX
+#endif
 
 #endif
 

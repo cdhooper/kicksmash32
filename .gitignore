@@ -16,12 +16,7 @@ generated.*.ld
 cscope.out
 .cscope_cmd.*
 objs/
-objs.x86_64/
-objs.mac/
-objs.rom/
-objs.rom_d/
-objs.win32/
-objs.win64/
+objs.*/
 rev1/
 rev2/
 rev3/
