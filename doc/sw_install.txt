@@ -40,8 +40,6 @@ Amiga software
         1. smash
         2. smashftp
         3. smashfs
-    Ignore "smashfs" for now; it is an incomplete project. It will
-    eventually be a filesystem.
 
     The smash utility can be used to communicate with your KickSmash
     from AmigaOS. It supports a variety of options, including ones
@@ -75,9 +73,32 @@ Amiga software
         smashftp> get a:smash
         Get a:smash as smash (72796 bytes)  53 KB/sec
 
+    The smashfs program is a automatic mount filesystem for the Amiga.
+    If you run the program, by default it will run in the foreground of
+    your shell. Press ^C to unmount any volumes and exit smashfs once
+    you've closed all files. You can put the filesystem in the background
+    with the Run command. Example:
+        9.SDH0:> run smashfs
+        [CLI 7]
+        9.SDH0:> info home:
+
+        Mounted disks:
+        Unit      Size       Used       Free Full Errs   Status   Name
+        home       92G   21652641    2584756  89%   0  Read/Write home
+
+        Volumes available:
+        home [Mounted]
+        9.SDH0:> status com=smashfs
+         7
+        9.SDH0:> break 7
+        9.SDH0:> info home:
+        device (or volume) is not mounted
+
+
 Once you have your software installed, you can follow one of these
 guides:
     sw_smash.txt       Usage information on the smash utility.
+    sw_smashfs.txt     Automounting Filesystem
     sw_smashftp.txt    File transfer examples and help with smashftp.
     sw_kicksmash.txt   The KickSmash firmware CLI.
     sw_hostsmash.txt   The hostsmash host OS utility.
