@@ -4,9 +4,11 @@
 
 SMASH_PROG   := smash
 FS_PROG      := smashfs
+FTP_PROG     := smashftp
 FSROM_PROG   := smashfsrom
 FSROM_PROG_D := smashfsrom_d
-FTP_PROG     := smashftp
+SWITCH_PROG  := romswitch
+
 OBJDIR       := objs
 ROM_OBJDIR   := objs.rom
 ROM_OBJDIR_D := objs.rom_d
@@ -27,6 +29,9 @@ FSROM_SRCS   := fs_rom.c \
 		my_createtask.c sm_msg_core.c fs_rom_end.c
 FSROM_OBJS   := $(FSROM_SRCS:%.c=$(ROM_OBJDIR)/%.o)
 FSROM_OBJS_D := $(FSROM_SRCS:%.c=$(ROM_OBJDIR_D)/%.o)
+SWITCH_SRCS  := romswitch.c sm_msg.c cpu_control.c printf.c \
+		sm_msg_core.c fs_rom_end.c
+SWITCH_OBJS  := $(SWITCH_SRCS:%.c=$(ROM_OBJDIR_D)/%.o)
 
 CC      := m68k-amigaos-gcc
 STRIP   := m68k-amigaos-strip
@@ -42,6 +47,8 @@ LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -mcr
 #LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lgcc -lc -lamiga -noixemul
 
 LDFLAGS_FSROM = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
+LDFLAGS_SWITCH = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
+
 PROGVER := $(SMASH_PROG)_$(shell awk '/char[[:space:]]*\*version =/{print $$7}' smash.c)
 
 NDK_PATH := /opt/amiga/m68k-amigaos/ndk-include
@@ -78,7 +85,7 @@ ifeq (, $(shell which $(CC) 2>/dev/null ))
 $(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga13/bin")
 endif
 
-all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D)
+all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG)
 	@:
 
 gdb:
@@ -92,16 +99,17 @@ endef
 $(foreach SRCFILE,$(SMASH_SRCS) $(FS_SRCS) $(FTP_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR))))
 $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR))))
 $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D))))
+$(foreach SRCFILE,$(SWITCH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D))))
 
-OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D))
+OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS))
 
 $(FSROM_OBJS):: CFLAGS += $(CFLAGS_ROMFS) -DNO_DEBUG
 $(FSROM_OBJS_D):: CFLAGS += $(CFLAGS_ROMFS)
+$(SWITCH_OBJS):: CFLAGS += $(CFLAGS_ROMFS)
 #$(FSROM_OBJS):: CFLAGS += -flto
 #LDFLAGS_FSROM += -flto -O2
 
-$(FSROM_OBJS): | $(ROM_OBJDIR)
-$(FSROM_OBJS_D): | $(ROM_OBJDIR_D)
+$(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS): | $(ROM_OBJDIR) $(ROM_OBJDIR_D)
 
 $(OBJS): Makefile $(SMASH_HDRS) | $(OBJDIR)
 	@echo Building $@
@@ -114,6 +122,7 @@ $(SMASH_PROG): $(SMASH_OBJS)
 $(FTP_PROG): $(FTP_OBJS)
 $(FSROM_PROG): $(FSROM_OBJS) fs_rom.ld
 $(FSROM_PROG_D): $(FSROM_OBJS_D) fs_rom.ld
+$(SWITCH_PROG): $(SWITCH_OBJS) fs_rom.ld
 
 $(SMASH_PROG):
 	@echo Building $@
@@ -132,6 +141,10 @@ $(FSROM_PROG_D):
 	@echo Building $@
 	$(QUIET)$(CC) $(filter %.o,$^) $(LDFLAGS_FSROM) -Xlinker -Map=$(ROM_OBJDIR_D)/$@.map -Wa,-a,-ad > $(ROM_OBJDIR_D)/$@.lst -nostartfiles -o $(ROM_OBJDIR_D)/$@
 	$(QUIET)$(STRIP) -o $@ $(ROM_OBJDIR_D)/$@
+
+$(SWITCH_PROG):
+	@echo Building $@
+	$(QUIET)$(CC) $(filter %.o,$^) $(LDFLAGS_SWITCH) -Xlinker -Map=$(ROM_OBJDIR)/$@.map -Wa,-a,-ad > $(ROM_OBJDIR)/$@.lst -nostartfiles -o $@
 
 $(FS_PROG): $(FS_OBJS)
 	@echo Building $@

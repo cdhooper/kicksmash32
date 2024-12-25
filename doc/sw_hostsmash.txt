@@ -512,6 +512,21 @@ File service options
         still be specified. Using "cd ::" in smashftp will always take
         you to the Volume Directory.
 
+If you get an erase error on the flash, it's possible that a flash block
+has been locked. I've not found a way around this without removing the
+flash parts, as the Micron datasheet says that it requires a programming
+voltage (12V) to perform a block unprotect. You can check for block protect
+status using the following sequence:
+    echo 'reset amiga hold' | hostsmash -t
+    echo 'prom cmd 90; loop 8 d prom 8+$a*80000 1;prom id;reset amiga' | ../sw/hostsmash -t
+If you see values other than 00000000, then it's likely a block has been
+protected.
+
+You might also get an erase error on the flash if the Amiga is currently
+powered off or the KBRST line is not connected to your Amiga when you
+attempt to program.
+
+
 Debug options
     -h --help
         Display the list of hostsmash command options.

@@ -43,3 +43,14 @@ Switch to that bank and reboot.
 After pressing Enter, your computer is now running DiagROM.
 
 How do you switch back? If you had specified a "long reset" sequence, you could press and hold Control-Amiga-Amiga to switch back. Since you haven't yet done that, you will need to power cycle your Amiga or connect to the KickSmash over USB and tell it from the host to switch.
+
+-------------------------------------------------------
+
+## ROM Switcher
+
+The ROM switcher is a Kickstart module which, when linked with your
+favorite (3.1.4+ recommended) Kickstart image, will provide a list of
+ROM images and allow you to pick which one to use. It's recommended
+that you include the ROM switcher in your LongReset list.
+
+![rom_switcher](doc/rom_switcher.jpg?raw=true "ROM switcher example")

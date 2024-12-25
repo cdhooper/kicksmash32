@@ -15,6 +15,7 @@ generated.*.ld
 .DS_Store
 cscope.out
 .cscope_cmd.*
+.genromrc
 objs/
 objs.*/
 rev1/
@@ -29,6 +30,7 @@ amiga/smashfs
 amiga/smashftp
 amiga/smashfsrom
 amiga/smashfsrom_d
+amiga/romswitch
 sw/hostsmash
 sw/crcit
 kicksmash_*

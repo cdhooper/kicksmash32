@@ -20,6 +20,7 @@
 #define KS_CMD_CLOCK         0x04  // Get or set Amiga format time (sec + usec)
 #define KS_CMD_TESTPATT      0x05  // Send test pattern
 #define KS_CMD_LOOPBACK      0x06  // Reply with (exact) sent message
+#define KS_CMD_SET           0x07  // Set Kicksmash value (options in high bits)
 #define KS_CMD_FLASH_READ    0x10  // Generate flash read mode sequence
 #define KS_CMD_FLASH_CMD     0x11  // Generate low level command to EEPROM
 #define KS_CMD_FLASH_ID      0x12  // Generate flash ID sequence
@@ -51,6 +52,8 @@
 
 
 /* Command-specific options (upper byte of command) */
+#define KS_SET_NAME        0x0100  // Set board name
+
 #define KS_BANK_SETCURRENT 0x0100  // Set current ROM bank (immediate change)
 #define KS_BANK_SETRESET   0x0200  // Set ROM bank in effect at next reset
 #define KS_BANK_SETPOWERON 0x0400  // Set ROM bank in effect at cold poweron
@@ -192,6 +195,11 @@
  *   KS_CMD_FLASH_MWRITE
  *        This command will set up a multiple data write sequence for the
  *        flash. It is not currently implemented.
+ *   KS_CMD_SET
+ *        Set Kicksmash value. The following option must be specified with
+ *        this command:
+ *            KS_SET_NAME - Set the board name. A string of up to 16
+ *                          characters (including ending NIL) follows.
  *   KS_CMD_BANK_INFO
  *        ROM bank information, having structure bank_info_t, will be
  *        returned to the requester. This information includes the current
@@ -308,7 +316,9 @@ typedef struct {
     uint32_t si_usbid;                   // USB id (0x12091610)
     char     si_name[16];                // Unique name for this board
     uint8_t  si_mode;                    // ROM mode (0=32-bit, 1=16-bit)
-    uint8_t  si_unused[27];              // Unused space
+    uint8_t  si_unused1;                 // Unused space
+    uint16_t si_usbdev;                  // USB device slot
+    uint8_t  si_unused[24];              // Unused space
 } smash_id_t;
 
 typedef struct {

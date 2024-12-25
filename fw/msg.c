@@ -24,6 +24,7 @@
 #include "timer.h"
 #include "utils.h"
 #include "gpio.h"
+#include "usb.h"
 #include "version.h"
 #include <libopencm3/stm32/dma.h>
 #include <libopencm3/stm32/rcc.h>
@@ -950,6 +951,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             reply.si_features = SWAP16(0x0001);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
             reply.si_mode     = ee_mode;
+            reply.si_unused1  = 0;
+            reply.si_usbdev   = usb_current_address();
             strcpy(reply.si_name, config.name);
             memset(reply.si_unused, 0, sizeof (reply.si_unused));
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
@@ -1153,6 +1156,33 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             }
             break;
         }
+        case KS_CMD_SET: {
+            if (cmd & KS_SET_NAME) {
+                uint pos;
+                if (cmd_len != 16) {
+                    ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                    break;
+                }
+                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+                if ((int) cons_s < 0)
+                    cons_s += ARRAY_SIZE(buffer_rxa_lo);
+                for (pos = 0; pos < sizeof (config.name); pos += 2) {
+                    config.name[pos + 0] = buffer_rxa_lo[cons_s] >> 8;
+                    if (config.name[pos + 0] == '\0')
+                        break;
+                    config.name[pos + 1] = buffer_rxa_lo[cons_s];
+                    if (config.name[pos + 1] == '\0')
+                        break;
+                    if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
+                        cons_s = 0;
+                }
+                ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+                config_updated();
+            } else {
+                ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
+            }
+            break;
+        }
         case KS_CMD_BANK_INFO:
             /* Get bank info */
             ks_reply(0, KS_STATUS_OK, sizeof (config.bi), &config.bi, 0, NULL);
@@ -1174,6 +1204,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 break;
             }
             ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            if (cmd & KS_BANK_REBOOT) {
+                kbrst_amiga(0, 0);  // Amiga taken out of reset later
+            }
             if (cmd & KS_BANK_SETCURRENT) {
                 ee_set_bank(bank);
             }
@@ -1189,9 +1222,6 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             if (cmd & KS_BANK_SETPOWERON) {
                 config.bi.bi_bank_poweron = bank;
                 config_updated();
-            }
-            if (cmd & KS_BANK_REBOOT) {
-                kbrst_amiga(0, 0);
             }
             break;
         }
@@ -2110,6 +2140,8 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             reply.si_features = SWAP16(0x0001);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
             reply.si_mode     = ee_mode;
+            reply.si_unused1  = 0;
+            reply.si_usbdev   = usb_current_address();
             strcpy(reply.si_name, config.name);
             memset(reply.si_unused, 0, sizeof (reply.si_unused));
             usb_msg_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
@@ -2133,6 +2165,18 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             usb_msg_reply(1, 0, raw_len, rawbuf, 0, NULL);
             break;
         }
+        case KS_CMD_SET:
+            if (cmd & KS_SET_NAME) {
+                if (cmd_len != 16) {
+                    usb_msg_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                    break;
+                }
+                config_name((char *)buf);
+                usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            } else {
+                usb_msg_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
+            }
+            break;
         case KS_CMD_BANK_INFO:
             /* Get bank info */
             usb_msg_reply(0, KS_STATUS_OK, sizeof (config.bi),

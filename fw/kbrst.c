@@ -80,20 +80,24 @@ kbrst_poll(void)
     } else {
         if (amiga_not_in_reset != kbrst) {
             amiga_not_in_reset = kbrst;
+            /* Amiga reset state change has occurred */
+
             if (kbrst == 0) {
-                /* Update ROM bank if requested by user (at reset) */
+                /* In reset: update ROM bank if requested by user (at reset) */
                 void ee_update_bank_at_reset(void);
                 printf("Amiga in reset\n");
                 ee_update_bank_at_reset();
                 if (amiga_long_reset_timer == 0)
                     amiga_long_reset_timer = timer_tick_plus_msec(2000);
             } else {
+                /* Out of reet */
                 if (amiga_powered_off) {
                     amiga_powered_off = 0;
                     printf("Amiga powered on\n");
                 } else {
                     printf("Amiga out of reset\n");
                 }
+                amiga_long_reset_timer = 0;
             }
             amiga_reboot_detect_timeout = timer_tick_plus_msec(5000);
         } else {
@@ -130,5 +134,6 @@ kbrst_amiga(uint hold, uint longreset)
             amiga_reset_timer = timer_tick_plus_msec(2500);
         else
             amiga_reset_timer = timer_tick_plus_msec(400);
+        amiga_long_reset_timer = 0;
     }
 }

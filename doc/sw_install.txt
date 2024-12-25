@@ -19,8 +19,8 @@ Installing KickSmash board firmware
         Resetting to DFU...
 
     After several seconds, you should see the device appear on your host.
-            lsusb|grep DFU
-            Bus 001 Device 101: ID 0483:df11 STMicroelectronics STM Device in DFU Mode
+        lsusb|grep DFU
+        Bus 001 Device 101: ID 0483:df11 STMicroelectronics STM Device in DFU Mode
 
     You can then use "make dfu" in the fw to apply your updated firmware.
 

@@ -95,6 +95,7 @@ static const char cmd_options[] =
     "   write <opt>  write to flash (-w ?, bank, file, ...)\n"
     "   loop <num>   repeat the command a specified number of times (-l)\n"
     "   quiet        minimize test output\n"
+    "   set <n> <v>  set KickSmash value <n>=\"name\" and <v> is string (-s)\n"
     "   sr <addr>    spin loop reading address (-x)\n"
     "   srr <addr>   spin loop reading address with ROM OVL set (-y)\n"
     "   test[01234]  do interface test (-t)\n";
@@ -168,7 +169,8 @@ long_to_short_t long_to_short_main[] = {
     { "-l", "loop" },
     { "-q", "quiet" },
     { "-r", "read" },
-    { "-s", "spin" },
+    { "-s", "set" },
+    { "-S", "spin" },
     { "-t", "test" },
     { "-v", "verify" },
     { "-w", "write" },
@@ -533,7 +535,7 @@ smash_identify(void)
     rc = send_cmd(KS_CMD_ID, NULL, 0, &id, sizeof (id), &rlen);
 
     if (rc != 0) {
-        printf("Reply message failure: %d (%s)\n", (int) rc, smash_err(rc));
+        printf("Reply message failure: (%s)\n", smash_err(rc));
         if (flag_debug)
             dump_memory(&id, rlen, DUMP_VALUE_UNASSIGNED);
         return (rc);
@@ -597,7 +599,7 @@ smash_test_pattern(void)
                   sizeof (reply_buf), &rlen);
 #endif
     if (rc != 0) {
-        printf("Reply message failure: %d (%s)\n", (int) rc, smash_err(rc));
+        printf("Reply message failure: (%s)\n", smash_err(rc));
         if (flag_debug)
             dump_memory(reply_buf, rlen, DUMP_VALUE_UNASSIGNED);
         show_test_state("Test pattern", rc);
@@ -679,7 +681,7 @@ smash_test_loopback(void)
     if (rc == KS_CMD_LOOPBACK) {
         rc = 0;
     } else {
-        printf("FAIL: %d (%s)\n", rc, smash_err(rc));
+        printf("FAIL: (%s)\n", smash_err(rc));
 fail_handle_debug:
         if (flag_debug) {
             uint pos;
@@ -759,7 +761,7 @@ smash_test_loopback_perf(void)
         if (rc == KS_CMD_LOOPBACK) {
             rc = 0;
         } else {
-            printf("FAIL: %d (%s)\n", rc, smash_err(rc));
+            printf("FAIL: (%s)\n", smash_err(rc));
             if (flag_debug) {
                 dump_memory(buf, lb_size, DUMP_VALUE_UNASSIGNED);
             }
@@ -802,7 +804,7 @@ recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
     if (rc == KS_CMD_MSG_SEND)
         rc = 0;
     if (rc != 0) {
-        printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
+        printf("Get message failed: (%s)\n", smash_err(rc));
         if (flag_debug)
             dump_memory(buf, 0x40, DUMP_VALUE_UNASSIGNED);
     }
@@ -822,7 +824,7 @@ recv_msg_loopback(void *buf, uint len, uint *rlen, uint which_buf)
     if ((rc == KS_CMD_MSG_SEND) || (rc == (KS_CMD_MSG_SEND | KS_MSG_ALTBUF)))
         rc = 0;
     if (rc != 0) {
-        printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
+        printf("Get message failed: (%s)\n", smash_err(rc));
         if (flag_debug)
             dump_memory(buf, 0x40, DUMP_VALUE_UNASSIGNED);
     }
@@ -841,8 +843,8 @@ send_msg_loopback(void *buf, uint len, uint which_buf)
 
     rc = send_cmd(cmd, buf, len, rbuf, sizeof (rbuf), NULL);
     if (rc != 0) {
-        printf("Send message buf%s l=%u failed: %d (%s)\n",
-               which_buf ? " alt" : "", len, rc, smash_err(rc));
+        printf("Send message buf%s l=%u failed: (%s)\n",
+               which_buf ? " alt" : "", len, smash_err(rc));
         if (flag_debug)
             dump_memory(rbuf, sizeof (rbuf), DUMP_VALUE_UNASSIGNED);
     }
@@ -855,7 +857,7 @@ get_msg_info(smash_msg_info_t *msginfo)
     uint rc = send_cmd(KS_CMD_MSG_INFO, NULL, 0,
                        msginfo, sizeof (*msginfo), NULL);
     if (rc != 0)
-        printf("Get message info failed: %d (%s)\n", rc, smash_err(rc));
+        printf("Get message info failed: (%s)\n", smash_err(rc));
     return (rc);
 }
 
@@ -909,7 +911,7 @@ smash_test_msg_loopback(void)
     lockbits = BIT(0) | BIT(1);
     rc = send_cmd(KS_CMD_MSG_LOCK, &lockbits, sizeof (lockbits), NULL, 0, NULL);
     if (rc != 0) {
-        printf("Message lock failed: %d (%s)\n", rc, smash_err(rc));
+        printf("Message lock failed: (%s)\n", smash_err(rc));
         goto fail;
     }
 
@@ -922,12 +924,12 @@ smash_test_msg_loopback(void)
 
         /* Discard old messages */
         if ((rc = send_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, NULL)) != 0) {
-            printf("Msg flush failed: %d (%s)\n", rc, smash_err(rc));
+            printf("Msg flush failed: (%s)\n", smash_err(rc));
             goto fail;
         }
         rc = send_cmd(KS_CMD_MSG_FLUSH | KS_MSG_ALTBUF, NULL, 0, NULL, 0, NULL);
         if (rc != 0) {
-            printf("Msg flush failed: %d (%s)\n", rc, smash_err(rc));
+            printf("Msg flush failed: (%s)\n", smash_err(rc));
             goto fail;
         }
     }
@@ -1107,7 +1109,7 @@ fail:
     rc2 = send_cmd(KS_CMD_MSG_LOCK | KS_MSG_UNLOCK, &lockbits,
                    sizeof (lockbits), NULL, 0, NULL);
     if (rc2 != 0) {
-        printf("Message unlock failed: %d (%s)\n", rc2, smash_err(rc2));
+        printf("Message unlock failed: (%s)\n", smash_err(rc2));
         if (rc == 0)
             rc = rc2;
     }
@@ -1154,7 +1156,7 @@ smash_test_usb_msg_loopback(void)
     show_test_state("Remote message", -1);
 
     if ((rc = get_msg_info(&msginfo)) != 0) {
-        printf("Get msg info failed: %d (%s)\n", rc, smash_err(rc));
+        printf("Get msg info failed: (%s)\n", smash_err(rc));
         return (rc);
     }
 
@@ -1191,7 +1193,7 @@ smash_test_usb_msg_loopback(void)
 
     /* Discard old messages */
     if ((rc = send_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, NULL)) != 0) {
-        printf("Msg flush failed: %d (%s)\n", rc, smash_err(rc));
+        printf("Msg flush failed: (%s)\n", smash_err(rc));
         goto fail;
     }
 
@@ -1518,8 +1520,8 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
     SUPERVISOR_STATE_EXIT();
 
     if (flag_debug || rc1 || rc2) {
-        printf("rc1=%d (%s)  rc2=%d (%s)\n",
-               rc1, smash_err(rc1), rc2, smash_err(rc2));
+        printf("rc1=(%s)  rc2=(%s)\n",
+               smash_err(rc1), smash_err(rc2));
     }
 
     if (rc1 == 0) {
@@ -1590,7 +1592,7 @@ flash_show_id(void)
 
     rc = flash_id(&flash_dev1, &flash_dev2, &mode);
     if (rc != 0) {
-        printf("Flash id failure %d (%s)\n", rc, smash_err(rc));
+        printf("Flash id failure (%s)\n", smash_err(rc));
         return (rc);
     }
 
@@ -2647,7 +2649,7 @@ usage:
                 /* Read from flash */
                 rc = read_from_flash(bank, addr, buf, xlen);
                 if (rc != 0) {
-                    printf("\nKicksmash failure %d (%s)\n", rc, smash_err(rc));
+                    printf("\nKicksmash failure (%s)\n", smash_err(rc));
                     break;
                 }
             }
@@ -2658,7 +2660,7 @@ usage:
                 /* Write to flash */
                 rc = write_to_flash(bank, addr, buf, xlen);
                 if (rc != 0) {
-                    printf("\nKicksmash failure %d (%s)\n", rc, smash_err(rc));
+                    printf("\nKicksmash failure (%s)\n", smash_err(rc));
                     break;
                 }
             } else {
@@ -2729,7 +2731,7 @@ usage:
             /* Read from flash */
             rc = read_from_flash(bank, addr, buf, xlen);
             if (rc != 0) {
-                printf("\nKicksmash failure %d (%s)\n", rc, smash_err(rc));
+                printf("\nKicksmash failure (%s)\n", smash_err(rc));
                 break;
             }
             execute_swapmode(buf, xlen, SWAP_FROM_ROM, swapmode);
@@ -2782,6 +2784,61 @@ fail_end:
     if (vbuf != NULL)
         FreeMem(vbuf, MAX_CHUNK);
     return (rc);
+}
+
+/*
+ * cmd_set
+ * -------
+ * Set a KickSmash value. Currently only the board name is supported.
+ */
+int
+cmd_set(int argc, char *argv[])
+{
+    int rc;
+    int arg;
+
+    if (argc < 2) {
+cmd_set_usage:
+        printf("set name <string> - up to 15 characters for board name\n");
+        return (1);
+    }
+    if (strcmp(argv[1], "name") == 0) {
+        char buf[16];
+        int len = 0;
+        int maxlen;
+        for (arg = 2; arg < argc; arg++) {
+            int clen = strlen(argv[arg]);
+            if (len > 0)
+                buf[len++] = ' ';
+
+            if (len + clen >= sizeof (buf)) {
+                printf("Name too long: \"");
+                for (arg = 2; arg < argc; arg++) {
+                    if (arg != 2)
+                        printf(" ");
+                    printf("%s", argv[arg]);
+                }
+                printf("\"\n");
+                return (1);
+            }
+            maxlen = sizeof (buf) - len;
+            strncpy(buf + len, argv[arg], maxlen);
+            len += clen;
+        }
+        buf[len] = '\0';
+        rc = send_cmd(KS_CMD_SET | KS_SET_NAME, buf, sizeof (buf),
+                      NULL, 0, NULL);
+        if (rc != 0) {
+            printf("Failed to set board name: (%s)\n", smash_err(rc));
+        } else {
+            printf("Set board name to \"%s\"\n", buf);
+        }
+        return (rc);
+    } else {
+        printf("Unknown set %s\n", argv[1]);
+        goto cmd_set_usage;
+    }
+    return (0);
 }
 
 static uint
@@ -2953,8 +3010,7 @@ usage:
 
     rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, &info, sizeof (info), &rlen);
     if (rc != 0) {
-        printf("Failed to get bank information: %d %s\n",
-               rc, smash_err(rc));
+        printf("Failed to get bank information: %s\n", smash_err(rc));
         return (rc);
     }
 
@@ -2982,7 +3038,7 @@ usage:
     /* Acquire flash id to get block erase zones */
     rc = flash_id(&flash_dev1, &flash_dev2, &mode);
     if (rc != 0) {
-        printf("Flash id failure %d (%s)\n", rc, smash_err(rc));
+        printf("Flash id failure (%s)\n", smash_err(rc));
         return (rc);
     }
     id1 = ee_id_string(flash_dev1);
@@ -3059,7 +3115,7 @@ usage:
 
         rc = erase_flash_block(bank, addr);
         if (rc != 0) {
-            printf("\nKicksmash failure %d (%s)\n", rc, smash_err(rc));
+            printf("\nKicksmash failure (%s)\n", smash_err(rc));
             break;
         }
         if (is_user_abort()) {
@@ -3184,7 +3240,7 @@ get_ks_clock(uint *sec, uint *usec)
 
     rc = send_cmd(KS_CMD_CLOCK, NULL, 0, &ks_clock, sizeof (ks_clock), &rlen);
     if (rc != 0) {
-        printf("Get clock failed: %d (%s)\n", rc, smash_err(rc));
+        printf("Get clock failed: (%s)\n", smash_err(rc));
         if (flag_debug)
             dump_memory(clock, sizeof (clock), DUMP_VALUE_UNASSIGNED);
         *sec = 0;
@@ -3208,7 +3264,7 @@ set_ks_clock(uint sec, uint usec, uint flags)
 
     rc = send_cmd(cmd, ks_clock, sizeof (ks_clock), NULL, 0, NULL);
     if (rc != 0)
-        printf("Set clock failed: %d (%s)\n", rc, smash_err(rc));
+        printf("Set clock failed: (%s)\n", smash_err(rc));
     return (rc);
 }
 
@@ -3357,7 +3413,10 @@ main(int argc, char *argv[])
                     case 'r':  // read flash to file
                         exit(cmd_readwrite(argc - arg, argv + arg));
                         break;
-                    case 's':  // spin
+                    case 's':  // set
+                        exit(cmd_set(argc - arg, argv + arg));
+                        break;
+                    case 'S':  // spin
                         spin(MEM_LOOPS);
                         exit(0);
                     case '0':  // pattern test

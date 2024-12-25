@@ -24,6 +24,7 @@ void usb_mask_interrupts(void);
 void usb_unmask_interrupts(void);
 void usb_show_regs(void);
 void usb_show_stats(void);
+uint16_t usb_current_address(void);
 
 uint8_t CDC_Transmit_FS(uint8_t *buf, unsigned int len);
 

@@ -378,7 +378,7 @@ recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
     if (rc == KS_CMD_MSG_SEND)
         rc = KM_STATUS_OK;
     if (rc != KM_STATUS_OK) {
-        printf("Get message failed: %d (%s)\n", rc, smash_err(rc));
+        printf("Get message failed: (%s)\n", smash_err(rc));
 #ifndef ROMFS
         if (flag_debug > 2)
             dump_memory(buf, 0x40, DUMP_VALUE_UNASSIGNED);
@@ -483,8 +483,8 @@ host_send_msg(void *smsg, uint len)
         }
     }
     if (rc != 0) {
-        printf("Send message l=%u failed: %d (%s)\n",
-               len, rc, smash_err(rc));
+        printf("Send message l=%u failed: (%s)\n",
+               len, smash_err(rc));
 #ifndef ROMFS
         if (flag_debug > 2)
             dump_memory(rbuf, sizeof (rbuf), DUMP_VALUE_UNASSIGNED);

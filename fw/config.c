@@ -255,7 +255,7 @@ config_name(const char *name)
             printf("%s\n", config.name);
         }
     } else {
-        if (strcmp(config.name, name) == 0)
+        if (strncmp(config.name, name, sizeof (config.name) - 1) == 0)
             return;
         strncpy(config.name, name, sizeof (config.name) - 1);
         config.name[sizeof (config.name) - 1] = '\0';

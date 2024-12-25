@@ -861,3 +861,9 @@ usb_show_stats(void)
     printf("byte drops=%u\n", usb_drop_bytes);
     printf("send timeouts=%u\n", usb_send_timeouts);
 }
+
+uint16_t
+usb_current_address(void)
+{
+    return ((OTG_FS_DCFG & OTG_DCFG_DAD) >> 4);
+}

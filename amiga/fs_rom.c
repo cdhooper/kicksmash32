@@ -82,6 +82,27 @@ dputx(uint x)
     dputs(ptr);
 }
 
+uint8_t *copy_to_ram_ptr;
+static void
+sm_msg_copy_to_ram(void)
+{
+    uint copy_to_ram_start;
+    uint copy_to_ram_end;
+    __asm("lea _copy_to_ram_start,%0" : "=a" (copy_to_ram_start) ::);
+    __asm("lea _copy_to_ram_end,%0" : "=a" (copy_to_ram_end) ::);
+
+    uint len = copy_to_ram_end - copy_to_ram_start;
+    printf("len=%x s=%x e=%x\n", len, copy_to_ram_start, copy_to_ram_end);
+    copy_to_ram_ptr = AllocMem(len, MEMF_PUBLIC);
+    if (copy_to_ram_ptr == NULL) {
+        dputs("AllocMem fail 1\n");
+        return;
+    }
+    memcpy(copy_to_ram_ptr, (void *) copy_to_ram_start, len);
+    esend_cmd_core = (void *) (copy_to_ram_ptr +
+                               (uintptr_t) send_cmd_core - copy_to_ram_start);
+}
+
 int
 call_main(void)
 {
@@ -123,27 +144,6 @@ call_main(void)
     if (DOSBase == NULL) {
         dputs("NULL DOSBase 3\n");
         return (1);
-    } else {
-#if 0
-        BPTR fh_i = 0;
-        BPTR fh_o = 0;
-        BPTR fh_e = 0;
-
-        dputs("Call open\n");
-//      fh_o = Open("CON:", MODE_NEWFILE);
-        fh_o = Open("CON:////smashfs/Auto/Close/Smart", MODE_NEWFILE);
-        if (fh_o == 0)
-            printf("Open O failed: %d\n", IoErr());
-        SelectOutput(fh_o);
-        fh_i = Open("*", MODE_OLDFILE);
-        if (fh_i == 0)
-            printf("Open I failed: %d\n", IoErr());
-        SelectInput(fh_i);
-        fh_e = Open("*", MODE_NEWFILE);
-        if (fh_e == 0)
-            printf("Open e failed: %d\n", IoErr());
-        SelectError(fh_e);
-#endif
     }
 
     if (DOSBase != NULL) {
@@ -152,22 +152,7 @@ call_main(void)
     }
 
     /* Move KS communication code to RAM, as it needs to run from there */
-    uint copy_to_ram_start;
-    uint copy_to_ram_end;
-    __asm("lea _copy_to_ram_start,%0" : "=a" (copy_to_ram_start) ::);
-    __asm("lea _copy_to_ram_end,%0" : "=a" (copy_to_ram_end) ::);
-
-    uint len = copy_to_ram_end - copy_to_ram_start;
-    uint8_t *copy_to_ram_ptr;
-    printf("len=%x s=%x e=%x\n", len, copy_to_ram_start, copy_to_ram_end);
-    copy_to_ram_ptr = AllocMem(len, MEMF_PUBLIC);
-    if (copy_to_ram_ptr == NULL) {
-        dputs("AllocMem fail 1\n");
-        return (1);
-    }
-    memcpy(copy_to_ram_ptr, (void *) copy_to_ram_start, len);
-    esend_cmd_core = (void *) (copy_to_ram_ptr +
-                               (uintptr_t) send_cmd_core - copy_to_ram_start);
+    sm_msg_copy_to_ram();
 
     /* malloc/free() library Constructors / Destructors */
     void __ctor_stdlib_memory_init(void *);

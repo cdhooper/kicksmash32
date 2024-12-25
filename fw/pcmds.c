@@ -330,7 +330,7 @@ cmd_prom_bank(int argc, char * const *argv)
     if (flag_set_bank_name) {
         if (argc != 4) {
             printf("prom bank %s requires a <bank> number and "
-                   "\"name text\"\n", argv[1]);
+                   "\"name text\" or - to delete\n", argv[1]);
             return (1);
         }
         bank = atoi(argv[2]);
@@ -339,7 +339,10 @@ cmd_prom_bank(int argc, char * const *argv)
                    bank, ROM_BANKS - 1);
             return (1);
         }
-        return (config_set_bank_name(bank, argv[3]));
+        if ((argv[3][0] == '-') && (argv[3][1] == '\0'))
+            return (config_set_bank_name(bank, ""));
+        else
+            return (config_set_bank_name(bank, argv[3]));
     }
     if (flag_bank_longreset) {
         uint8_t     banks[ROM_BANKS];
