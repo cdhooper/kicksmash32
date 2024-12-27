@@ -9,6 +9,8 @@ FSROM_PROG   := smashfsrom
 FSROM_PROG_D := smashfsrom_d
 SWITCH_PROG  := romswitch
 
+DISK=kicksmash32-$(PROGVER).adf
+
 OBJDIR       := objs
 ROM_OBJDIR   := objs.rom
 ROM_OBJDIR_D := objs.rom_d
@@ -168,6 +170,16 @@ lha:
 	$(QUIET)cp -p $(SMASH_PROG) $(PROGVER)/
 	$(QUIET)lha -aq2 $(PROGVER).lha $(PROGVER)
 	$(QUIET)rm -rf $(PROGVER)
+
+adf:
+	xdftool $(DISK) format "KickSmash32 $(PROGVER)"
+	xdftool $(DISK) makedir kicksmash
+	xdftool $(DISK) write romswitch kicksmash/romswitch
+	xdftool $(DISK) write smash kicksmash/smash
+	xdftool $(DISK) write smashfs kicksmash/smashfs
+	xdftool $(DISK) write smashfsrom kicksmash/smashfsrom
+	xdftool $(DISK) write smashftp kicksmash/smashftp
+	xdftool $(DISK) boot install
 
 clean clean-all:
 	@echo Cleaning
