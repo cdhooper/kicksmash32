@@ -7,7 +7,7 @@ CC := gcc
 #LDFLAGS := -O2 -g -lpthread
 CFLAGS  := -O2 -pthread -Wall -Wpedantic -Wno-variadic-macros
 LDFLAGS := -O2 -lpthread
-UNAME_S := $(shell uname -s)
+OS := $(shell uname -s)
 
 #
 # Allowing links opens security risk for remote mounts because anything
@@ -16,7 +16,7 @@ UNAME_S := $(shell uname -s)
 CFLAGS += -DALLOW_CREATE_LINK
 
 NOW  := $(shell date +%s)
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(OS),Darwin)
 DATE := $(shell date -j -f %s $(NOW)  '+%Y-%m-%d')
 TIME := $(shell date -j -f %s $(NOW)  '+%H:%M:%S')
 else
@@ -29,7 +29,6 @@ CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 ifneq (,$(filter $(OS),Windows_NT Windows win))
     TARGET_OS ?= Windows_NT
 else
-    OS ?= $(shell uname -s)
     TARGET_OS ?= $(OS)
 endif
 
