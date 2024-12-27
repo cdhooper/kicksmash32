@@ -9,7 +9,8 @@ FSROM_PROG   := smashfsrom
 FSROM_PROG_D := smashfsrom_d
 SWITCH_PROG  := romswitch
 
-DISK=kicksmash32-$(PROGVER).adf
+ALL_PROGS    := $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) \
+                $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG)
 
 OBJDIR       := objs
 ROM_OBJDIR   := objs.rom
@@ -51,7 +52,7 @@ LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -mcr
 LDFLAGS_FSROM = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
 LDFLAGS_SWITCH = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
 
-PROGVER := $(SMASH_PROG)_$(shell awk '/char[[:space:]]*\*version =/{print $$7}' smash.c)
+PROGVER := kicksmash_$(shell awk '/char[[:space:]]*\*version =/{print $$7}' smash.c)
 
 NDK_PATH := /opt/amiga/m68k-amigaos/ndk-include
 VASM     := vasmm68k_mot
@@ -155,24 +156,28 @@ $(FS_PROG): $(FS_OBJS)
 $(OBJDIR) $(ROM_OBJDIR) $(ROM_OBJDIR_D):
 	mkdir -p $@
 
+ZIPFILE := $(PROGVER).zip
+LHAFILE := $(PROGVER).lha
+DISK	:= $(PROGVER).adf
+
 zip:
-	@echo Building $(PROGVER).zip
-	$(QUIET)rm -rf $(SMASH_PROG).zip $(PROGVER)
+	@echo Building $(ZIPFILE)
+	$(QUIET)rm -rf $(ZIPFILE) $(PROGVER)
 	$(QUIET)mkdir $(PROGVER)
-	$(QUIET)cp -p $(SMASH_PROG) $(PROGVER)/
-	$(QUIET)zip -rq $(PROGVER).zip $(PROGVER)
+	$(QUIET)cp -p $(ALL_PROGS) $(PROGVER)/
+	$(QUIET)zip -rq $(ZIPFILE) $(PROGVER)
 	$(QUIET)rm -rf $(PROGVER)
 
 lha:
-	@echo Building $(PROGVER).lha
-	$(QUIET)rm -rf $(SMASH_PROG).lha $(PROGVER)
+	@echo Building $(LHAFILE)
+	$(QUIET)rm -rf $(LHAFILE) $(PROGVER)
 	$(QUIET)mkdir $(PROGVER)
-	$(QUIET)cp -p $(SMASH_PROG) $(PROGVER)/
-	$(QUIET)lha -aq2 $(PROGVER).lha $(PROGVER)
+	$(QUIET)cp -p $(ALL_PROGS) $(PROGVER)/
+	$(QUIET)lha -aq2 $(LHAFILE) $(PROGVER)
 	$(QUIET)rm -rf $(PROGVER)
 
 adf:
-	xdftool $(DISK) format "KickSmash32 $(PROGVER)"
+	xdftool $(DISK) format "$(PROGVER)"
 	xdftool $(DISK) makedir kicksmash
 	xdftool $(DISK) write romswitch kicksmash/romswitch
 	xdftool $(DISK) write smash kicksmash/smash

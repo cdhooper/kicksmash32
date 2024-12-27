@@ -110,7 +110,7 @@ const struct Resident resident = {
     rom_main               // rt_Init - pointer to init code
 };
 
-const char RomID[]   = "romswitch 0.5 (2024-12-22)\r\n";
+const char RomID[]   = "romswitch 0.6 (2024-12-26)\r\n";
 
 struct GfxBase *GfxBase;
 struct Library *GadToolsBase;
@@ -852,7 +852,7 @@ show_banks(void)
           x + width - banktable_widths[col - 1] * 8 + 6, y + 10, FALSE);
 
     SetAPen(rp, 1);
-    box(x, y, width + 6, 19 + ROM_BANKS * 9, GTBB_Recessed);
+    box(x, y, width + 6, 18 + ROM_BANKS * 9, GTBB_Recessed);
     y += 2;
     xoff = x + 3;
     bank_box_top = y + 14;
@@ -860,18 +860,18 @@ show_banks(void)
     bank_box_left = xoff;
     bank_box_right = xoff + width;
     for (col = 0; col < ARRAY_SIZE(banktable_widths); col++) {
-        width = banktable_widths[col] * 8 + 8;
+        uint pwidth = banktable_widths[col] * 8 + 8;
         banktable_pos[col] = xoff;
 
         /* Title box */
-        box(xoff, y, width, 12, TAG_IGNORE);
+        box(xoff, y, pwidth, 12, TAG_IGNORE);
 
         /* Column box */
-        box(xoff, y + 12, width, 4 + ROM_BANKS * 9, TAG_IGNORE);
+        box(xoff, y + 12, pwidth, 3 + ROM_BANKS * 9, TAG_IGNORE);
 
         show_bank_table_column(col);
 
-        xoff += width;
+        xoff += pwidth;
     }
 }
 
@@ -976,7 +976,6 @@ update_switchto(int incdec)
 
     if (update_switch_box())
         RefreshGList(gadget_switchto_pre, window, NULL, -1);
-//      RefreshGList(gadgets, window, NULL, -1);
 }
 
 /*
@@ -1031,13 +1030,13 @@ static void
 show_id(void)
 {
     uint x = 40;
-    uint y = 21;
+    uint y = 17;
     char buf[40];
     get_id(&id);
     memcpy(&id_saved, &id, sizeof (id_saved));
 
     SetAPen(&screen->RastPort, 1);  // Black
-    sprintf(buf, "Kicksmash%u %u.%u",
+    sprintf(buf, "KickSmash%u %u.%u",
             (id.si_mode == 0) ? 32 : 16,
             id.si_ks_version[0], id.si_ks_version[1]);
     Print(buf, x, y += 9, 0);
@@ -1148,6 +1147,25 @@ string_hook_entry(struct Hook *hook asm("a0"), struct SGWork *sgw asm("a2"),
     return (rc);
 }
 #endif
+
+static void
+cleanup_bank_name_gadgets(void)
+{
+    struct RastPort *rp = &screen->RastPort;
+    uint bank;
+    uint y = bank_box_top + 1;
+    uint x1 = banktable_pos[1] + 2;
+    uint x2 = x1 + banktable_widths[1] * 8;
+
+    SetAPen(rp, 0);
+    for (bank = 0; bank < ROM_BANKS; bank++) {
+        sbox(x1, y, 1, 7);
+        sbox(x1 + 2, y, 0, 7);
+        sbox(x2, y, 1, 7);
+        sbox(x2 + 2, y, 0, 7);
+        y += 9;
+    }
+}
 
 /*
  * draw_page
@@ -1262,9 +1280,9 @@ draw_page(void)
 
     /* KickSmash board name */
     ng.ng_LeftEdge   = 40;
-    ng.ng_TopEdge    = 76;
+    ng.ng_TopEdge    = 72;
     ng.ng_Width      = 8 * 18;
-    ng.ng_Height     = 10;
+    ng.ng_Height     = 12;
     ng.ng_GadgetText = NULL;
     ng.ng_GadgetID   = ID_BOARD_NAME;
     sptr = id.si_name;  // work around odd compiler bug
@@ -1430,6 +1448,7 @@ draw_page(void)
     AddGList(window, gadgets, -1, -1, NULL);
     RefreshGList(gadgets, window, NULL, -1);
     GT_RefreshWindow(window, NULL);
+    cleanup_bank_name_gadgets();
 }
 
 /*
