@@ -55,10 +55,17 @@ BMP_PORT = /dev/ttyACM0
 DFU_UTIL=dfu-util
 ST_BUILD_DIR=stutils
 ST_TOOLS_PATH=$(ST_BUILD_DIR)/build/Release/bin
+OS := $(shell uname -s)
 
-NOW  := $(shell date)
-DATE := $(shell date -d '$(NOW)' '+%Y-%m-%d')
-TIME := $(shell date -d '$(NOW)' '+%H:%M:%S')
+NOW  := $(shell date +%s)
+ifeq ($(OS),Darwin)
+DATE := $(shell date -j -f %s $(NOW)  '+%Y-%m-%d')
+TIME := $(shell date -j -f %s $(NOW)  '+%H:%M:%S')
+else
+DATE := $(shell date -d "@$(NOW)" '+%Y-%m-%d')
+TIME := $(shell date -d "@$(NOW)" '+%H:%M:%S')
+endif
+
 
 ## Boilerplate
 
@@ -218,8 +225,6 @@ ifneq (,$(wildcard $(UDEV_FILE_PATHS)))
 $(UDEV_FILE_PATHS) &:
 	sudo cp -np udev/* $(UDEV_DIR)
 	sudo udevadm control --reload
-else
-$(UDEV_FILE_PATHS) &:
 endif
 
 # Write STM32 flash using DFU mode
