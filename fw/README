@@ -1,9 +1,18 @@
 In order to build firmware, you will need to have the compiler and
 libraries installed on your host.
     Fedora:
-        sudo dnf install arm-none-eabi-gcc arm-none-eabi-newlib
+        sudo dnf install -y
+        bash which git make cmake gcc mingw32-gcc mingw64-gcc
+        arm-none-eabi-gcc-cs
+        arm-none-eabi-newlib
+        gcc-aarch64-linux-gnu
+        gcc-arm-linux-gnu
+        libusb-compat-0.1-devel libusb1-devel
+        python3
+        dfu-util
 
-To build using libopencm3, simply type:
+To build using libopencm3, ensure that the OPENCM3_DIR points to the libopencm3 
+directory and simply type:
     make
 
 To send firmware to the programmer, there are two ways supported by the
