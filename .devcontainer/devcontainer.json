@@ -1,0 +1,40 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/cpp
+{
+	"name": "KickSmash32 - devcontainer",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	// "features": {},
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	// "postCreateCommand": "gcc -v",
+
+	// Configure tool-specific properties.
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-vscode.cpptools",
+				"ms-vscode.cpptools-extension-pack",
+				"GuodongSun.vscode-git-cruise",
+				"mhutchie.git-graph",
+				"github.vscode-github-actions",
+				"me-dutour-mathieu.vscode-github-actions",
+				"redhat.vscode-yaml",
+				"aaron-bond.better-comments",
+				"usernamehw.errorlens",
+				"maziac.hex-hover-converter",
+				"trond-snekvik.gnu-mapfiles",
+				"ms-vscode-remote.remote-containers"
+			]
+		}
+	},
+
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	"remoteUser": "root"
+}

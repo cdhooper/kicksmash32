@@ -7,7 +7,7 @@
 BINARY = fw
 
 DFU_UTIL=dfu-util
-ST_BUILD_DIR=stutils
+ST_BUILD_DIR=/usr/stlink
 ST_TOOLS_PATH=$(ST_BUILD_DIR)/build/Release/bin
 
 all:
