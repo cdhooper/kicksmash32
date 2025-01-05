@@ -1666,8 +1666,10 @@ event_loop(void)
                             if (disabled_switch)
                                 break;
                             /* FALLTHROUGH */
+#if 0
                         case RAWKEY_ENTER:    // key down Enter (num keypd)
                         case RAWKEY_RETURN:   // key down Return
+#endif
                             if (disabled_switch)
                                 break;
                             SetAPen(rp, 3);
@@ -1681,8 +1683,10 @@ event_loop(void)
                                 break;  // Left Amiga or Right Amiga not held
                             }
                             /* FALLTHROUGH */
+#if 0
                         case RAWKEY_ENTER + 0x80:  // key up Enter (num keypd)
                         case RAWKEY_RETURN + 0x80: // key up Return
+#endif
                             if (disabled_switch)
                                 break;
                             SetAPen(rp, 0);

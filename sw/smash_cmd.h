@@ -1,1 +1,0 @@
-../fw/smash_cmd.h

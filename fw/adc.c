@@ -284,7 +284,7 @@ adc_poll(int verbose, int force)
     else
         avg_v5 += ((int)calc_v5 - (int)avg_v5) / 4;
 
-    if ((avg_v5 < 4250) || (avg_v5 > 5250)) {  // 4.25V - 5.25V
+    if ((avg_v5 < 4250) || (avg_v5 > 5400)) {  // 4.25V - 5.40V
         v5_good = false;
     } else {
         v5_good = true;

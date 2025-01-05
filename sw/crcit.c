@@ -10,7 +10,7 @@
  */
 #include <stdio.h>
 #include <stdint.h>
-#include "crc32.h"
+#include "../fw/crc32.h"
 
 #define ARRAY_SIZE(x) (int)((sizeof (x) / sizeof ((x)[0])))
 

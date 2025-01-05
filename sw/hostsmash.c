@@ -48,9 +48,9 @@ typedef unsigned int uint;
 #include <usb.h>
 #endif
 #include <dirent.h>
-#include "crc32.h"
-#include "smash_cmd.h"
-#include "host_cmd.h"
+#include "../fw/crc32.h"
+#include "../fw/smash_cmd.h"
+#include "../amiga/host_cmd.h"
 #include "version.h"
 
 #ifdef __clang__
@@ -232,6 +232,7 @@ timespec_to_timeval(struct timeval *tv, struct timespec *ts)
 #define MX_DEVICE 0x1610
 
 #define EEPROM_SIZE_DEFAULT       0x400000    // 4 MB
+#define EEPROM_BANK_SIZE_DEFAULT  0x080000    // 512 KB
 #define EEPROM_SIZE_NOT_SPECIFIED 0xffffffff
 #define BANK_NOT_SPECIFIED        0xffffffff
 #define ADDR_NOT_SPECIFIED        0xffffffff
@@ -1973,7 +1974,7 @@ eeprom_erase(uint bank, uint addr, uint len)
     if (bank != BANK_NOT_SPECIFIED) {
         if (addr == ADDR_NOT_SPECIFIED)
             addr = 0;
-        addr += bank * len;
+        addr += bank * EEPROM_BANK_SIZE_DEFAULT;
     }
 
     snprintf(cmd, sizeof (cmd) - 1, "prom id");
@@ -2052,7 +2053,7 @@ eeprom_not_erased(uint bank, uint addr, uint len)
     if (bank != BANK_NOT_SPECIFIED) {
         if (addr == ADDR_NOT_SPECIFIED)
             addr = 0;
-        addr += bank * len;
+        addr += bank * EEPROM_BANK_SIZE_DEFAULT;
     }
 
     /* Manually check the first 32 bytes */
@@ -2156,11 +2157,15 @@ eeprom_read(const char *filename, uint bank, uint addr, uint len)
     if (addr == ADDR_NOT_SPECIFIED)
         addr = 0x000000;  // Start of EEPROM
 
-    if (len == EEPROM_SIZE_NOT_SPECIFIED)
-        len = EEPROM_SIZE_DEFAULT - addr;
+    if (len == EEPROM_SIZE_NOT_SPECIFIED) {
+        if (bank != BANK_NOT_SPECIFIED)
+            len = EEPROM_BANK_SIZE_DEFAULT;
+        else
+            len = EEPROM_SIZE_DEFAULT - addr;
+    }
 
     if (bank != BANK_NOT_SPECIFIED)
-        addr += bank * len;
+        addr += bank * EEPROM_BANK_SIZE_DEFAULT;
 
     eebuf = malloc(len + 4);
     if (eebuf == NULL)
@@ -6174,17 +6179,12 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
                  len, filename, (intmax_t)statbuf.st_size);
         }
     }
+#define KICKSMASH_ROM_BANK_SIZE
 
     if (bank != BANK_NOT_SPECIFIED) {
-        if ((mode & MODE_READ) && (len == EEPROM_SIZE_NOT_SPECIFIED)) {
-            warnx("You must specify a length with -r and -b together\n");
-            usage(stderr);
-            return (1);
-        }
-        if ((mode & MODE_ERASE) && (len == EEPROM_SIZE_NOT_SPECIFIED)) {
-            warnx("You must specify a length with -e and -b together\n");
-            usage(stderr);
-            return (1);
+        if ((mode & (MODE_READ | MODE_ERASE)) &&
+            (len == EEPROM_SIZE_NOT_SPECIFIED)) {
+            len = EEPROM_BANK_SIZE_DEFAULT;  // Kicksmash unmerged bank size
         }
     }
 
@@ -6235,7 +6235,7 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
             baseaddr = 0x000000;  // Start of EEPROM
 
         if (bank != BANK_NOT_SPECIFIED)
-            baseaddr += bank * len;
+            baseaddr += bank * EEPROM_BANK_SIZE_DEFAULT;
 
         do {
             if ((mode & MODE_WRITE) &&

@@ -7,7 +7,7 @@
 *.srec
 *.hex
 *.map
-*.swp
+*.sw?
 *.dis
 *.stylecheck
 generated.*.ld
@@ -34,3 +34,7 @@ amiga/romswitch
 sw/hostsmash
 sw/crcit
 kicksmash_*
+sw/hostsmash
+sw/hostsmash.exe
+sw/crcit
+sw/crcit.exe

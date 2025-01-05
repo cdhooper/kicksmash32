@@ -1,7 +1,7 @@
-PROG1=hostsmash
-SRCS1=hostsmash.c crc32.c version.c
-PROG2=crcit
-SRCS2=crcit.c crc32.c
+HOSTSMASH_PROG=hostsmash
+HOSTSMASH_SRCS=hostsmash.c version.c ../fw/crc32.c
+CRCIT_PROG=crcit
+CRCIT_SRCS=crcit.c ../fw/crc32.c
 CC := gcc
 #CFLAGS  := -O2 -g -pthread -Wall -Wpedantic
 #LDFLAGS := -O2 -g -lpthread
@@ -38,7 +38,7 @@ ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
     # -static works for Vista+, but doesn't work for XP
     LDFLAGS += -lws2_32 -static
     OBJDIR := objs.win64
-    SRCS1 += mingw-realpath.c
+    HOSTSMASH_SRCS += mingw-realpath.c
     CC := x86_64-w64-mingw32-gcc
 endif
 ifneq (,$(filter $(TARGET_OS),win32))
@@ -48,8 +48,8 @@ ifneq (,$(filter $(TARGET_OS),win32))
     CC := i686-w64-mingw32-gcc
 endif
 ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
-    PROG1 := $(PROG1).exe
-    PROG2 := $(PROG2).exe
+    HOSTSMASH_PROG := $(HOSTSMASH_PROG).exe
+    CRCIT_PROG := $(CRCIT_PROG).exe
 endif
 
 # Linux
@@ -68,8 +68,8 @@ endif
 
 #CFLAGS += -fanalyzer
 
-OPROG1 := $(OBJDIR)/$(PROG1)
-OPROG2 := $(OBJDIR)/$(PROG2)
+HOSTSMASH_OPROG := $(OBJDIR)/$(HOSTSMASH_PROG)
+CRCIT_OPROG := $(OBJDIR)/$(CRCIT_PROG)
 
 #ifneq ($(TARGET_OS),$(OS))
 #    $(info HOST=$(OS) TARGET=$(TARGET_OS))
@@ -85,13 +85,13 @@ else
 QUIET   :=
 endif
 
-OBJS1  := $(SRCS1:%.c=$(OBJDIR)/%.o)
-OBJS2  := $(SRCS2:%.c=$(OBJDIR)/%.o)
+#HOSTSMASH_OBJS  := $(HOSTSMASH_SRCS:%.c=$(OBJDIR)/%.o)
+#CRCIT_OBJS  := $(CRCIT_SRCS:%.c=$(OBJDIR)/%.o)
 
-nativeprog: $(OPROG1) $(OPROG2)
+nativeprog: $(HOSTSMASH_OPROG) $(CRCIT_OPROG)
 	@:
 
-all: $(OPROG1) $(OPROG2) win32 win64
+all: $(HOSTSMASH_OPROG) $(CRCIT_OPROG) win32 win64
 	@:
 
 win32:
@@ -102,29 +102,32 @@ win win64:
 define DEPEND_SRC
 # The following line creates a rule for an object file to depend on a
 # given source file.
-$(patsubst %,$(OBJDIR)/%,$(filter-out $(OBJDIR)/%,$(basename $(1)).o)) $(filter $(OBJDIR)/%,$(basename $(1)).o): $(1)
+$(patsubst %,$(2)/%,$(filter-out $(2)/%,$(basename $(notdir $(1))).o)) $(filter $(2)/%,$(basename $(1)).o): $(1)
+# The following line adds that object to macro containing the list of objects
+$(3) += $(patsubst %,$(2)/%,$(filter-out $(2)/%,$(basename $(notdir $(1))).o))
 endef
-$(foreach SRCFILE,$(SRCS1),$(eval $(call DEPEND_SRC,$(SRCFILE))))
-$(foreach SRCFILE,$(SRCS2),$(eval $(call DEPEND_SRC,$(SRCFILE))))
+
+$(foreach SRCFILE,$(HOSTSMASH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),HOSTSMASH_OBJS)))
+$(foreach SRCFILE,$(CRCIT_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),CRCIT_OBJS)))
 
 
-$(OBJS1) $(OBJS2): Makefile smash_cmd.h version.h crc32.h host_cmd.h
+$(HOSTSMASH_OBJS) $(CRCIT_OBJS): Makefile version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h
 $(OBJDIR)/hostsmash.o: | $(USB_HDR)
-$(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(OBJS1)) Makefile
+$(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(HOSTSMASH_OBJS)) Makefile
 
-$(OPROG1): $(OBJS1)
+$(HOSTSMASH_OPROG): $(HOSTSMASH_OBJS)
 	@echo Building $@
-	$(QUIET)$(CC) -o $@ $(OBJS1) $(LDFLAGS)
-	@rm -f $(PROG1)
+	$(QUIET)$(CC) -o $@ $(HOSTSMASH_OBJS) $(LDFLAGS)
+	@rm -f $(HOSTSMASH_PROG)
 	@ln -s $@
 
-$(OPROG2): $(OBJS2)
+$(CRCIT_OPROG): $(CRCIT_OBJS)
 	@echo Building $@
-	$(QUIET)$(CC) -o $@ $(OBJS2) $(LDFLAGS)
-	@rm -f $(PROG2)
+	$(QUIET)$(CC) -o $@ $(CRCIT_OBJS) $(LDFLAGS)
+	@rm -f $(CRCIT_PROG)
 	@ln -s $@
 
-$(sort $(OBJS1) $(OBJS2)): Makefile | $(OBJDIR)
+$(sort $(HOSTSMASH_OBJS) $(CRCIT_OBJS)): Makefile | $(OBJDIR)
 	@echo Building $@
 	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -o $@
 
@@ -140,7 +143,7 @@ $(USB_HDR):
 
 clean:
 	@echo Cleaning
-	$(QUIET)rm -rf $(OPROG1) $(OPROG2) $(OBJDIR)
+	$(QUIET)rm -rf $(HOSTSMASH_OPROG) $(CRCIT_OPROG) $(OBJDIR)
 
 clean-all: clean
 	@$(MAKE) TARGET_OS=win32 clean
