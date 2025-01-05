@@ -15,7 +15,7 @@ OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
 
 QUIET  := @
 
-# libopencm3 is a git submodule in the current directory
+# libopencm3
 OPENCM3_DIR := /usr/lib/libopencm3
 OPENCM3_HEADER := $(OPENCM3_DIR)/include/libopencm3/stm32/rcc.h
 
