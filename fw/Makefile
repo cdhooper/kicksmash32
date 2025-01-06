@@ -17,6 +17,9 @@ QUIET  := @
 
 # libopencm3
 OPENCM3_DIR := /usr/lib/libopencm3
+ifeq (,$(wildcard $(OPENCM3_DIR)))
+OPENCM3_DIR := libopencm3
+endif
 OPENCM3_HEADER := $(OPENCM3_DIR)/include/libopencm3/stm32/rcc.h
 
 # Our output name
@@ -54,6 +57,9 @@ BMP_PORT = /dev/ttyACM0
 
 DFU_UTIL=dfu-util
 ST_BUILD_DIR=/usr/stlink
+ifeq (,$(wildcard $(ST_BUILD_DIR)))
+ST_BUILD_DIR=stutils
+endif
 ST_TOOLS_PATH=$(ST_BUILD_DIR)/build/Release/bin
 OS := $(shell uname -s)
 
@@ -160,7 +166,7 @@ $(OBJDIR)/%.list: $(OBJDIR)/%.elf
 
 $(OBJDIR)/%.map: $(OBJDIR)/%.elf
 
-$(OBJDIR)/%.elf: $(OBJS) $(LDSCRIPT) | $(OPENCM3_LIB)
+$(OBJDIR)/%.elf: $(OBJS) $(LDSCRIPT) $(OPENCM3_LIB)
 	@echo Building $@
 	$(QUIET)$(LD) $(TGT_LDFLAGS) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
 
@@ -190,17 +196,20 @@ $(OBJDIR)/%.size: $(OBJDIR)/%.elf
 '
 $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o, $(OBJS))
 
-$(OBJS): Makefile | $(OBJDIR) $(OPENCM3_DIR) $(OPENCM3_HEADER)
+$(OBJS): Makefile $(OPENCM3_HEADER) | $(OBJDIR)
 
 $(OBJDIR):
 	mkdir -p $(OBJDIR)
 
-$(OPENCM3_DIR) $(OPENCM3_HEADER):
+$(OPENCM3_DIR)/Makefile:
 	@echo Cloning $@
-	$(QUIET)git submodule update --init --recursive
+	$(QUIET)git clone https://github.com/libopencm3/libopencm3
+
+$(OPENCM3_DIR)/include/%: $(OPENCM3_DIR)/Makefile
+	@echo Building $@
 	$(QUIET)make -C $(OPENCM3_DIR) -j8
 
-$(OPENCM3_LIB): | $(OPENCM3_DIR)
+$(OPENCM3_LIB): $(OPENCM3_HEADER)
 
 #	@echo Building $@
 #	make -C $(OPENCM3_DIR) -j8

@@ -23,14 +23,15 @@ rev2/
 rev3/
 rev4/
 photos
-#fw/libopencm3/
-#fw/stutils/
+fw/libopencm3/
+fw/stutils/
 amiga/smash
 amiga/smashfs
 amiga/smashftp
 amiga/smashfsrom
 amiga/smashfsrom_d
 amiga/romswitch
+amiga/romswitch.rom
 sw/hostsmash
 sw/crcit
 kicksmash_*
