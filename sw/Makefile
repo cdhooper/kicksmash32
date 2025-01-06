@@ -1,5 +1,5 @@
 HOSTSMASH_PROG=hostsmash
-HOSTSMASH_SRCS=hostsmash.c version.c ../fw/crc32.c
+HOSTSMASH_SRCS=hostsmash.c ../fw/version.c ../fw/crc32.c
 CRCIT_PROG=crcit
 CRCIT_SRCS=crcit.c ../fw/crc32.c
 CC := gcc
@@ -111,7 +111,7 @@ $(foreach SRCFILE,$(HOSTSMASH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR
 $(foreach SRCFILE,$(CRCIT_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),CRCIT_OBJS)))
 
 
-$(HOSTSMASH_OBJS) $(CRCIT_OBJS): Makefile version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h
+$(HOSTSMASH_OBJS) $(CRCIT_OBJS): Makefile ../fw/version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h
 $(OBJDIR)/hostsmash.o: | $(USB_HDR)
 $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(HOSTSMASH_OBJS)) Makefile
 

@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "*.h": "c",
+        "*.c": "c"
+    },
+    "editor.rulers": [80],
+    "C_Cpp.errorSquiggles": "enabledIfIncludesResolve",
+    "[c]": {
+        "files.encoding": "iso88591"
+    }
+}

@@ -51,7 +51,7 @@ typedef unsigned int uint;
 #include "../fw/crc32.h"
 #include "../fw/smash_cmd.h"
 #include "../amiga/host_cmd.h"
-#include "version.h"
+#include "../fw/version.h"
 
 #ifdef __clang__
 #define ATTRIBUTE_PRINTF __attribute__((format(printf, 1, 2)))

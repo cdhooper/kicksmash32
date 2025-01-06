@@ -1,1 +1,0 @@
-../fw/version.c
