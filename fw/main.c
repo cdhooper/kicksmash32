@@ -75,9 +75,9 @@ main(void)
     show_reset_reason();
     config_read();
     led_set_brightness(config.led_level);
-    ee_update_bank_at_poweron();
     usb_startup();
     check_board_standalone();
+    ee_update_bank_at_poweron();
 
     adc_init();
     ee_init();
