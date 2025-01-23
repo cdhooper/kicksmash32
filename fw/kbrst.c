@@ -15,8 +15,8 @@
 #include "printf.h"
 #include "timer.h"
 #include "kbrst.h"
+#include "pin_tests.h"
 
-uint            amiga_reboot_detect    = 0;
 uint8_t         amiga_not_in_reset     = 0xff;
 static uint8_t  amiga_powered_off      = 0;
 static uint64_t amiga_reset_timer      = 0;  // Timer to take Amiga out of reset
@@ -62,59 +62,56 @@ kbrst_poll(void)
 {
     uint8_t kbrst;
 
+    if (!board_is_standalone && !kbrst_in_amiga) {
+        /* Board is in Amiga and KBRST is not connected */
+        return;  // Leave at default state of "not in reset"
+    }
     if ((amiga_reset_timer != 0) && timer_tick_has_elapsed(amiga_reset_timer)) {
         amiga_reset_timer = 0;
         gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
     }
-    if (amiga_reboot_detect) {
-        amiga_reboot_detect = 0;
-        if (timer_tick_has_elapsed(amiga_reboot_detect_timeout)) {
-            amiga_reboot_detect_timeout = timer_tick_plus_msec(5000);
-            printf("Amiga reboot\n");
-        }
-    }
 
     kbrst = !!gpio_get(KBRST_PORT, KBRST_PIN);
-    if (amiga_not_in_reset == 0xff) {
-        amiga_not_in_reset = kbrst;
-    } else {
-        if (amiga_not_in_reset != kbrst) {
+    if (amiga_not_in_reset != kbrst) {
+        if (amiga_not_in_reset == 0xff) {
             amiga_not_in_reset = kbrst;
-            /* Amiga reset state change has occurred */
+            return;
+        }
+        amiga_not_in_reset = kbrst;
+        /* Amiga reset state change has occurred */
 
-            if (kbrst == 0) {
-                /* In reset: update ROM bank if requested by user (at reset) */
-                void ee_update_bank_at_reset(void);
-                printf("Amiga in reset\n");
-                ee_update_bank_at_reset();
-                if (amiga_long_reset_timer == 0)
-                    amiga_long_reset_timer = timer_tick_plus_msec(2000);
-            } else {
-                /* Out of reet */
-                if (amiga_powered_off) {
-                    amiga_powered_off = 0;
-                    printf("Amiga powered on\n");
-                } else {
-                    printf("Amiga out of reset\n");
-                }
-                amiga_long_reset_timer = 0;
-            }
-            amiga_reboot_detect_timeout = timer_tick_plus_msec(5000);
+        if (kbrst == 0) {
+            /* In reset: update ROM bank if requested by user (at reset) */
+            void ee_update_bank_at_reset(void);
+            printf("Amiga in reset\n");
+            ee_update_bank_at_reset();
+            if (amiga_long_reset_timer == 0)
+                amiga_long_reset_timer = timer_tick_plus_msec(2000);
         } else {
-            if ((amiga_long_reset_timer != 0) &&
-                timer_tick_has_elapsed(amiga_long_reset_timer)) {
-                amiga_long_reset_timer = 0;
-                if (amiga_not_in_reset == 0) {
-                    if (amiga_is_powered_on()) {
-                        /* Still in reset at timer expiration */
-                        void ee_update_bank_at_longreset(void);
-                        ee_update_bank_at_longreset();
-                    } else {
-                        void ee_update_bank_at_poweron(void);
-                        printf("Amiga powered off\n");
-                        amiga_powered_off++;
-                        ee_update_bank_at_poweron();
-                    }
+            /* Out of reet */
+            if (amiga_powered_off) {
+                amiga_powered_off = 0;
+                printf("Amiga powered on\n");
+            } else {
+                printf("Amiga out of reset\n");
+            }
+            amiga_long_reset_timer = 0;
+        }
+        amiga_reboot_detect_timeout = timer_tick_plus_msec(5000);
+    } else {
+        if ((amiga_long_reset_timer != 0) &&
+            timer_tick_has_elapsed(amiga_long_reset_timer)) {
+            amiga_long_reset_timer = 0;
+            if (amiga_not_in_reset == 0) {
+                if (amiga_is_powered_on()) {
+                    /* Still in reset at timer expiration */
+                    void ee_update_bank_at_longreset(void);
+                    ee_update_bank_at_longreset();
+                } else {
+                    void ee_update_bank_at_poweron(void);
+                    printf("Amiga powered off\n");
+                    amiga_powered_off++;
+                    ee_update_bank_at_poweron();
                 }
             }
         }

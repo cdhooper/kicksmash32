@@ -84,8 +84,9 @@ $(ST_BUILD_DIR) get-stutils:
 
 # Build ST-TOOLS
 $(ST_TOOLS_PATH)/st-flash build-stutils: | $(ST_BUILD_DIR)
-	make -C $(ST_BUILD_DIR) CMAKEFLAGS=-DCMAKE_INSTALL_PREFIX=.
-	ln -s ../../config $(ST_BUILD_DIR)/build/Release/stlink
+	make -C $(ST_BUILD_DIR) CMAKEFLAGS="-DCMAKE_INSTALL_PREFIX=. -DCMAKE_INSTALL_FULL_DATADIR=." -j4
+	ln -s ../.. $(ST_BUILD_DIR)/build/Release/stlink
+	ln -s . $(ST_BUILD_DIR)/build/Release/share
 
 gdb:
 	gdb -q -x .gdbinit $(BINARY).elf

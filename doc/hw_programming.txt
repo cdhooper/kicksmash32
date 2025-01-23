@@ -2,7 +2,7 @@ KickSmash hardware programming
 ------------------------------
 
 There are two ways to program firmware on your KickSmash.
-    1. ST-Link hardware programmer
+    1. ST-Link (requires the hardware programmer)
     2. USB DFU mode
 
 I prefer using the ST-Link for rapid programming cycles because it's
@@ -62,7 +62,8 @@ Get all the source code from here:
 
 3. Program the firmware
     Assuming you are on Linux and have the necessary packages installed,
-    this should be pretty straightforward.
+    this should be pretty straightforward. If you are on Windows, refer
+    to the separate doc/windows_notes.txt file
 
     If you are using the ST-Link, type:
         make flash

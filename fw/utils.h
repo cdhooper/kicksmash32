@@ -20,7 +20,7 @@
 
 #define ARRAY_SIZE(x) (int)((sizeof (x) / sizeof ((x)[0])))
 
-void reset_dfu(void);
+void reset_dfu(int in_rom);
 void reset_cpu(void);
 void reset_check(void);
 void show_reset_reason(void);

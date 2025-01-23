@@ -49,6 +49,16 @@ uint32_t rcc_pclk2_frequency = 0;
  *                                \
  *                                 \--PLL3Mul-Mul-VCO    (ignored)
  *                                    x8      x2  128MHz
+ *
+ * USB must always be 48 MHz
+ *      USBPRE (USB Prescaler) may be either /1 or /1.5
+ *
+ *      48 * 2 / 2 = 48 MHz    Supported
+ *      48 * 3 / 2 = 72 MHz    Supported
+ *      48 * 4 / 2 = 96 MHz    Not possible
+ *      48 * 5 / 2 = 129 MHz   Not possible
+ *      48 * 6 / 2 = 144 MHz   Not possible
+ *
  */
 #ifdef STM32F1
 static const struct rcc_clock_scale rcc_clock_config = {

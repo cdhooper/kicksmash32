@@ -33,7 +33,7 @@
 #include "version.h"
 
 static void
-reset_everything(void)
+reset_periphs(void)
 {
     RCC_APB1ENR  = 0;  // Disable all peripheral clocks
     RCC_APB1RSTR = 0xffffffff;  // Reset APB1
@@ -54,11 +54,14 @@ main_poll(void)
     led_poll();
 }
 
+extern uint _binary_objs_usbdfu_bin_start;
+extern uint _binary_objs_usbdfu_bin_end;
+extern uint _binary_objs_usbdfu_bin_size;
 int
 main(void)
 {
+    reset_periphs();
     reset_check();
-    reset_everything();
     clock_init();
     timer_init();
 //  timer_delay_msec(500);  // Just for development purposes
@@ -67,6 +70,7 @@ main(void)
     uart_init();
 
     printf("\r\nKicksmash 32 %s\n", version_str);
+
     identify_cpu();
     show_reset_reason();
     config_read();

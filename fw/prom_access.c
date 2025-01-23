@@ -21,6 +21,8 @@
 #include "crc32.h"
 #include "kbrst.h"
 #include "config.h"
+#include "led.h"
+#include "gpio.h"
 
 #define DATA_CRC_INTERVAL 256
 
@@ -213,27 +215,35 @@ prom_write_32(uint32_t addr, uint width, uint8_t *buf)
 rc_t
 prom_write(uint32_t addr, uint width, void *bufp)
 {
+    rc_t rc;
     if (warn_amiga_not_in_reset())
         return (RC_BUSY);
 
     ee_enable();
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
     if (ee_mode == EE_MODE_32)
-        return (prom_write_32(addr, width, bufp));
+        rc = prom_write_32(addr, width, bufp);
     else
-        return (prom_write_16(addr, width, bufp));
+        rc = prom_write_16(addr, width, bufp);
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 0);
+    return (rc);
 }
 
 rc_t
 prom_erase(uint mode, uint32_t addr, uint32_t len)
 {
+    rc_t rc;
     if (warn_amiga_not_in_reset())
         return (RC_BUSY);
 
     ee_enable();
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
     if (ee_mode == EE_MODE_32)
-        return (ee_erase(mode, addr >> 2, len >> 2, 1));
+        rc = ee_erase(mode, addr >> 2, len >> 2, 1);
     else
-        return (ee_erase(mode, addr >> 1, len >> 1, 1));
+        rc = ee_erase(mode, addr >> 1, len >> 1, 1);
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 0);
+    return (rc);
 }
 
 void
@@ -390,6 +400,7 @@ prom_read_binary(uint32_t addr, uint32_t len)
             cap_count++;
             crc_next = DATA_CRC_INTERVAL;
         }
+        led_poll();  // Blink power LED if it needs to be blinked
     }
     if (crc_next != DATA_CRC_INTERVAL) {
         /* Send CRC for last partial segment */
@@ -484,6 +495,7 @@ fail:
         }
         addr += tlen;
         len  -= tlen;
+        led_poll();  // Blink power LED if it needs to be blinked
     }
     if (crc_next != DATA_CRC_INTERVAL) {
         if (check_crc(crc, saddr, addr, false)) {

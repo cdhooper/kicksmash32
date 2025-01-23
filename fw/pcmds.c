@@ -54,7 +54,8 @@
 #endif
 
 const char cmd_cpu_help[] =
-"cpu regs - show CPU registers";
+"cpu hardfault - cause CPU hard fault (bad address)\n"
+"cpu regs      - show CPU registers";
 
 const char cmd_gpio_help[] =
 "gpio [name=value/mode/?] - display or set GPIOs";
@@ -77,7 +78,7 @@ const char cmd_reset_help[] =
 "reset              - reset CPU\n"
 "reset amiga [hold] - reset Amiga using KBRST (hold leaves it in reset)\n"
 "reset amiga long   - reset Amiga with a long reset (change ROM image)\n"
-"reset dfu          - reset into DFU programming mode\n"
+"reset dfu[rom]     - reset into DFU programming mode\n"
 "reset prom         - reset ROM flash memory (forces Amiga reset as well)\n"
 "reset usb          - reset and restart USB interface";
 
@@ -100,6 +101,7 @@ typedef struct {
 
 static const memmap_t memmap[] = {
     { "ADC1",   ADC1_BASE },
+    { "AHB",    PERIPH_BASE_AHB },
     { "APB1",   PERIPH_BASE_APB1 },
     { "APB2",   PERIPH_BASE_APB2 },
 #ifdef STM32F1
@@ -617,30 +619,33 @@ cmd_map(int argc, char * const *argv)
     return (RC_SUCCESS);
 }
 
+static void
+shutdown_all(void)
+{
+    uart_flush();
+    usb_shutdown();
+    usb_signal_reset_to_host(1);
+    timer_delay_msec(30);
+    msg_shutdown();
+    adc_shutdown();
+    timer_shutdown();
+    /* Put all peripherals in reset */
+    /* Clear NVIC? */
+}
+
 rc_t
 cmd_reset(int argc, char * const *argv)
 {
     if (argc < 2) {
         printf("Resetting...\n");
-        uart_flush();
-        usb_shutdown();
-        usb_signal_reset_to_host(1);
-        timer_delay_msec(30);
-        msg_shutdown();
-        adc_shutdown();
-        timer_shutdown();
+        shutdown_all();
         reset_cpu();
         return (RC_FAILURE);
-    } else if (strcmp(argv[1], "dfu") == 0) {
-        printf("Resetting to DFU...\n");
-        uart_flush();
-        usb_shutdown();
-        usb_signal_reset_to_host(1);
-        timer_delay_msec(30);
-        msg_shutdown();
-        adc_shutdown();
-        timer_shutdown();
-        reset_dfu();
+    } else if (strncmp(argv[1], "dfu", 3) == 0) {
+        uint isrom = (argv[1][3] == 'r');
+        printf("Resetting to DFU%s...\n", isrom ? " in ROM" : "");
+        shutdown_all();
+        reset_dfu(isrom);
         return (RC_SUCCESS);
     } else if (strcmp(argv[1], "usb") == 0) {
         timer_delay_msec(1);
@@ -690,6 +695,8 @@ cmd_cpu(int argc, char * const *argv)
         return (RC_USER_HELP);
     if (strncmp(argv[1], "regs", 1) == 0) {
         fault_show_regs(NULL);
+    } else if (strncmp(argv[1], "hardfault", 2) == 0) {
+        fault_hard();
     } else {
         printf("Unknown argument %s\n", argv[1]);
         return (RC_USER_HELP);

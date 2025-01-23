@@ -18,9 +18,11 @@
 #include "irq.h"
 #include "usb.h"
 #include "gpio.h"
+#include "utils.h"
 
 #if defined(STM32F1)
 #include <libopencm3/stm32/f1/nvic.h>
+#include <libopencm3/cm3/scb.h>
 #elif defined(STM32F4)
 #include <libopencm3/stm32/f4/nvic.h>
 #endif
@@ -51,6 +53,16 @@ static bool          uart_console_active = false;
 
 uint8_t last_input_source = 0;
 
+static void uart_wait_done(USART_TypeDef_P usart)
+{
+    /* Wait until the data has been transferred into the shift register. */
+    int count = 0;
+
+    while ((USART_SR(usart) & USART_SR_TC) == 0)
+        if (count++ == 2000)
+            break;  // Misconfigured hardware?
+}
+
 static void uart_wait_send_ready(USART_TypeDef_P usart)
 {
     /* Wait until the data has been transferred into the shift register. */
@@ -78,13 +90,6 @@ uart_putchar(int ch)
     uart_send_blocking(CONSOLE_USART, (uint16_t) ch);
 }
 
-void
-uart_puts(const char *str)
-{
-    while (*str != '\0')
-        uart_putchar(*str);
-}
-
 static uint16_t
 uart_recv(USART_TypeDef_P usart)
 {
@@ -94,8 +99,16 @@ uart_recv(USART_TypeDef_P usart)
 void
 uart_flush(void)
 {
-    uart_wait_send_ready(CONSOLE_USART);
+    uart_wait_done(CONSOLE_USART);
 }
+
+#undef CTRL
+#define CTRL(x) ((x) - '@')
+
+/* Magic sequence to dump registers and reset */
+static const uint8_t magic_seq[] = {
+    CTRL('R'), CTRL('E'), CTRL('S'), CTRL('E'), CTRL('T')
+};
 
 /*
  * cons_rb_put() stores a character in the UART input ring buffer.
@@ -107,10 +120,42 @@ uart_flush(void)
 static void
 cons_rb_put(uint ch)
 {
+    static uint8_t magic_pos;
     uint new_prod = ((cons_in_rb_producer + 1) % sizeof (cons_in_rb));
 
+    if (ch == magic_seq[magic_pos]) {
+        if (++magic_pos == sizeof (magic_seq)) {
+            uintptr_t sp = (uintptr_t) &new_prod;
+            uint      cur;
+            extern    uint _stack;
+            printf("MAGIC RESET\n");
+            printf("SP %08x", sp);
+            if ((sp & 31) != 0) {
+                uint missing = (sp >> 2) & 7;
+                printf("\n   %*s", missing * 9, "");
+            }
+            for (cur = 0; cur < 64; cur++) {
+                if (sp >= (uintptr_t) &_stack)
+                    break;
+                if ((sp & 31) == 0)
+                    printf("\n   ");
+                printf(" %08lx", *ADDR32(sp));
+                sp += 4;
+            }
+            printf("\nResetting...\n\n");
+            uart_flush();
+            scb_reset_system();
+        }
+    } else {
+        magic_pos = 0;
+    }
+
     if (new_prod == cons_in_rb_consumer) {
-        uart_putchar('%');
+        static uint fail_prod = 0;
+        if (fail_prod != new_prod) {
+            fail_prod = new_prod;
+            uart_putchar('%');
+        }
         return;  // Would cause ring buffer overflow
     }
 
@@ -317,10 +362,23 @@ puts(const char *str)
 int
 getchar(void)
 {
+    int ch;
     usb_putchar_flush();  // Ensure USB output is flushed
     usb_poll();
 
-    return (cons_rb_get());
+    ch = cons_rb_get();
+    if (ch == -1) {
+        if (USART_SR(CONSOLE_USART) & (USART_SR_RXNE | USART_SR_ORE)) {
+            ch = cons_rb_get();
+            if (ch == -1) {
+                /* Interrupts are not working -- try polled */
+                ch = uart_recv(CONSOLE_USART);
+                if (ch != 0)
+                    uart_console_active = true;
+            }
+        }
+    }
+    return (ch);
 }
 
 void

@@ -688,15 +688,16 @@ rl_bind_key(int key, const void *func)
 int
 rl_initialize(void)
 {
-    static bool_t do_rl_init = TRUE;
+    static bool_t did_rl_init = FALSE;
 
-    if (do_rl_init == FALSE)
+    input_need_prompt = 1;
+    input_clear();
+
+    if (did_rl_init == TRUE)
         return (0);
 
-    do_rl_init        = FALSE;
-    input_need_prompt = 1;
+    did_rl_init       = TRUE;
     history_cur       = history_buf;
-    input_clear();
 
 #ifndef EMBEDDED_CMD
 #ifdef AMIGA

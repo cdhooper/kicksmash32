@@ -35,6 +35,7 @@ uint8_t  kbrst_in_amiga = 0;
 #define FS_PD            0  // Final state: Pull down
 #define FS_PU            1  // Final state: Pull up
 #define FS_IN            2  // Final state: Input
+#define FS_0             3  // Final state: Drive to 0
 
 typedef struct {
     char     name[12];
@@ -55,7 +56,7 @@ static const pin_config_t pin_config[] =
     { "FLASH_A19",  FLASH_A19_PORT,  FLASH_A19_PIN,  FS_PD, PIN_INPUT },
     { "SOCKET_D31", SOCKET_D31_PORT, SOCKET_D31_PIN, FS_PU, PIN_INPUT },
     { "SOCKET_OE",  SOCKET_OE_PORT,  SOCKET_OE_PIN,  FS_PU, PIN_INPUT },
-    { "FLASH_OEWE", FLASH_OEWE_PORT, FLASH_OEWE_PIN, FS_PD, PIN_EXT_PULLDOWN },
+    { "FLASH_OEWE", FLASH_OEWE_PORT, FLASH_OEWE_PIN, FS_0,  PIN_EXT_PULLDOWN },
     { "USB_CC1",    USB_CC1_PORT,    USB_CC1_PIN,    FS_IN, PIN_EXT_PULLDOWN },
     { "USB_CC2",    USB_CC2_PORT,    USB_CC2_PIN,    FS_IN, PIN_EXT_PULLDOWN },
     { "BOOT1",      GPIOB,           GPIO2,          FS_IN, PIN_EXT_PULLDOWN },
@@ -123,6 +124,7 @@ check_board_standalone(void)
     uint16_t got;
     uint16_t got2;
     uint16_t saw;
+    uint     armed;
     uint16_t conn;
 
     /*
@@ -153,23 +155,19 @@ check_board_standalone(void)
         gpio_setv(KBRST_PORT, KBRST_PIN, 0);
     }
 
-    /* Can't do further tests without clobbering a running Amiga */
-    if (kbrst_in_amiga)
-        return;
-
     /*
      * Test whether D31 is connected to the Amiga.
      *
-     * In the first test (0), set D31 pin high and wait for up to
-     * 2 ms for the pin to go high. If the pin was not seen high or
-     * last read was not high, then the pin is connected.
+     * In the first test (0), pull D31 pin low and wait for up to
+     * 2 ms for the pin to go high. If the pin was not seen low,
+     * then the pin is connected.
      *
-     * In the second pass (1), set D31 pin low and wait for up to
-     * 2 ms for the pin to go low. If the pin was not seen low or
-     * last read was not low, then the pin is connected.
+     * In the second pass (1), set D31 pin high and wait for up to
+     * 2 ms for the pin to go high. If the pin was not seen high,
+     * then the pin is connected.
      *
-     * In the final step, wait up to 2ms for pin to change state,
-     * which would also indicate it is connected.
+     * The test will finish sooner (armed) if the state is first the
+     * same and then opposite of whether the pin is pulled low or high.
      */
     gpio_setmode(SOCKET_D31_PORT, SOCKET_D31_PIN,
                  GPIO_SETMODE_INPUT_PULLUPDOWN);
@@ -178,17 +176,26 @@ check_board_standalone(void)
     usb_poll();
     for (pass = 0; pass <= 1; pass++) {
         gpio_setv(SOCKET_D31_PORT, SOCKET_D31_PIN, pass);
-        saw = 0;
         timeout = timer_tick_plus_msec(2);
+        armed = 0;
         while (timer_tick_has_elapsed(timeout) == false) {
             got = gpio_get(SOCKET_D31_PORT, SOCKET_D31_PIN);
-            if (pass == 0)
-                got = ~got;
-            if ((saw & SOCKET_D31_PIN) &&
-                (got & SOCKET_D31_PIN) == 0)
-                break;  // pin changed state -- can stop now
+            if (pass == 1)
+                got ^= SOCKET_D31_PIN;
+            if (got) {
+                if (armed) {
+                    conn = 1;  // pin is opposite of pull-up or pull-down
+                    break;     // can stop now
+                }
+            } else {
+                /* In the set pull-up or pull-down state */
+                armed = 1;
+            }
         }
-        conn |= ~got;  // not at expected, so must be connected
+        if (armed == 0) {
+            /* Didn't arm within timeout period -- must be connected */
+            conn = 1;
+        }
         if (conn)
             break;
     }
@@ -205,31 +212,47 @@ check_board_standalone(void)
      * 1 ms for the pins to go low. If a pin was not seen low or
      * last read was not low, then the pin is connected.
      *
-     * In the final step, wait up to 1ms for pins to change state,
-     * which would also indicate they are connected.
+     * The test will finish sooner (armed) if the state is first the
+     * same and then opposite of whether the pin is pulled low or high.
      */
+    gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN | FLASH_A19_PIN,
+                 GPIO_SETMODE_INPUT);
     gpio_setmode(SOCKET_A16_PORT,
                  FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN,
                  GPIO_SETMODE_INPUT_PULLUPDOWN);
     conn = 0;
 
+// XXX These tests need to be fixed
     for (pass = 0; pass <= 1; pass++) {
         gpio_setv(SOCKET_A16_PORT,
-                  FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN, !pass);
-        saw = 0;
+                  FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN, pass);
+        armed = 0;
         timeout = timer_tick_plus_msec(10);
         while (timer_tick_has_elapsed(timeout) == false) {
+            uint igot;
             got = gpio_get(SOCKET_A16_PORT,
                            FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN);
-            if (pass == 1)
-                got = ~got;
-            saw |= got;
-            if ((saw & (FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN)) ==
-                       (FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN)) {
+            if (pass == 0) {
+                igot = got;
+                got ^= (FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN);
+            } else {
+                igot = got ^ (FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN);
+            }
+
+            /* Arm if got is same as pull-up or pull-down */
+            armed |= got;
+
+            /* Mark connected if armed and got is opposite of expected */
+            conn |= (armed & igot);
+
+            /* If all are connected, then stop early */
+            if ((conn & (FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN)) ==
+                        (FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN)) {
                 break;
             }
         }
-        conn |= ~saw | ~got;
+        /* Anything which didn't arm within timeout period is connected */
+        conn |= (armed ^ ((FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN)));
     }
     printf("Connected: ");
     if (!(conn & FLASH_A17_PIN))
@@ -248,6 +271,26 @@ check_board_standalone(void)
         putchar('!');
     printf("KBRST");
     usb_poll();
+
+    if (kbrst_in_amiga) {
+        printf("\n");
+        goto in_amiga;  // Can't do further tests in a running Amiga
+    }
+
+    if (d31_conn ||
+        (conn & (FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN))) {
+        printf("\n");
+        if (d31_conn)
+            printf("%s connected but KBRST is not\n", "D31");
+        if (conn & FLASH_A17_PIN)
+            printf("%s connected but KBRST is not\n", "A17");
+        if (conn & FLASH_A18_PIN)
+            printf("%s connected but KBRST is not\n", "A18");
+        if (conn & FLASH_A19_PIN)
+            printf("%s connected but KBRST is not\n", "A19");
+        led_alert(1);
+        goto in_amiga;
+    }
 
     /*
      * Detect which flash parts are installed (default bus mode)
@@ -295,13 +338,19 @@ check_board_standalone(void)
     } else {
         ee_default_mode = EE_MODE_32;
         printf(" !Flash0 !Flash1 NO FLASH DETECTED\n");
+        led_alert(1);
     }
 
-    /* Detect whether upper data lines are connected to Amiga (32-bit mode) */
-    if (!d31_conn) {
-        /* D31 floats -- probably a 16-bit Amiga */
-        if (ee_default_mode == EE_MODE_32)
-            ee_default_mode = EE_MODE_16_LOW;
+    if (kbrst_in_amiga) {
+        /*
+         * If upper data lines are not connected to Amiga, then set the
+         * flash default mode to 16-bit.
+         */
+        if (!d31_conn) {
+            /* D31 floats -- probably a 16-bit Amiga */
+            if (ee_default_mode == EE_MODE_32)
+                ee_default_mode = EE_MODE_16_LOW;
+        }
     }
 
     if (config.ee_mode != EE_MODE_AUTO) {
@@ -317,8 +366,8 @@ check_board_standalone(void)
     timer_delay_msec(1);
     got = gpio_get(SOCKET_A0_PORT, 0xffff);
     if (got != 0xffff) {
-        if (!kbrst_in_amiga)
-            printf("A0-A15 pullup got %04x\n", got);
+        printf("A0-A15 pullup got %04x\n", got);
+        led_alert(1);
         goto in_amiga;
     }
 
@@ -328,8 +377,8 @@ check_board_standalone(void)
     timer_delay_msec(1);
     got = gpio_get(SOCKET_A0_PORT, 0xffff);
     if (got != 0x0000) {
-        if (!kbrst_in_amiga)
-            printf("A0-A15 pulldown got %04x\n", got);
+        printf("A0-A15 pulldown got %04x\n", got);
+        led_alert(1);
 in_amiga:
         /* Set address lines as floating input */
         gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT);
@@ -633,9 +682,15 @@ pin_tests(void)
         curname = pin_config_get(cur, &curport, &curpin, buf0);
         if (cur < ARRAY_SIZE(pin_config)) {
             final = pin_config[cur].final_state;
-            if (final == FS_IN) {
-                final = FS_PD;
-                mode = GPIO_SETMODE_INPUT;
+            switch (final) {
+                case FS_IN:
+                    final = 0;
+                    mode = GPIO_SETMODE_INPUT;
+                    break;
+                case FS_0:
+                    final = 0;
+                    mode = GPIO_SETMODE_OUTPUT_PPULL_2;
+                    break;
             }
         }
         gpio_setv(curport, curpin, final);

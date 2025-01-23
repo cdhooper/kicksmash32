@@ -838,8 +838,8 @@ static const chip_ids_t chip_ids[] = {
     { 0x00012223, "M29F400FT" },   // AMD+others 512K top boot
     { 0x000122ab, "M29F400FB" },   // AMD+others 512K bottom boot
     { 0x000422d2, "M29F160TE" },   // Fujitsu 2MB top boot
-    { 0x00c222D6, "MX29F800CT" },  // Macronix 2MB top boot
-    { 0x00c22258, "MX29F800CB" },  // Macronix 2MB bottom boot
+    { 0x00c222D6, "MX29F800CT" },  // Macronix 1MB top boot
+    { 0x00c22258, "MX29F800CB" },  // Macronix 1MB bottom boot
     { 0x00000000, "Unknown" },     // Must remain last
 };
 
@@ -1190,6 +1190,8 @@ ee_test(void)
     data_output(0xffffffff);  // pull high
     ee_read_word(0x3, &val);
     ee_read_mode();
+
+    // XXX: Might need to accommodate 16-bit ee_mode here
     if (val != 0x00000000) {
         printf("Flash data %08lx should be 00000000.\n"
                "Bits floating or stuck:", val);
@@ -1316,19 +1318,21 @@ ee_update_bank_at_longreset(void)
 {
     uint bank;
     uint cur = config.bi.bi_bank_current;
+    uint nextbank = ROM_BANKS;
     for (bank = 0; bank < ROM_BANKS; bank++) {
         if (cur == config.bi.bi_longreset_seq[bank]) {
             /* Switch to the next bank in the sequence */
-            uint nextbank = bank + 1;
-            if ((nextbank == ROM_BANKS) ||
-                (config.bi.bi_longreset_seq[nextbank] >= ROM_BANKS)) {
-                nextbank = 0;
-            }
-            printf("longreset bank %u\n", config.bi.bi_longreset_seq[nextbank]);
-            ee_set_bank(config.bi.bi_longreset_seq[nextbank]);
+            nextbank = bank + 1;
             break;
         }
     }
+    if ((nextbank == ROM_BANKS) ||
+        (config.bi.bi_longreset_seq[nextbank] >= ROM_BANKS)) {
+        /* Not in the reset sequence list. Just choose the first bank. */
+        nextbank = 0;
+    }
+    printf("longreset bank %u\n", config.bi.bi_longreset_seq[nextbank]);
+    ee_set_bank(config.bi.bi_longreset_seq[nextbank]);
 }
 
 void

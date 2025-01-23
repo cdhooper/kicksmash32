@@ -50,5 +50,6 @@ static inline void __enable_irq(bool enable)
 #endif /* local IRQ masking */
 
 void fault_show_regs(const void *sp);
+void fault_hard(void);
 
 #endif /* _IRQ_H */

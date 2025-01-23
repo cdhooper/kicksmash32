@@ -481,6 +481,27 @@ update_status(const char *fmt, ...)
     Text(rp, buf, sizeof (buf));
 }
 
+
+/*
+ * send_cmd_retry
+ * --------------
+ * Send a request to Kicksmash, retrying up to 4 times on error.
+ */
+static uint
+send_cmd_retry(uint16_t cmd, void *arg, uint16_t arglen,
+               void *reply, uint replymax, uint *replyalen)
+{
+    uint tries = 3;
+    uint rc;
+
+    do {
+        rc = send_cmd(cmd, arg, arglen, reply, replymax, replyalen);
+        if (rc == MSG_STATUS_SUCCESS)
+            break;
+    } while (--tries > 0);
+    return (rc);
+}
+
 /*
  * get_banks
  * ---------
@@ -510,7 +531,7 @@ get_banks(bank_info_t *bi)
 #else
     int rc;
     uint rlen;
-    rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, bi, sizeof (*bi), &rlen);
+    rc = send_cmd_retry(KS_CMD_BANK_INFO, NULL, 0, bi, sizeof (*bi), &rlen);
     if (rc != 0)
         update_status("FAIL info %d", rc);
 #endif
@@ -546,7 +567,7 @@ get_id(smash_id_t *id)
 #else
     int rc;
     uint rlen;
-    rc = send_cmd(KS_CMD_ID, NULL, 0, id, sizeof (*id), &rlen);
+    rc = send_cmd_retry(KS_CMD_ID, NULL, 0, id, sizeof (*id), &rlen);
     if (rc != 0)
         update_status("FAIL id %d", rc);
 #endif
@@ -577,31 +598,31 @@ bank_state_save(void)
             strncpy(argbuf + 2, info.bi_name[bank], slen);
             argbuf[sizeof (argbuf) - 1] = '\0';
 
-            rc = send_cmd(KS_CMD_BANK_NAME, argbuf,
-                          strlen(argbuf + 2) + 3, NULL, 0, &rlen);
+            rc = send_cmd_retry(KS_CMD_BANK_NAME, argbuf,
+                                strlen(argbuf + 2) + 3, NULL, 0, &rlen);
             if ((rc != 0) && (had_error++ == 0))
                 update_status("FAIL name %d: %d", bank, rc);
         }
         if (updated_names & BIT(ROM_BANKS)) {
             /* Board name was updated */
-            rc = send_cmd(KS_CMD_SET | KS_SET_NAME,
-                          id.si_name, sizeof (id.si_name), NULL, 0, NULL);
+            rc = send_cmd_retry(KS_CMD_SET | KS_SET_NAME,
+                                id.si_name, sizeof (id.si_name), NULL, 0, NULL);
             if ((rc != 0) && (had_error++ == 0))
                 update_status("FAIL name: %d", rc);
         }
         updated_names = 0;
     }
     if (updated_longreset) {
-        rc = send_cmd(KS_CMD_BANK_LRESET, info.bi_longreset_seq,
-                      sizeof (info.bi_longreset_seq), NULL, 0, NULL);
+        rc = send_cmd_retry(KS_CMD_BANK_LRESET, info.bi_longreset_seq,
+                            sizeof (info.bi_longreset_seq), NULL, 0, NULL);
         if ((rc != 0) && (had_error++ == 0))
             update_status("FAIL set longreset: %d", rc);
         updated_longreset = 0;
     }
     if (updated_poweron) {
         uint16_t argval = info.bi_bank_poweron;
-        rc = send_cmd(KS_CMD_BANK_SET | KS_BANK_SETPOWERON,
-                      &argval, sizeof (argval), NULL, 0, &rlen);
+        rc = send_cmd_retry(KS_CMD_BANK_SET | KS_BANK_SETPOWERON,
+                            &argval, sizeof (argval), NULL, 0, &rlen);
         if ((rc != 0) && (had_error++ == 0))
             update_status("FAIL set poweron: %d", rc);
         updated_poweron = 0;
@@ -623,8 +644,8 @@ bank_set_current_and_reboot(void)
     int rc;
     uint rlen;
     uint16_t argval = bank_switchto;
-    rc = send_cmd(KS_CMD_BANK_SET | KS_BANK_SETCURRENT | KS_BANK_REBOOT,
-                  &argval, sizeof (argval), NULL, 0, &rlen);
+    rc = send_cmd_retry(KS_CMD_BANK_SET | KS_BANK_SETCURRENT | KS_BANK_REBOOT,
+                        &argval, sizeof (argval), NULL, 0, &rlen);
     update_status("FAIL set reboot %d", rc);
 }
 

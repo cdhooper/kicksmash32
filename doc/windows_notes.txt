@@ -1,0 +1,122 @@
+In this document:
+
+* DFU Programming
+* Windows COM port driver
+* Hostsmash debugging
+* Hostsmash under Wine
+
+-------------------------------------------------------------------
+DFU Programming
+---------------
+
+DFU programming from Windows requires dfu-util. You will need to acquire
+that utility and install that on your system.
+    https://dfu-util.sourceforge.net/
+    https://dfu-util.sourceforge.net/releases/
+
+There is a dfu.bat file in the firmware directory which can be used to
+run dfu-util from Windows. Follow other instructions in hw_programming.txt
+for setting up your board for DFU programming.
+
+-------------------------------------------------------------------
+
+Windows COM port driver
+-----------------------
+When KickSmash is running, it will present a generic serial device to
+the host over the USB connection. Unlink Linux, Windows requires a driver
+for generic serial devices. Windows 10+ have a built-in generic serial
+driver which should function with KickSmash, but you may need to tell
+your computer to use the generic driver.
+
+If you see "KickSmash Prg" under other devices, then you at least know
+the KickSmash is now running the firmware. Under "Ports (COM & LPT)"
+you should see a new "USB Serial Device (COMx)" but the Device Status
+may have an error, such as
+    Device status
+    This device cannot start. (Code 10)
+    A device which does not exist was specified.
+
+You can try using the following driver:
+    https://github.com/rogerclarkmelbourne/Arduino_STM32/blob/master/drivers/win/wdi-simple.exe
+
+And tell it to manage KickSmash serial:
+    wdi-simple.exe --vid 0x1209 --pid 0x1610 --type 3 --name "KickSmash Prg" --dest "maple-serial"
+
+After installing the above, you will need to plug in your KickSmash board
+again.
+
+-------
+Another option for older Windows version might be the STMSW-STM32102
+Virtual COM port driver installation package for Windows:
+    https://www.st.com/en/development-tools/stsw-stm32102.html
+
+Extract the zip file and install the Windows 7 version.
+Go to
+    C:\Program Files\STMicroelectronics\Software\Virtual comport driver\Win7
+Edit
+    stmcrc.inf
+and change the two lines which look like
+    %DESCRIPTION%=DriverInstall,USB\VID_0483&PID_5740
+to:
+    %DESCRIPTION%=DriverInstall,USB\VID_1203&PID_1610
+then run
+    w7_install.bat
+
+-------------------------------------------------------------------
+
+Hostsmash debugging
+-------------------
+
+If you find that hostsmash.exe emits an error while attempting to
+program a Kickstart ROM, especially if you see
+    0%Remote sent error 78
+then it could be due to a communication failure or some other failure
+with the KickSmash. You can get a complete log of the interaction
+beween hostsmash and Kicksmash by setting the TERM_DEBUG environment
+variable. At a command prompt, enter:
+    setx TERM_DEBUG out.txt
+
+Then run the hostsmash command again. A "out.txt" file will be
+created in the current directory, and the content of the file may
+help debug the problem.
+
+-------------------------------------------------------------------
+
+Hostsmash under Wine
+--------------------
+
+Hostsmash.exe is a port of the Linux hostsmash utility to Windows.
+It is usually tested using Wine under Linux. For this reason, you
+might encounter problems on a real Windows installation which were
+not caught during development.
+
+In ~/.wine/dosdevices you will find symlinks to system devices
+there. You might already have something mapped to /dev/ttyACM0,
+which would be the first ACM device attached to your host. This
+is probably KickSmash. If you have other ACM devices, then you
+may need to create further links.
+    % cd ~/.wine/dosdevices>
+    % ls -l|grep ACM
+    lrwxrwxrwx. 1 USR GRP 12 2025-01-15 21:55 com33 -> /dev/ttyACM0
+    % wine hostsmash.exe -d COM33 -t
+    [ wine "fixme" output removed ]
+    << Type ^X to exit.  Opened COM33 >>
+
+    Kicksmash 32 Version 1.3 built 2024-12-27 19:48:16
+        CPUID=411fc231 Dev=0418 Rev=1001 (compile: STM32F107xC BOARD=4)
+        Hardware: STM32F1    Connectivity revision Z
+        HCLK=72 MHz  APB1=36 MHz  APB2=72 MHz
+        Power-on reset
+    Valid config at 3e2a0
+    Connected: !A17 A18 A19 D31 !KBRST Flash0 Flash1
+    Prom 000122d2 000122d2 M29F160FT M29F160FT
+    Standalone
+    CMD>
+    ^X
+
+Program:
+    wine hostsmash.exe -d COM33 -w 'z:\home\cdh\projects\amiga_kicksmash32\sw\A3000.47.111.rom' -b 7 -s 3210
+
+From Windows:
+    hostsmashe -d com4 -t
+    hostsmashe -d com4 -w A3000.rom -b 7 -s 3210

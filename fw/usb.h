@@ -20,6 +20,7 @@ void usb_shutdown(void);
 void usb_startup(void);
 void usb_signal_reset_to_host(int restart);
 void usb_poll(void);
+void usb_poll_mode(void);
 void usb_mask_interrupts(void);
 void usb_unmask_interrupts(void);
 void usb_show_regs(void);

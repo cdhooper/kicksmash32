@@ -9,11 +9,25 @@ SRCS   := main.c clock.c gpio.c printf.c timer.c uart.c usb.c version.c \
 	  led.c irq.c mem_access.c readline.c cmdline.c cmds.c pcmds.c \
 	  prom_access.c m29f160xt.c utils.c crc32.c adc.c kbrst.c scanf.c \
 	  pin_tests.c stm32flash.c config.c msg.c
+USRCS  := usbdfu.c clock.c
 
 OBJDIR := objs
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
+UOBJS  := $(USRCS:%.c=$(OBJDIR)/%.o)
 
 QUIET  := @
+VERBOSE :=
+
+# If verbose is specified with no other targets, then build everything
+ifeq ($(MAKECMDGOALS),verbose)
+verbose: all
+endif
+ifeq (,$(filter verbose timed, $(MAKECMDGOALS)))
+QUIET   := @
+else
+QUIET   :=
+VERBOSE := -v
+endif
 
 # libopencm3
 OPENCM3_DIR := /usr/lib/libopencm3
@@ -24,6 +38,7 @@ OPENCM3_HEADER := $(OPENCM3_DIR)/include/libopencm3/stm32/rcc.h
 
 # Our output name
 BINARY = $(OBJDIR)/fw
+UBINARY = $(OBJDIR)/usbdfu
 
 # Linker script for our MCU
 LDSCRIPT = stm32f1.ld  # Also works for STM32F4
@@ -146,7 +161,7 @@ srec: $(BINARY).srec
 list: $(BINARY).list
 flashbmp: $(BINARY).flashbmp
 
-GENERATED_BINARIES=$(BINARY).elf $(BINARY).bin $(BINARY).hex $(BINARY).srec $(BINARY).list $(BINARY).map
+GENERATED_BINARIES=$(BINARY).elf $(BINARY).bin $(BINARY).hex $(BINARY).srec $(BINARY).list $(BINARY).map $(UBINARY).elf $(UBINARY).bin
 
 $(OBJDIR)/%.bin: $(OBJDIR)/%.elf
 	@echo Building $@
@@ -166,9 +181,31 @@ $(OBJDIR)/%.list: $(OBJDIR)/%.elf
 
 $(OBJDIR)/%.map: $(OBJDIR)/%.elf
 
+DFUBIN_OBJ := $(OBJDIR)/usbdfu_bin.o
+$(BINARY).elf: $(DFUBIN_OBJ)
 $(OBJDIR)/%.elf: $(OBJS) $(LDSCRIPT) $(OPENCM3_LIB)
 	@echo Building $@
-	$(QUIET)$(LD) $(TGT_LDFLAGS) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
+	$(QUIET)$(LD) $(TGT_LDFLAGS) $(LDFLAGS) $(OBJS) $(DFUBIN_OBJ) $(LDLIBS) -o $@
+
+# Stand-alone program usbdfu:
+# usbdfu.c CC-> usbdfu.o LINK-> usbdfu.elf OC-> usbdfu.bin OC->
+# usbdfu_bin_temp.o OC-> usbdfu_bin.o   which gets linked with
+# $(OBJS) to finally create fw.elf and fw.bin
+$(UBINARY).elf: $(UOBJS) usbdfu.ld $(OPENCM3_LIB)
+	@echo Building $@
+	$(QUIET)$(LD) --static -nostartfiles -nostdlib -Tusbdfu.ld -mthumb -mcpu=cortex-m3 -msoft-float -ggdb3 -Wl,-Map=$(UBINARY).map -Wl,--cref -Wl,--gc-sections -Llibopencm3/lib $(UOBJS) $(LDLIBS) -o $@
+
+$(DFUBIN_OBJ): $(UBINARY).bin Makefile
+	@echo Building $@
+	$(QUIET)$(OBJCOPY) -I binary -O elf32-littlearm -B arm $< $<.t.o $(VERBOSE)
+	$(QUIET)$(OBJCOPY) --rename-section .data=.rodata $<.t.o $@ $(VERBOSE)
+
+# Get argument options for objcopy -O
+#     arm-none-eabi-ld --print-output-format
+# Get argument options for objcopy -B
+#     arm-none-eabi-ld --verbose | sed -n 's/OUTPUT_ARCH(\([^()*]*\))/\1/p'
+# Show sections and symbols in usbdfu_bin.o
+#     arm-none-eabi-objdump -x objs/usbdfu_bin.o
 
 $(OBJDIR)/%.o: %.c
 	@echo Building $@
@@ -196,7 +233,7 @@ $(OBJDIR)/%.size: $(OBJDIR)/%.elf
 '
 $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o, $(OBJS))
 
-$(OBJS): Makefile $(OPENCM3_HEADER) | $(OBJDIR)
+$(OBJS) $(UOBJS): Makefile $(OPENCM3_HEADER) | $(OBJDIR)
 
 $(OBJDIR):
 	mkdir -p $(OBJDIR)
@@ -222,7 +259,7 @@ $(OPENCM3_LIB): $(OPENCM3_HEADER)
 
 clean clean-all:
 	@echo Cleaning
-	$(QUIET)$(RM) $(GENERATED_BINARIES) generated.* $(OBJS) $(OBJS:%.o=%.d)
+	$(QUIET)$(RM) $(GENERATED_BINARIES) generated.* $(OBJS) $(OBJS:%.o=%.d) $(UOBJS)
 
 # Dependencies
 -include $(OBJS:.o=.d)
@@ -257,10 +294,6 @@ just-flash: $(ST_TOOLS_PATH)/st-flash | $(BINARY).bin $(UDEV_FILE_PATHS)
 just-erase: $(ST_TOOLS_PATH)/st-flash | $(UDEV_FILE_PATHS)
 	$(ST_TOOLS_PATH)/st-flash $(ST_ARGS) --flash=0x100000 erase 0x08000000 0x3c000
 
-just-mxprog:
-	./mxprog -d /dev/ttyACM0 -e -a 0x000000 -l 0x80000
-	./mxprog -d /dev/ttyACM0 -wv A3000.47.111.rom -a 0x000000 -s 3210
-
 # Protect/unprotect/clobber flash by writing the option byte area
 # The following can also be done by the STM32CubeProgrammer.
 # F105 unlocked  1ffff800: a5 5a 07 f8 00 ff 00 ff ff 00 ff 00 ff 00 ff 00
@@ -294,10 +327,11 @@ $(ST_BUILD_DIR) get-stutils:
 
 # Build ST-TOOLS
 $(ST_TOOLS_PATH)/st-flash build-stutils: | $(ST_BUILD_DIR)
-	make -C $(ST_BUILD_DIR) CMAKEFLAGS=-DCMAKE_INSTALL_PREFIX=.
-	ln -s ../../config $(ST_BUILD_DIR)/build/Release/stlink
+	make -C $(ST_BUILD_DIR) CMAKEFLAGS="-DCMAKE_INSTALL_PREFIX=. -DCMAKE_INSTALL_FULL_DATADIR=." -j4
+	ln -s ../.. $(ST_BUILD_DIR)/build/Release/stlink
+	ln -s . $(ST_BUILD_DIR)/build/Release/share
 
 gdb:
 	gdb -q -x .gdbinit $(BINARY).elf
 
-.PHONY: images clean get-stutils build_stutils stlink dfu flash just-dfu just-flash just-unprotect just-dfu dfu-unprotect size elf bin hex srec list udev-files
+.PHONY: images clean get-stutils build_stutils stlink dfu flash just-dfu just-flash just-unprotect just-dfu dfu-unprotect size elf bin hex srec list udev-files verbose

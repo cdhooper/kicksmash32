@@ -1039,7 +1039,7 @@ smash_test_msg_loopback(void)
             }
             if ((count > scount[pass] - 4) && (count < MAX_MESSAGES)) {
                 if ((rc = send_msg_loopback(buf, BIG_WRITE_LEN, pass)) != 0) {
-                    printf("fail at %u\n", count);
+                    printf("Fail at msg %u, wrote=%u\n", count, count_w2);
                     goto fail;
                 }
                 count_w2 += BIG_WRITE_LEN + KS_HDR_AND_CRC_LEN;

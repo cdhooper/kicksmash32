@@ -27,20 +27,12 @@
 #define SOCKET_OE_PORT      GPIOA
 #define SOCKET_OE_PIN           GPIO0       // OE# Output Enable (Amiga)
 
-#if BOARD_REV <= 3
-#define FLASH_RB2_PORT      GPIOB
-#define FLASH_RB2_PIN           GPIO0       // RB# Ready / Busy
-#endif
 #define FLASH_RP_PORT       GPIOB
 #define FLASH_RP_PIN            GPIO1       // RP# Reset / Program
 #define KBRST_PORT          GPIOB
 #define KBRST_PIN               GPIO4
 #define LED_POWER_PORT      GPIOB
-#if BOARD_REV == 2
-#define LED_POWER_PIN           GPIO9
-#else
 #define LED_POWER_PIN           GPIO8
-#endif
 #define FLASH_OEWE_PORT     GPIOB
 #define FLASH_OEWE_PIN          GPIO9
 #define FLASH_A18_PORT      GPIOB

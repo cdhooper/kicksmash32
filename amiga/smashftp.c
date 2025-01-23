@@ -683,6 +683,7 @@ cmd_delay(int argc, char * const *argv)
     int  pos   = 0;
     int  count;
     char *ptr;
+    char restore = '\0';
 
     if (argc <= 1) {
         printf("This command requires an argument: <time>\n");
@@ -694,6 +695,7 @@ cmd_delay(int argc, char * const *argv)
     }
     for (ptr = argv[1]; *ptr != '\0'; ptr++) {
         if (convert_name_to_time_units(ptr, &units) == RC_SUCCESS) {
+            restore = *ptr;
             *ptr = '\0';
             break;
         }
@@ -758,6 +760,8 @@ cmd_delay(int argc, char * const *argv)
             usleep(value / 1000);
             break;
     }
+    if (ptr != NULL)
+        *ptr = restore;
     return (RC_SUCCESS);
 }
 

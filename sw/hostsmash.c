@@ -154,7 +154,7 @@ static const char usage_text[] =
 "    -s --swap <mode>        byte swap mode (2301, 3210, 1032, noswap=0123)\n"
 "    -v --verify <filename>  verify file matches EEPROM contents\n"
 "    -w --write <filename>   read file and write to EEPROM\n"
-"    -t --term               just act in terminal mode (CLI)\n"
+"    -t --term [<command>]   operate in terminal mode (CLI) to KickSmash\n"
 "    -y --yes                answer all prompts with 'yes'\n"
 "    TERM_DEBUG=`tty`        env variable for communication debug output\n"
 "    TERM_DEBUG_HEX=1        show debug output in hex instead of ASCII\n"
@@ -249,7 +249,15 @@ timespec_to_timeval(struct timeval *tv, struct timespec *ts)
 #define EXIT_USAGE 2
 #endif
 
+#define KICKSMASH_MODE_A3000    0  // Swap mode 3210 (Amiga 3000/4000)
+#define KICKSMASH_MODE_A500     1  // Swap mode 1032 (Amiga 500/2000)
+#define KICKSMASH_MODE_A500_HI  2  // Swap mode 1032 (Amiga 500/2000)
+#define KICKSMASH_MODE_AUTO     3  // Swap mode 3210 (Amiga 3000/4000)
+#define KICKSMASH_MODE_A1200    4  // Swap mode 1032 (Amiga 1200)
+
+#define SWAPMODE_AUTO  0xa040   // Automatic mode
 #define SWAPMODE_A500  0xA500   // Amiga 16-bit ROM format
+#define SWAPMODE_A1200 0xA1200  // Amiga 32-bit ROM format hi-lo swapped
 #define SWAPMODE_A3000 0xA3000  // Amiga 32-bit ROM format
 
 #define SWAP_TO_ROM    0  // Bytes originated in a file (to be written in ROM)
@@ -360,7 +368,9 @@ static char             device_name[PATH_MAX];
 static char            *host_device_name  = device_name;
 static bool             terminal_mode     = FALSE;
 static bool             force_yes         = FALSE;
-static uint             swapmode          = 0123;  // no swap
+static uint             swapmode          = SWAPMODE_AUTO;
+static uint             kicksmash_mode    = KICKSMASH_MODE_AUTO;
+static char            *terminal_cmd      = NULL;
 
 #ifdef __MINGW32__
 #define AT_FDCWD 0
@@ -408,6 +418,7 @@ err(int ec, const char *fmt, ...)
     (void) vprintf(fmt, args);
     va_end(args);
     putchar('\n');
+    exit(ec);
 }
 
 void
@@ -420,6 +431,7 @@ errx(int ec, const char *fmt, ...)
     (void) vprintf(fmt, args);
     va_end(args);
     putchar('\n');
+    exit(ec);
 }
 
 void
@@ -551,6 +563,7 @@ atou(const char *str)
 static void
 usage(FILE *fp)
 {
+    fprintf(fp, "\nhostsmash built "BUILD_DATE" "BUILD_TIME"\n");
     (void) fputs(usage_text, fp);
 }
 
@@ -777,6 +790,20 @@ tx_rb_flushed(void)
 
 #ifdef WIN32
 #include <windows.h>
+static void
+microsleep(__int64 usec)
+{
+    HANDLE timer;
+    LARGE_INTEGER ft;
+
+    ft.QuadPart = -(10*usec); // Convert to 100 nanosecond interval, negative value indicates relative time
+
+    timer = CreateWaitableTimer(NULL, TRUE, NULL);
+    SetWaitableTimer(timer, &ft, 0, NULL, NULL, 0);
+    WaitForSingleObject(timer, INFINITE);
+    CloseHandle(timer);
+}
+
 #elif _POSIX_C_SOURCE >= 199309L
 #include <time.h>   // for nanosleep
 #else
@@ -794,7 +821,8 @@ static void
 time_delay_msec(int msec)
 {
 #ifdef __MINGW32__
-    Sleep(msec);
+    microsleep(msec * 1000);
+//  Sleep(msec);
 #elif _POSIX_C_SOURCE >= 199309L
     struct timespec ts;
     ts.tv_sec = msec / 1000;
@@ -810,6 +838,48 @@ time_delay_msec(int msec)
 #endif
 }
 
+static void
+diff_timeval(struct timeval *start, struct timeval *end, struct timeval *diff)
+{
+    long seconds = end->tv_sec - start->tv_sec;
+    long microseconds = end->tv_usec - start->tv_usec;
+
+    // Adjust for negative microseconds
+    if (microseconds < 0) {
+        seconds--;
+        microseconds += 1000000;
+    } else if (microseconds > 1000000) {
+        seconds++;
+        microseconds -= 1000000;
+    }
+    diff->tv_sec = seconds;
+    diff->tv_usec = microseconds;
+}
+
+static int
+time_has_elapsed(struct timeval *tv_timeout)
+{
+    struct timeval tv_now;
+    struct timeval tv_diff;
+    struct timezone tz;
+    gettimeofday(&tv_now, &tz);
+    diff_timeval(tv_timeout, &tv_now, &tv_diff);
+    if ((tv_diff.tv_sec >= 0) && (tv_diff.tv_usec > 0))
+        return (1);
+    return (0);
+}
+
+static void
+calc_timeout_msec(struct timeval *tv_timeout, int msec)
+{
+    struct timezone tz;
+    gettimeofday(tv_timeout, &tz);
+
+    tv_timeout->tv_usec += msec * 1000;
+    tv_timeout->tv_sec += tv_timeout->tv_usec / 1000000;
+    tv_timeout->tv_usec %= 1000000;
+}
+
 /*
  * send_ll_bin() sends a binary block of data to the remote programmer.
  *
@@ -822,18 +892,23 @@ send_ll_bin(const void *buf, size_t len)
     int timeout_count = 0;
     const uint8_t *data = (const uint8_t *)buf;
     size_t pos = 0;
+    struct timeval tv_timeout;
+    calc_timeout_msec(&tv_timeout, 500);
 
     while (pos < len) {
         if (tx_rb_put(*data)) {
-            time_delay_msec(1);
-            if (timeout_count++ >= 500) {
+            if (time_has_elapsed(&tv_timeout)) {
                 printf("Send timeout at 0x%zx\n", pos);
                 return (1);  // Timeout
             }
             printf("-\n"); fflush(stdout);  // XXX: shouldn't happen
+            timeout_count++;
             continue;        // Try again
         }
-        timeout_count = 0;
+        if (timeout_count) {
+            calc_timeout_msec(&tv_timeout, 500);
+            timeout_count = 0;
+        }
         data++;
         pos++;
     }
@@ -1386,24 +1461,29 @@ create_threads(void)
 static int
 receive_ll(void *buf, size_t buflen, int timeout, bool exact_bytes)
 {
-    int received = 0;
     int timeout_count = 0;
+    int received = 0;
     uint8_t *data = (uint8_t *)buf;
+    struct timeval tv_timeout;
+    calc_timeout_msec(&tv_timeout, 500);
 
     while (received < buflen) {
         int ch = rx_rb_get();
         if (ch == -1) {
-            if (timeout_count++ >= timeout) {
+            if (time_has_elapsed(&tv_timeout)) {
                 if (exact_bytes && ((timeout > 50) || (received == 0))) {
                     printf("Receive timeout (%d ms): got %d of %zu bytes\n",
                            timeout, received, buflen);
                 }
                 return (received);
             }
-            time_delay_msec(1);
+            timeout_count++;
             continue;
         }
-        timeout_count = 0;
+        if (timeout_count) {
+            calc_timeout_msec(&tv_timeout, 500);
+            timeout_count = 0;
+        }
         *(data++) = ch;
         received++;
     }
@@ -1594,15 +1674,15 @@ send_ll_str(const char *cmd)
 static void
 discard_input(int timeout)
 {
-    int timeout_count = 0;
-    while (timeout_count <= timeout) {
+    struct timeval tv_timeout;
+    calc_timeout_msec(&tv_timeout, timeout);
+
+    while (!time_has_elapsed(&tv_timeout)) {
         int ch = rx_rb_get();
         if (ch == -1) {
-            timeout_count++;
             time_delay_msec(1);
             continue;
         }
-        timeout_count = 0;
     }
 }
 
@@ -1638,7 +1718,7 @@ discard_input(int timeout)
  * throttled by how fast the programmer can actually write to the EEPROM.
  */
 static int
-send_ll_crc(uint8_t *data, size_t len)
+send_ll_crc(const uint8_t *data, size_t len)
 {
     uint     pos = 0;
     uint32_t crc = 0;
@@ -1841,12 +1921,35 @@ ask_again:
 static void
 execute_swapmode(uint8_t *buf, uint len, uint dir)
 {
+    bool_t  printed    = FALSE;
     uint    pos;
     uint8_t temp;
     static const uint8_t str_f94e1411[] = { 0xf9, 0x4e, 0x14, 0x11 };
     static const uint8_t str_11144ef9[] = { 0x11, 0x14, 0x4e, 0xf9 };
     static const uint8_t str_1411f94e[] = { 0x14, 0x11, 0xf9, 0x4e };
     static const uint8_t str_4ef91114[] = { 0x4e, 0xf9, 0x11, 0x14 };
+
+    if (swapmode == SWAPMODE_AUTO) {
+        printf("Auto swap mode: ");
+        switch (kicksmash_mode) {
+            default:
+            case KICKSMASH_MODE_AUTO:
+            case KICKSMASH_MODE_A3000:
+                swapmode = SWAPMODE_A3000;
+                printf("A3000, ");
+                break;
+            case KICKSMASH_MODE_A500:
+            case KICKSMASH_MODE_A500_HI:
+                swapmode = SWAPMODE_A500;
+                printf("A500, ");
+                break;
+            case KICKSMASH_MODE_A1200:
+                swapmode = SWAPMODE_A1200;
+                printf("A1200, ");
+                break;
+        }
+        printed = TRUE;
+    }
 
     switch (swapmode) {
         case 0:
@@ -1891,7 +1994,7 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 if (memcmp(buf, str_1411f94e, 4) == 0)
                     return;  // Already in desired order
                 if (memcmp(buf, str_11144ef9, 4) == 0) {
-                    printf("Swap mode 2301\n");
+                    printf("Swapping 2301\n");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
             }
@@ -1900,7 +2003,49 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 if (memcmp(buf, str_11144ef9, 4) == 0)
                     return;  // Already in desired order
                 if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swap mode 1032\n");
+                    printf("Swapping 1032\n");
+                    goto swap_1032;  // Swap odd/even bytes
+                }
+            }
+            goto unrecognized;
+        case SWAPMODE_A1200:
+            if (dir == SWAP_TO_ROM) {
+                /* Need bytes in order: 14 11 f9 4e */
+                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                    if (printed)
+                        printf("No swap\n");
+                    return;  // Already in desired order
+                }
+                if (memcmp(buf, str_4ef91114, 4) == 0) {
+                    printf("Swapping 3210\n");
+                    goto swap_3210;  // Swap bytes in 32-bit longs
+                }
+                if (memcmp(buf, str_f94e1411, 4) == 0) {
+                    printf("Swapping 2301\n");
+                    goto swap_2301;  // Swap adjacent 16-bit words
+                }
+                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                    printf("Swapping 1032\n");
+                    goto swap_1032;  // Swap odd/even bytes
+                }
+            }
+            if (dir == SWAP_FROM_ROM) {
+                /* Need bytes in order: 4e f9 11 14 */
+                if (memcmp(buf, str_4ef91114, 4) == 0) {
+                    if (printed)
+                        printf("No swap\n");
+                    return;  // Already in desired order
+                }
+                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                    printf("Swapping 3210\n");
+                    goto swap_3210;  // Swap bytes in 32-bit longs
+                }
+                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                    printf("Swapping 2301\n");
+                    goto swap_2301;  // Swap adjacent 16-bit words
+                }
+                if (memcmp(buf, str_f94e1411, 4) == 0) {
+                    printf("Swapping 1032\n");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
@@ -1908,38 +2053,46 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
         case SWAPMODE_A3000:
             if (dir == SWAP_TO_ROM) {
                 /* Need bytes in order: f9 4e 14 11 */
-                if (memcmp(buf, str_f94e1411, 4) == 0)
+                if (memcmp(buf, str_f94e1411, 4) == 0) {
+                    if (printed)
+                        printf("No swap\n");
                     return;  // Already in desired order
+                }
                 if (memcmp(buf, str_11144ef9, 4) == 0) {
-                    printf("Swap mode 3210\n");
+                    printf("Swapping 3210\n");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
                 if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swap mode 2301\n");
+                    printf("Swapping 2301\n");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
                 if (memcmp(buf, str_4ef91114, 4) == 0) {
-                    printf("Swap mode 1032\n");
+                    printf("Swapping 1032\n");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
             if (dir == SWAP_FROM_ROM) {
                 /* Need bytes in order: 11 14 4e f9 */
-                if (memcmp(buf, str_11144ef9, 4) == 0)
+                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                    if (printed)
+                        printf("No swap\n");
                     return;  // Already in desired order
+                }
                 if (memcmp(buf, str_f94e1411, 4) == 0) {
-                    printf("Swap mode 3210\n");
+                    printf("Swapping 3210\n");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
                 if (memcmp(buf, str_4ef91114, 4) == 0) {
-                    printf("Swap mode 2301\n");
+                    printf("Swapping 2301\n");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
                 if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swap mode 1032\n");
+                    printf("Swapping 1032\n");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
+            goto unrecognized;
+        default:
 unrecognized:
             errx(EXIT_FAILURE,
                  "Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
@@ -2090,7 +2243,10 @@ eeprom_not_erased(uint bank, uint addr, uint len)
         if (complen > len)
             complen = len;
 
-        sprintf(cmd, "comp prom %x prom %x %x", paddr, addr, complen);
+        sprintf(cmd, "comph prom %x prom %x %x", paddr, addr, complen);
+#ifdef ERASE_CHECK_DEBUG
+        printf("-> %s\n", cmd);
+#endif
         if (send_cmd(cmd))
             return (-1);  // send_cmd() reported "timeout" in this case
         if (recv_output(cmd_output, sizeof (cmd_output), &rxcount,
@@ -2131,6 +2287,27 @@ eeprom_id(void)
         printf("Receive timeout\n");
     else
         printf("%.*s", rxcount, cmd_output);
+}
+
+static void
+get_kicksmash_mode(void)
+{
+    char cmd[64];
+    char cmd_output[80];
+    int  rxcount;
+
+    strcpy(cmd, "prom mode");
+    if (send_cmd(cmd))
+        exit(1); // "timeout" was reported in this case
+    if (recv_output(cmd_output, sizeof (cmd_output), &rxcount, 100))
+        exit(1); // "timeout" was reported in this case
+    if (rxcount == 0)
+        errx(EXIT_FAILURE, "Kicksmash receive timeout");
+    if ((sscanf(cmd_output, "%u%n", &kicksmash_mode, &rxcount) != 1) ||
+        (rxcount == 0) ||
+        ((cmd_output[rxcount] != ' ') && (cmd_output[rxcount] != '\0'))) {
+        errx(EXIT_FAILURE, "Bad response from Kicksmash: \"%s\"", cmd_output);
+    }
 }
 
 /*
@@ -2202,33 +2379,15 @@ read_fail:
     free(eebuf);
 }
 
-/*
- * eeprom_write() uses the programmer to writes all or part of an EEPROM image.
- *                Content to write is sourced from a local file.
- *
- * @param  [in]  filename        - The file to write to the EEPROM.
- * @param  [in]  addr            - The EEPROM starting address.
- * @param  [io]  len             - The length to write.
- * @return       0 - Verify successful.
- * @return       1 - Verify failed.
- * @exit         EXIT_FAILURE - The program will terminate on file access error.
- */
-static uint
-eeprom_write(const char *filename, uint addr, uint len)
+static uint8_t *
+file_read(const char *filename, uint len)
 {
-    FILE       *fp;
-    uint8_t    *filebuf;
-    char        cmd[64];
-#undef SUPPORTS_PROM_STATUS
-#ifdef SUPPORTS_PROM_STATUS
-    char        cmd_output[64];
-    int         rxcount;
-#endif
-    int         tcount = 0;
+    FILE    *fp;
+    uint8_t *filebuf;
 
     filebuf = malloc(len);
     if (filebuf == NULL)
-        errx(EXIT_FAILURE, "Could not allocate %u byte buffer", len);
+        errx(EXIT_FAILURE, "Could not allocate %u bytes", len);
 
     fp = fopen(filename, "rb");
     if (fp == NULL)
@@ -2236,7 +2395,26 @@ eeprom_write(const char *filename, uint addr, uint len)
     if (fread(filebuf, len, 1, fp) != 1)
         errx(EXIT_FAILURE, "Failed to read %u bytes from %s", len, filename);
     fclose(fp);
-    execute_swapmode(filebuf, len, SWAP_TO_ROM);
+
+    return (filebuf);
+}
+
+/*
+ * eeprom_write() uses the programmer to writes all or part of an EEPROM image.
+ *                Content to write is sourced from a local file.
+ *
+ * @param  [in]  filebuf         - The file content to write.
+ * @param  [in]  addr            - The EEPROM starting address.
+ * @param  [io]  len             - The length to write.
+ * @return       0 - Verify successful.
+ * @return       1 - Verify failed.
+ * @exit         EXIT_FAILURE - The program will terminate on file access error.
+ */
+static uint
+eeprom_write(const uint8_t *filebuf, uint addr, uint len)
+{
+    char        cmd[64];
+    int         tcount = 0;
 
     printf("Writing 0x%06x bytes to EEPROM starting at address 0x%x\n",
            len, addr);
@@ -2255,24 +2433,8 @@ eeprom_write(const char *filename, uint addr, uint len)
 
         time_delay_msec(1);
     }
-    printf("Wrote 0x%x bytes to device from file %s\n", len, filename);
+    printf("Wrote 0x%x bytes to device\n", len);
 
-#ifdef SUPPORTS_PROM_STATUS
-    snprintf(cmd, sizeof (cmd) - 1, "prom status");
-    cmd[sizeof (cmd) - 1] = '\0';
-    if (send_cmd(cmd))
-        return (-1); // "timeout" was reported in this case
-    if (recv_output(cmd_output, sizeof (cmd_output), &rxcount, 100))
-        return (-1); // "timeout" was reported in this case
-    if (rxcount == 0) {
-        printf("Status receive timeout\n");
-        exit(1);
-    } else {
-        printf("Status: %.*s", rxcount, cmd_output);
-    }
-#endif
-
-    free(filebuf);
     return (0);
 }
 
@@ -2290,8 +2452,8 @@ eeprom_write(const char *filename, uint addr, uint len)
  * @return       None.
  */
 static void
-show_fail_range(char *filebuf, char *eebuf, uint len, uint addr, uint filepos,
-                uint miscompares_max)
+show_fail_range(const uint8_t *filebuf, const uint8_t *eebuf, uint len,
+                uint addr, uint filepos, uint miscompares_max)
 {
     uint pos;
 
@@ -2330,29 +2492,16 @@ show_fail_range(char *filebuf, char *eebuf, uint len, uint addr, uint filepos,
  * @exit         EXIT_FAILURE - The program will terminate on file access error.
  */
 static int
-eeprom_verify(const char *filename, uint addr, uint len, uint miscompares_max)
+eeprom_verify(const uint8_t *filebuf, uint addr, uint len, uint miscompares_max)
 {
-    FILE       *fp;
-    char       *filebuf;
-    char       *eebuf;
+    uint8_t    *eebuf;
     char        cmd[64];
     int         rxcount;
     int         pos;
     int         first_fail_pos = -1;
     uint        miscompares = 0;
 
-    filebuf = malloc(len);
-    eebuf   = malloc(len + 4);
-    if ((eebuf == NULL) || (filebuf == NULL))
-        errx(EXIT_FAILURE, "Could not allocate %u byte buffer", len);
-
-    fp = fopen(filename, "rb");
-    if (fp == NULL)
-        errx(EXIT_FAILURE, "Failed to open %s", filename);
-    if (fread(filebuf, len, 1, fp) != 1)
-        errx(EXIT_FAILURE, "Failed to read %u bytes from %s", len, filename);
-    fclose(fp);
-    execute_swapmode((uint8_t *)filebuf, len, SWAP_TO_ROM);
+    eebuf = malloc(len + 4);
 
     snprintf(cmd, sizeof (cmd) - 1, "prom read %x %x", addr, len);
     cmd[sizeof (cmd) - 1] = '\0';
@@ -2360,14 +2509,15 @@ eeprom_verify(const char *filename, uint addr, uint len, uint miscompares_max)
         /* "timeout" was reported in this case */
 fail_verify_read:
         free(eebuf);
-        free(filebuf);
         return (1);
     }
     rxcount = receive_ll_crc(eebuf, len);
     if (rxcount <= 0)
         goto fail_verify_read; // "timeout" was reported in this case
     if (rxcount < len) {
-        if (strncmp(eebuf + rxcount - 11, "FAILURE", 8) == 0) {
+        const char *str = (const char *) eebuf + rxcount - 11;
+        if ((strncmp(str, "FAILURE", 8) == 0) ||
+            (strcasestr(str, "FAILURE") != NULL)) {
             rxcount -= 11;
             printf("Read %.11s\n", eebuf + rxcount);
         }
@@ -2409,7 +2559,6 @@ fail_verify_read:
                         first_fail_pos, miscompares_max);
     }
     free(eebuf);
-    free(filebuf);
     if (miscompares) {
         printf("%u miscompares\n", miscompares);
         return (1);
@@ -2455,7 +2604,7 @@ reset_amiga(int hold)
 }
 
 /*
- * run_terminal_mode() implements a terminal interface with the programmer's
+ * run_terminal_mode() implements a terminal interface with the KickSmash
  *                     command line.
  *
  * @param  [in]  None.
@@ -2475,11 +2624,14 @@ run_terminal_mode(void)
     HANDLE ihandle = GetStdHandle(STD_INPUT_HANDLE);
     DWORD inputtype;
 
-    if (ihandle == INVALID_HANDLE_VALUE) {
-        printf("Bad input handle\n");
-        do_exit(EXIT_FAILURE);
+    if (ihandle == INVALID_HANDLE_VALUE)
+        errx(EXIT_FAILURE, "Bad input handle");
+
+    if (terminal_cmd != NULL) {
+        inputtype = FILE_TYPE_UNKNOWN;
+    } else {
+        inputtype = GetFileType(ihandle);
     }
-    inputtype = GetFileType(ihandle);
     if (inputtype == FILE_TYPE_CHAR) {
         /* Set ihandle to raw input */
         DWORD mode;
@@ -2502,7 +2654,17 @@ run_terminal_mode(void)
         while (tx_rb_space() == 0)
             time_delay_msec(20);
 
-        if (inputtype == FILE_TYPE_CHAR) {
+        if (terminal_cmd != NULL) {
+            ch = *(terminal_cmd++);
+            if (ch == '\0') {
+                /* End of command */
+                ch = '\r';
+                tx_rb_put(ch);
+                time_delay_msec(400);
+                do_exit(EXIT_SUCCESS);
+            }
+            tx_rb_put(ch);
+        } else if (inputtype == FILE_TYPE_CHAR) {
             if (PeekConsoleInput(ihandle, inbuffer, 128, &read_count) == 0) {
                 system_error("PeekConsoleInput");
                 running = 0;
@@ -2554,8 +2716,10 @@ run_terminal_mode(void)
             }
         }
     }
+    time_delay_msec(400);
 #else
-    if (isatty(fileno(stdin))) {
+    /* Linux / MacOS */
+    if ((terminal_cmd == NULL) && isatty(fileno(stdin))) {
         struct termios term;
         if (tcgetattr(0, &saved_term))
             errx(EXIT_FAILURE, "Could not get terminal information");
@@ -2582,7 +2746,16 @@ run_terminal_mode(void)
         while (tx_rb_space() == 0)
             time_delay_msec(20);
 
-        if ((len = read(0, &ch, 1)) <= 0) {
+        if (terminal_cmd != NULL) {
+            ch = *(terminal_cmd++);
+            if (ch == '\0') {
+                /* End of command */
+                ch = '\r';
+                tx_rb_put(ch);
+                time_delay_msec(400);
+                do_exit(EXIT_SUCCESS);
+            }
+        } else if ((len = read(0, &ch, 1)) <= 0) {
             if (len == 0) {
                 time_delay_msec(400);
                 do_exit(EXIT_SUCCESS);
@@ -6127,7 +6300,7 @@ clock_ks_show(int enter)
  */
 int
 run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
-         bool fill, const char *filename)
+         bool fill, const char *file1, const char *file2)
 {
     int amiga_was_put_in_reset = 0;
     int rc;
@@ -6157,7 +6330,7 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
         // XXX: Also add regular clock set service to message mode
         return (clock_ks_show(enter));
     }
-    if (((filename == NULL) || (filename[0] == '\0')) &&
+    if (((file1 == NULL) || (file1[0] == '\0')) &&
         (mode & (MODE_READ | MODE_VERIFY | MODE_WRITE))) {
         warnx("You must specify a filename with -r or -v or -w option\n");
         usage(stderr);
@@ -6166,17 +6339,22 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
 
     if (mode & (MODE_WRITE | MODE_VERIFY)) {
         struct stat statbuf;
-        if (stat(filename, &statbuf))
-            errx(EXIT_FAILURE, "Failed to stat %s", filename);
+        if (stat(file1, &statbuf))
+            errx(EXIT_FAILURE, "Failed to stat %s", file1);
 
         if (len == EEPROM_SIZE_NOT_SPECIFIED) {
             len = EEPROM_SIZE_DEFAULT;
             if (len > statbuf.st_size)
                 len = statbuf.st_size;
-        }
-        if (len > statbuf.st_size) {
-            errx(EXIT_FAILURE, "Length 0x%x is greater than %s size %jx",
-                 len, filename, (intmax_t)statbuf.st_size);
+        } else {
+            if (file2 != NULL) {
+                /* Length split among two files (value restored below) */
+                len /= 2;
+            }
+            if (len > statbuf.st_size) {
+                errx(EXIT_FAILURE, "Length 0x%x is greater than %s size %jx",
+                     len, file1, (intmax_t)statbuf.st_size);
+            }
         }
     }
 #define KICKSMASH_ROM_BANK_SIZE
@@ -6202,8 +6380,9 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
             break;
     }
 
+    get_kicksmash_mode();
     if (mode & MODE_READ) {
-        eeprom_read(filename, bank, baseaddr, len);
+        eeprom_read(file1, bank, baseaddr, len);
         return (0);
     }
     if (mode & MODE_ERASE) {
@@ -6213,7 +6392,7 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
         uint temp;
         switch (eeprom_not_erased(bank, baseaddr, len)) {
             case -1:
-                errx(EXIT_FAILURE, "Failed to check PROM area erased");
+                errx(EXIT_FAILURE, "Failed to check EEPROM area erased");
             case 0:
                 break;
             default:
@@ -6231,21 +6410,46 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
 
     rc = 0;
     if (mode & (MODE_WRITE | MODE_VERIFY)) {
+        uint8_t *filebuf;
         if (baseaddr == ADDR_NOT_SPECIFIED)
             baseaddr = 0x000000;  // Start of EEPROM
 
         if (bank != BANK_NOT_SPECIFIED)
             baseaddr += bank * EEPROM_BANK_SIZE_DEFAULT;
 
+        filebuf = file_read(file1, len);
+        if (file2 != NULL) {
+            uint8_t *filebuf2 = file_read(file2, len);
+            uint8_t *newbuf = malloc(len * 2);
+            uint16_t *sptr1 = (uint16_t *) filebuf;
+            uint16_t *sptr2 = (uint16_t *) filebuf2;
+            uint16_t *dptr  = (uint16_t *) newbuf;
+            uint      cur;
+            if (newbuf == NULL)
+                errx(EXIT_FAILURE, "Could not allocate %u bytes", len);
+
+            /* Merge files */
+            len *= 2;
+            for (cur = 0; cur < len; cur += 4) {
+                *(dptr++) = *(sptr1++);
+                *(dptr++) = *(sptr2++);
+            }
+
+            free(filebuf);
+            free(filebuf2);
+            filebuf = newbuf;
+        }
+        execute_swapmode(filebuf, len, SWAP_TO_ROM);
+
         do {
             if ((mode & MODE_WRITE) &&
-                (eeprom_write(filename, baseaddr, len) != 0)) {
+                (eeprom_write(filebuf, baseaddr, len) != 0)) {
                 rc = 1;
                 break;
             }
 
             if ((mode & MODE_VERIFY) &&
-                (eeprom_verify(filename, baseaddr, len, report_max) != 0)) {
+                (eeprom_verify(filebuf, baseaddr, len, report_max) != 0)) {
                 rc = 1;
                 break;
             }
@@ -6254,6 +6458,8 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
             if (baseaddr >= EEPROM_SIZE_DEFAULT)
                 break;
         } while (fill);
+
+        free(filebuf);
     }
     if (amiga_was_put_in_reset) {
         reset_amiga(0);
@@ -6262,6 +6468,32 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
             warnx("Failed to take Amiga out of reset");
     }
     return (rc);
+}
+
+/*
+ * construct_terminal_cmd() converts the remainder of the command line into
+ *                          a string which may be passed to Kicksmash as a
+ *                          terminal command.
+ */
+static void
+construct_terminal_cmd(int argc, char * const argv[])
+{
+    int arg;
+    size_t len = 1;
+
+    if (argc == 0)
+        return;
+
+    /* Get length to allocate */
+    for (arg = 0; arg < argc; arg++) {
+        len += strlen(argv[arg]) + 1;
+    }
+    terminal_cmd = malloc(len);
+    terminal_cmd[0] = '\0';
+    for (arg = 0; arg < argc; arg++) {
+        strcat(terminal_cmd, argv[arg]);
+        strcat(terminal_cmd, " ");
+    }
 }
 
 /*
@@ -6286,7 +6518,8 @@ main(int argc, char * const *argv)
     uint             baseaddr   = ADDR_NOT_SPECIFIED;
     uint             len        = EEPROM_SIZE_NOT_SPECIFIED;
     uint             report_max = 64;
-    char            *filename   = NULL;
+    char            *file1      = NULL;
+    char            *file2      = NULL;
     uint             mode       = MODE_UNKNOWN;
 #ifndef __MINGW32__
     struct sigaction sa;
@@ -6306,11 +6539,11 @@ main(int argc, char * const *argv)
 reswitch:
         switch (ch) {
             case ':':
-                if ((optopt == 'v') && filename != NULL) {
+                if ((optopt == 'v') && file1 != NULL) {
 errx(EXIT_FAILURE, "how did we get here?");
                     /* Allow -v to be specified at end to override write */
                     ch = optopt;
-                    optarg = filename;
+                    optarg = file1;
                     mode = MODE_UNKNOWN;
                     goto reswitch;
                 }
@@ -6387,7 +6620,6 @@ errx(EXIT_FAILURE, "how did we get here?");
                     errx(EXIT_FAILURE,
                          "-%c may not be specified with any other mode", ch);
                 mode = MODE_READ;
-//              filename = optarg;
                 break;
             case 's':
                 if ((strcasecmp(optarg, "a3000") == 0) ||
@@ -6396,6 +6628,10 @@ errx(EXIT_FAILURE, "how did we get here?");
                     (strcasecmp(optarg, "a4000t") == 0) ||
                     (strcasecmp(optarg, "a1200") == 0)) {
                     swapmode = SWAPMODE_A3000;
+                    break;
+                }
+                if (strcasecmp(optarg, "a1200") == 0) {
+                    swapmode = SWAPMODE_A1200;
                     break;
                 }
                 if ((strcasecmp(optarg, "a500") == 0) ||
@@ -6425,13 +6661,11 @@ errx(EXIT_FAILURE, "how did we get here?");
                 if (mode & (MODE_ID | MODE_READ | MODE_TERM))
                     errx(EXIT_FAILURE, "Only one of -irtw may be specified");
                 mode |= MODE_WRITE;
-//              filename = optarg;
                 break;
             case 'v':
                 if (mode & (MODE_ID | MODE_READ | MODE_TERM))
                     errx(EXIT_FAILURE, "Only one of -irtv may be specified");
                 mode |= MODE_VERIFY;
-//              filename = optarg;
                 break;
             case 'y':
                 force_yes = TRUE;
@@ -6457,10 +6691,27 @@ errx(EXIT_FAILURE, "how did we get here?");
     argc -= optind;
     argv += optind;
 
-    if (argc > 0) {
-        filename = argv[0];
-        argv++;
-        argc--;
+    if (mode & (MODE_READ | MODE_WRITE | MODE_VERIFY)) {
+        /* First two arguments are filenames */
+        if (argc > 0) {
+            file1 = argv[0];
+            argv++;
+            argc--;
+        }
+        if (argc > 0) {
+            file2 = argv[0];
+            argv++;
+            argc--;
+        }
+    }
+    if (mode & MODE_TERM) {
+        construct_terminal_cmd(argc, argv);
+        argc = 0;
+    }
+
+    if ((mode & (MODE_READ | MODE_WRITE | MODE_VERIFY | MODE_ERASE)) &&
+        ((bank == BANK_NOT_SPECIFIED) && (baseaddr == ADDR_NOT_SPECIFIED))) {
+        errx(EXIT_USAGE, "You must specify either a bank or an address");
     }
 
     if (argc > 0)
@@ -6490,7 +6741,7 @@ errx(EXIT_FAILURE, "how did we get here?");
         do_exit(EXIT_FAILURE);
 
     create_threads();
-    rc = run_mode(mode, bank, baseaddr, len, report_max, fill, filename);
+    rc = run_mode(mode, bank, baseaddr, len, report_max, fill, file1, file2);
     wait_for_tx_writer();
 
     exit(rc);

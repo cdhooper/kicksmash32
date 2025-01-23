@@ -19,8 +19,11 @@
 #include "cmdline.h"
 #include "mem_access.h"
 #include "main.h"
+#include "usb.h"
+#include "readline.h"
 #include <string.h>
 
+#include <libopencm3/cm3/nvic.h>
 #include <libopencm3/cm3/scb.h>
 
 
@@ -158,6 +161,10 @@ fault_show_regs(const void *sp)
             sf->r0, sf->r3, sf->r6, sf->r9, sf->r12, sf->pc,
             sf->r1, sf->r4, sf->r7, sf->r10, sf->psr, sf->sp,
             sf->r2, sf->r5, sf->r8, sf->r11, sf->lr_e, sf->lr);
+    printf("NVIC ICPR %08lx %08lx %08lx\n",
+           NVIC_ICPR(0), NVIC_ICPR(1), NVIC_ICPR(2));
+    printf("NVIC IABR %08lx %08lx %08lx\n",
+           NVIC_IABR(0), NVIC_IABR(1), NVIC_IABR(2));
     if (SCB_ICSR != 0) {
         uint8_t vect = (uint8_t) SCB_ICSR;
         static const char * const exception_vects[] = {
@@ -180,7 +187,7 @@ fault_show_regs(const void *sp)
         };
         printf("SCB ICSR: %08lx  vect=0x%x", SCB_ICSR, vect);
         if (vect < 0x10)
-            printf(":%s\n", exception_vects[vect]);
+            printf(":%s", exception_vects[vect]);
         printf("\n");
     }
     if (SCB_HFSR != 0)
@@ -196,21 +203,58 @@ fault_show_regs(const void *sp)
     }
 }
 
+void
+fault_hard(void)
+{
+    extern uint _data;
+    /* Access 2 MB beyond SRAM start */
+    (void) *(volatile uint32_t *)ADDR32(((uintptr_t) &_data) + 0x00200000);
+}
+
 static void
-run_cmdline(void)
+cmdline_loop(void)
+{
+    printf("New command line\n");
+    while (1) {
+        main_poll();
+        cmdline();
+    }
+}
+
+static void
+cmdline_loop_uart(void)
+{
+    printf("Single-tasking command line\n");
+    while (1) {
+        cmdline();
+    }
+}
+
+static uint
+cmdline_or_reset(void)
 {
     static uint8_t ran_before = 0;
-    if (ran_before) {
-        printf("Running UART command line\n");
-        while (1)
-            cmdline();
-    } else {
-        ran_before++;
-        while (1) {
-            main_poll();
-            cmdline();
-        }
+
+    switch (ran_before++) {
+        case 0:
+            /* Attempt to resume */
+            printf("Attempting resume\n");
+            return (0);
+        case 1:
+            /* Try again with command line and background tasks */
+            rl_initialize();
+            return (1);
+        case 2:
+            /* Try again with only command line */
+            rl_initialize();
+            return (2);
+        default:
+            printf("Resetting...\n");
+            uart_flush();
+            scb_reset_system();
+            break;
     }
+    return (0);
 }
 
 /**
@@ -228,34 +272,44 @@ run_cmdline(void)
 static void __attribute__((noinline))
 hard_fault_handler_impl(void *sp)
 {
+    reg_frame_t *frame;
+    uint         width;
+    uint         mode;
+
     mem_fault_count++;
-    if (mem_fault_ok && ((mem_fault_count >> 16) == 0)) {
-        reg_frame_t *frame;
-        uint         width;
+    if (!mem_fault_ok || ((mem_fault_count >> 16) != 0)) {
+        puts("Hard fault");
+        fault_show_regs(sp);
+        led_alert(1);
+        if ((mode = cmdline_or_reset()) != 0) {
+            frame = (reg_frame_t *) sp - 1;
 
-        /*
-         * If this is an imprecise bus fault, the processor has likely
-         * already advanced beyond the faulting instruction.  Attempt to
-         * resume at the current instruction unless there have been too
-         * many access faults already.
-         */
-        if ((SCB_CFSR & SCB_CFSR_IMPRECISERR) &&
-             ((mem_fault_count >> 8) == 0)) {
-            return;
-        }
-
-        /* Skip the faulting instruction */
-        frame = (reg_frame_t *) sp - 1;
-        width = stm32_instruction_width(frame->pc);
-        if (width != 0) {
-            frame->pc += width;
-            return;
+            if (mode == 1)
+                frame->pc = (uintptr_t) cmdline_loop;
+            else
+                frame->pc = (uintptr_t) cmdline_loop_uart;
+            return;  // Return to local command handler
         }
     }
-    puts("Hard fault");
-    fault_show_regs(sp);
-    led_alert(1);
-    run_cmdline();
+
+    /*
+     * If this is an imprecise bus fault, the processor has likely
+     * already advanced beyond the faulting instruction.  Attempt to
+     * resume at the current instruction unless there have been too
+     * many access faults already.
+     */
+    if ((SCB_CFSR & SCB_CFSR_IMPRECISERR) &&
+         ((mem_fault_count >> 8) == 0)) {
+        return;
+    }
+
+    /* Skip the faulting instruction */
+    frame = (reg_frame_t *) sp - 1;
+    width = stm32_instruction_width(frame->pc);
+    if (width != 0) {
+        frame->pc += width;
+        return;
+    }
 }
 
 /**
@@ -264,7 +318,6 @@ hard_fault_handler_impl(void *sp)
  * @param [in]  None.
  * @return      Modified Program Counter.
  */
-void hard_fault_handler(void);
 void __attribute__((naked))
 hard_fault_handler(void)
 {
@@ -281,10 +334,9 @@ nmi_handler_impl(const void *sp)
     puts("NMI");
     fault_show_regs(sp);
     led_alert(1);
-    run_cmdline();
+    cmdline_loop();
 }
 
-void nmi_handler(void);
 void __attribute__((naked))
 nmi_handler(void)
 {
@@ -298,13 +350,12 @@ nmi_handler(void)
 static void __attribute__((noinline))
 bus_fault_handler_impl(const void *sp)
 {
-    puts("bus fault");
+    puts("Bus fault");
     fault_show_regs(sp);
     led_alert(1);
-    run_cmdline();
+    cmdline_loop();
 }
 
-void bus_fault_handler(void);
 void __attribute__((naked))
 bus_fault_handler(void)
 {
@@ -321,10 +372,9 @@ mem_manage_handler_impl(const void *sp)
     puts("Memory management exception");
     fault_show_regs(sp);
     led_alert(1);
-    run_cmdline();
+    cmdline_loop();
 }
 
-void mem_manage_handler(void);
 void __attribute__((naked))
 mem_manage_handler(void)
 {
@@ -338,13 +388,12 @@ mem_manage_handler(void)
 static void __attribute__((noinline))
 usage_fault_handler_impl(const void *sp)
 {
-    puts("usage fault");
+    puts("Usage fault");
     fault_show_regs(sp);
     led_alert(1);
-    run_cmdline();
+    cmdline_loop();
 }
 
-void usage_fault_handler(void);
 void __attribute__((naked))
 usage_fault_handler(void)
 {
@@ -358,10 +407,10 @@ usage_fault_handler(void)
 static void __attribute__((noinline))
 unknown_handler_impl(const void *sp)
 {
-    puts("Unknown fault");
+    puts("Unknown interrupt/fault");
     fault_show_regs(sp);
     led_alert(1);
-    run_cmdline();
+    cmdline_loop();
 }
 
 /*
@@ -418,7 +467,7 @@ void tim1_brk_isr(void) __attribute__((alias("unknown_handler")));
 void tim1_up_isr(void) __attribute__((alias("unknown_handler")));
 void tim1_trg_com_isr(void) __attribute__((alias("unknown_handler")));
 void tim1_cc_isr(void) __attribute__((alias("unknown_handler")));
-void tim2_isr(void) __attribute__((alias("unknown_handler")));
+// void tim2_isr(void) __attribute__((alias("unknown_handler")));
 void tim3_isr(void) __attribute__((alias("unknown_handler")));
 // void tim4_isr(void) __attribute__((alias("unknown_handler")));
 void i2c1_ev_isr(void) __attribute__((alias("unknown_handler")));

@@ -72,7 +72,7 @@ the Amiga, the Amiga must first be put in reset. See the "Connecting
 to the KickSmash firmware CLI" section above.
 
 A minimal example to get started
-        % hostsmash -d /dev/ttyACM0 -b 0 -r test.rom -l 0x80000
+        % hostsmash -d /dev/ttyACM0 -b 0 -r test.rom -l 0x80000 -s 0123
         100%
         Read 0x80000 bytes from device and wrote to file test.rom
 
@@ -86,6 +86,10 @@ A minimal example to get started
     The -r flag specifies that the operation should be a read from
     flash and write to a file. An argument is required, which is the
     filename to write.
+
+    The -s flag specifies the byte swapping mode. The 0123 value means
+    no swapping. If the flag is not specified, automatic swapping will
+    take place, depending on the KickSmash "prom mode" configuration.
 
     When reading from flash, it's necessary to supply the length of
     data to read. This is done with the -l flag. The argument to -l
@@ -112,8 +116,8 @@ Byte swapping (endian)
             % od -An -t x1 322.rom -N 4
              11 14 4e f9
 
-    When reading or writing Kickstart ROM images, the -s option may
-    be used to enable byte swapping mode. The argument to -s specifies
+    When reading or writing Kickstart ROM images, the -s option may be used
+    to force a particular byte swapping mode. The argument to -s specifies
     which swapping mode should be used. The following are available:
         -s 3210     32-bit big-endian with little-endian swapping.
                     This mode is useful for the Amiga 3000 and
@@ -122,6 +126,7 @@ Byte swapping (endian)
         -s 1032     Swap odd and even adjacent bytes. This mode may be
                     useful when dealing with ROM images for the Amiga
                     500 and 2000 computers. Not verified at this point.
+                    It is likely also the mode required for A1200 images.
         -s 2301     Swap adjacent 16-bit words.
 
     From the example above, you can see that "3210" should be the
@@ -143,12 +148,14 @@ Verifying a read or write was successful
     Substitute the -v option for the -r or -w option to verify a read or
     write was successful.
     Example
-        % hostsmash -d /dev/ttyACM0 -b 0 -v test.rom -s 3210
+        % hostsmash -d /dev/ttyACM0 -b 0 -v test.rom
+        Auto swap mode: A3000, Swapping 3210
         100%
         Verify success
 
     If a verify fails, you might see output such as the following:
-        % hostsmash -d /dev/ttyACM0 -b 2 -v test.rom -s 3210
+        % hostsmash -d /dev/ttyACM0 -b 2 -v test.rom
+        Auto swap mode: A3000, Swapping 3210
         100%
         file   0x000008: ff ff 00 00 6f 00 2f 00 0a 00 2f 00 ff ff ff ff...
         eeprom 0x100008: b0 9c f8 00 c4 9c f8 00 d8 9c f8 00 ec 9c f8 00...
@@ -164,13 +171,14 @@ Writing to the Kickstart ROM flash
     as reading or verifying. Specifying a length is optional, as it can
     be derived from the file size.
     Example
-        % echo "reset amiga hold" | hostsmash -d /dev/ttyACM0 -t
+        % hostsmash -d /dev/ttyACM0 -t reset amiga hold
         % hostsmash -d /dev/ttyACM0 -b 4 -e -l 0x80000
-        % hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111.rom -s 3210
+        % hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111.rom
+        Auto swap mode: A3000, Swapping 3210
         Writing 0x080000 bytes to EEPROM starting at address 0x200000
         100%
         Wrote 0x80000 bytes to device from file A3000.47.111.rom
-        % echo "prom bank current 4;reset amiga" | hostsmash -d /dev/ttyACM0 -t
+        % hostsmash -d /dev/ttyACM0 -t "prom bank current 4;reset amiga"
     The above example puts the Amiga in reset, erases bank 4, programs
     bank 4, then sets the current bank to 4 and resets the Amiga.
 
@@ -178,18 +186,35 @@ Writing to the Kickstart ROM flash
     image or a pair of .bin images for the Kickstart ROM. If you receive
     a single .rom image, then it's likely in the format which will
     require that you byte swap. Example:
-            hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111.rom -s 3210
-    If you instead receive a pair of bin files, programming is a little
-    more complicated in that case. You'll need to tell KickSmash to
-    individually enable each flash chip and program just that chip.
+            hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111.rom
+
+    The Amiga Kickstart ROM images are often delivered as two separate
+    programming files, suitable for individually programming Amiga EPROMs.
     Example:
-        % echo "reset amiga hold;prom mode 0" | hostsmash -d /dev/ttyACM0 -t
+        A3000.47.111-lo.bin
+        A3000.47.111-hi.bin
+    One may specify both of these files on hostsmash command, and it will
+    merge and automatically swap these files as appropriate for your Amiga.
+    Example:
+        % hostsmash -d /dev/ttyACM0 -w -v -b 4 A3000.47.111-lo.bin A3000.47.111-hi.bin
+        Verifying EEPROM area has been erased
+        Auto swap mode: A3000, No swap
+        Writing 0x100000 bytes to EEPROM starting at address 0x200000
+        100%
+        Wrote 0x100000 bytes to device
+        100%
+        Verify success
+
+    As an alternative, you can individually program each flash chip.
+    This is complicated, as you'll need to change the KickSmash mode
+    multiple times. Example:
+        % hostsmash -d /dev/ttyACM0 -t "reset amiga hold;prom mode 0"
         % hostsmash -d /dev/ttyACM0 -b 4 -e -l 0x80000
-        % echo "prom mode 1" | hostsmash -d /dev/ttyACM0 -t
+        % hostsmash -d /dev/ttyACM0 -t prom mode 1
         % hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111-lo.bin -l 0x40000
-        % echo "prom mode 2" | hostsmash -d /dev/ttyACM0 -t
+        % hostsmash -d /dev/ttyACM0 -t prom mode 2
         % hostsmash -d /dev/ttyACM0 -b 4 -w A3000.47.111-hi.bin -l 0x40000
-        % echo "prom mode 0;prom bank current 4;reset amiga" | hostsmash -d /dev/ttyACM0 -t
+        % hostsmash -d /dev/ttyACM0 -t "prom mode 0;prom bank current 4;reset amiga"
     The above example puts the Amiga in reset and selects 32-bit mode.
     It then erases bank 4. It next sets prom mode 1 which activates
     only the low 16-bit flash, and programs that with the -lo.bin file.
@@ -200,7 +225,9 @@ Writing to the Kickstart ROM flash
 
 Erasing a bank
     If a bank had been written previously, it must first be erased
-    before it can be written again. Use the -e (--erase) command for this.
+    before it can be written again. The write command will automatically
+    check and perform this operation if needed. If you want to manually
+    erase a bank, use the -e (--erase) command for this.
     Example
         % hostsmash -d /dev/ttyACM0 -b 4 -e -l 0x80000
         Erase sector(s) from 0x200000 to 0x280000 -- are you sure? (y/n) y
@@ -405,7 +432,7 @@ All hostsmash command options:
     -s --swap <mode>        byte swap mode (2301, 3210, 1032, noswap=0123)
     -v --verify <filename>  verify file matches EEPROM contents
     -w --write <filename>   read file and write to EEPROM
-    -t --term               just act in terminal mode (CLI)
+    -t --term [<command>]   operate in terminal mode (CLI) to KickSmash
     -y --yes                answer all prompts with 'yes'
     TERM_DEBUG=`tty`        env variable for communication debug output
     TERM_DEBUG_HEX=1        show debug output in hex instead of ASCII
@@ -414,7 +441,7 @@ Nearly all the command arguments have been demonstrated in the document
 above. This section individually documents each.
 
 Terminal options
-    -t --term
+    -t --term [<command>]
         Enter terminal mode with KickSmash. This is useful if you need
         to send a direct command to the KickSmash firmware. A common
         reason for this is either resetting the Amiga or leaving it in
@@ -430,6 +457,15 @@ Terminal options
             Holding Amiga in reset
             Amiga in reset
             CMD> ^X
+            %
+
+        You may optionally specify a single command for KickSmash to
+        execute. If specified, terminal mode is automatically ended after
+        a short delay. Example:
+            % hostsmash -d /dev/ttyACM0 -t ver
+            ver
+            Version 1.3+ built 2025-01-19 23:54:09
+            CMD>
             %
 
 Flash read/write options
@@ -517,8 +553,8 @@ has been locked. I've not found a way around this without removing the
 flash parts, as the Micron datasheet says that it requires a programming
 voltage (12V) to perform a block unprotect. You can check for block protect
 status using the following sequence:
-    echo 'reset amiga hold' | hostsmash -t
-    echo 'prom cmd 90; loop 8 d prom 8+$a*80000 1;prom id;reset amiga' | ../sw/hostsmash -t
+    hostsmash -t reset amiga hold
+    hostsmash -t 'prom cmd 90; loop 8 d prom 8+$a*80000 1;prom id;reset amiga'
 If you see values other than 00000000, then it's likely a block has been
 protected.
 
@@ -571,9 +607,9 @@ of hostsmash is statically compiled, and doesn't require libwinpthread-1.dll
 to be present on the host.
 
 Build the Win32 version:
-    make TARGET_OS=win32
+    make win32
 Build the Win64 version:
-    make TARGET_OS=win
+    make win64
 
 If you are cross-host developing hostsmash, you can run it under Wine.
 First set up a COM port path to the /dev/ttyACMx device where Kicksmash

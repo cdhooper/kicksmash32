@@ -200,6 +200,35 @@ cia_spin(unsigned int ticks)
 }
 
 /*
+ * rom_wait_normal
+ * ---------------
+ * Wait until ROM has recovered (Kicksmash is no longer driving data.
+ */
+static void
+rom_wait_normal(void)
+{
+    uint     pos;
+    uint32_t last = 0;
+    uint32_t cur;
+
+    /* Ensure Kicksmash firmware has returned ROM to normal state */
+    uint     timeout = 0;
+    cia_spin(CIA_USEC(30));
+
+    /* Wait until Kickstart ROM data is consistent for 2 ms */
+    for (pos = 0; pos < 100; pos++) {
+        cur = *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
+        if ((last != cur) || (*ADDR32(ROM_BASE) != 0x11144ef9)) {
+            if (timeout++ > 200000)
+                break;  // Give up after 2 seconds
+            pos = 0;
+        }
+        last = cur;
+        cia_spin(CIA_USEC(20));
+    }
+}
+
+/*
  * send_cmd_core
  * -------------
  * Sends a message to KickSmash. This is done by generating a "magic"
@@ -325,10 +354,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             if (*replyalen > replymax)
                 *replyalen = replymax;
         }
-        /* Ensure Kicksmash firmware has returned ROM to normal state */
-        for (pos = 0; pos < 1000; pos++)
-            (void) *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        cia_spin(CIA_USEC_LONG(100000));        // 100 msec
+        rom_wait_normal();  // Wait until ROM is accessible again
         goto scc_cleanup;
     }
 
@@ -386,24 +412,9 @@ scc_cleanup:
 #endif
 
     if ((replystatus & 0xffffff00) != 0) {
-        /* Ensure Kicksmash firmware has returned ROM to normal state */
-        uint     timeout = 0;
-        uint32_t last = 0;
-        uint32_t cur;
-        cia_spin(CIA_USEC(30));
-
-        /* Wait until Kickstart ROM data is consistent for 5 ms */
-        for (pos = 0; pos < 500; pos++) {
-            cur = *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-            if (last != cur) {
-                if (timeout++ > 400000)
-                    break;  // Give up after 4 seconds
-                pos = 0;
-            }
-            last = cur;
-            cia_spin(CIA_USEC(10));
-        }
+        rom_wait_normal();  // Wait until ROM is accessible again
     }
+
     if (((replystatus & 0xffff0000) == 0) && (replystatus != KS_STATUS_CRC)) {
         crc = crc32(crc, reply, replylen);
         if (crc != replycrc) {

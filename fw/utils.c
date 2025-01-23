@@ -12,6 +12,7 @@
 #include "printf.h"
 #include "utils.h"
 #include <stdbool.h>
+#include <string.h>
 #include "board.h"
 #include "main.h"
 #include "clock.h"
@@ -69,9 +70,14 @@ static void SystemInit_post(void) { }
 #define SYSTEM_MEMORY_BASE 0x1fff0000  // STM32F4xx
 #endif
 
-#define RESET_TO_BOOTLOADER_MAGIC 0xd0df00ba
+#define RESET_TO_DFU_ROM_MAGIC 0xd0df00ba  // STM32 ROM DFU programmer
+#define RESET_TO_DFU_MAGIC     0xd0df0bee  // Stand-alone DFU (in firmware)
 
 SRAM_PERSIST static uint32_t system_reset_to_dfu_magic;
+
+extern uint _binary_objs_usbdfu_bin_start;
+extern uint _binary_objs_usbdfu_bin_end;
+extern uint _binary_objs_usbdfu_bin_size;
 
 /* Force exceptions/interrupts to use new VTOR */
 static void dmb(void)
@@ -82,7 +88,7 @@ static void dmb(void)
 void
 reset_check(void)
 {
-    if (system_reset_to_dfu_magic == RESET_TO_BOOTLOADER_MAGIC) {
+    if (system_reset_to_dfu_magic == RESET_TO_DFU_ROM_MAGIC) {
         system_reset_to_dfu_magic = 1;
 
         uint32_t  addr = SYSTEM_MEMORY_BASE;
@@ -91,6 +97,26 @@ reset_check(void)
         /* Set the vector table pointer */
         SCB_VTOR = addr;
         dmb();
+
+        /* Set the stack pointer */
+        __asm__("MSR msp, %0" : : "r" (ADDR32(base)[0]));   // SP = base[0]
+        /* Set the program counter (jump) */
+        __asm__("BX %0\n\t" : : "r" (ADDR32(base)[1]));     // PC = base[1]
+    } else if (system_reset_to_dfu_magic == RESET_TO_DFU_MAGIC) {
+        system_reset_to_dfu_magic = 3;
+
+        uint len = ADDR8(&_binary_objs_usbdfu_bin_end) -
+                   ADDR8(&_binary_objs_usbdfu_bin_start);
+        uint32_t  addr = 0x20000000;  // SRAM Base
+        uint32_t *base = ADDR32(addr);
+
+        /* Copy USB DFU to SRAM */
+        memcpy(base, &_binary_objs_usbdfu_bin_start, len);
+
+        /* Set the vector table pointer */
+        SCB_VTOR = addr;
+        dmb();
+
         /* Set the stack pointer */
         __asm__("MSR msp, %0" : : "r" (ADDR32(base)[0]));   // SP = base[0]
         /* Set the program counter (jump) */
@@ -117,9 +143,12 @@ reset_cpu(void)
 }
 
 void
-reset_dfu(void)
+reset_dfu(int in_rom)
 {
-    system_reset_to_dfu_magic = RESET_TO_BOOTLOADER_MAGIC;
+    if (in_rom)
+        system_reset_to_dfu_magic = RESET_TO_DFU_ROM_MAGIC;
+    else
+        system_reset_to_dfu_magic = RESET_TO_DFU_MAGIC;
     scb_reset_system();
 }
 

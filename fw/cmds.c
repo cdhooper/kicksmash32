@@ -1194,6 +1194,7 @@ cmd_delay(int argc, char * const *argv)
     int  pos   = 0;
     int  count;
     char *ptr;
+    char restore = '\0';
 
     if (argc <= 1) {
         printf("This command requires an argument: <time>\n");
@@ -1205,6 +1206,7 @@ cmd_delay(int argc, char * const *argv)
     }
     for (ptr = argv[1]; *ptr != '\0'; ptr++) {
         if (convert_name_to_time_units(ptr, &units) == RC_SUCCESS) {
+            restore = *ptr;
             *ptr = '\0';
             break;
         }
@@ -1269,6 +1271,8 @@ cmd_delay(int argc, char * const *argv)
             usleep(value / 1000);
             break;
     }
+    if (ptr != NULL)
+        *ptr = restore;
     return (RC_SUCCESS);
 }
 
@@ -1289,8 +1293,8 @@ cmd_patt(int argc, char * const *argv)
     const char *cmd;
     char       *ptr;
     static enum {
-        PATT_ZERO,
         PATT_ONE,
+        PATT_ZERO,
         PATT_BLIP,
         PATT_RAND,
         PATT_STROBE,
@@ -1468,12 +1472,12 @@ cmd_test(int argc, char * const *argv)
     uint32_t    srand_seed;
     const char *cmd;
     static enum {
+        TEST_VALUE,
         TEST_ZERO,
         TEST_ONE,
         TEST_RAND,
         TEST_WALK0,
         TEST_WALK1,
-        TEST_VALUE,
     } testmode = TEST_VALUE;
     static enum {
         RWMODE_READ,

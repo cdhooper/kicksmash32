@@ -150,11 +150,11 @@ usb_unmask_interrupts(void)
 }
 
 /**
- * usbd_stm32_serial() reads the STM32 Unique Device ID from the CPU's system
- *                     memory area of the Flash memory module.  It converts
- *                     the ID to a printable Unicode string which is suitable
- *                     for return response to the USB Get Serial Descriptor
- *                     request.
+ * usbd_usr_serial() reads the STM32 Unique Device ID from the CPU's system
+ *                   memory area of the Flash memory module.  It converts
+ *                   the ID to a printable Unicode string which is suitable
+ *                   for return response to the USB Get Serial Descriptor
+ *                   request.
  *
  * @param [out] buf    - A buffer to hold the converted Unicode serial number.
  * @param [out] length - The length of the Unicode serial number.
@@ -162,7 +162,7 @@ usb_unmask_interrupts(void)
  * @return      The converted Unicode serial number.
  */
 static uint8_t *
-usbd_usr_serial(uint8_t *buf, uint16_t *length)
+usbd_usr_serial(uint8_t *buf)
 {
     uint len = 0;
     uint pos;
@@ -188,7 +188,6 @@ usbd_usr_serial(uint8_t *buf, uint16_t *length)
         buf[len++] = ch_lo;
     }
     buf[len++] = '\0';
-    *length = (uint16_t) len;
     return (buf);
 }
 
@@ -663,8 +662,7 @@ usb_startup(void)
 #ifdef DEBUG_NO_USB
     return;
 #endif
-    uint16_t len = sizeof (usb_serial_str);
-    usbd_usr_serial(usb_serial_str, &len);
+    usbd_usr_serial(usb_serial_str);
     usb_strings[2] = (char *)usb_serial_str;
 
 #ifdef STM32F4
@@ -866,4 +864,12 @@ uint16_t
 usb_current_address(void)
 {
     return ((OTG_FS_DCFG & OTG_DCFG_DAD) >> 4);
+}
+
+void
+usb_poll_mode(void)
+{
+    nvic_disable_irq(USB_INTERRUPT);
+    using_usb_interrupt = false;
+    usb_poll();
 }

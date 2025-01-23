@@ -43,8 +43,18 @@
 #define KS_REPLY_WE     BIT(1)  // Set up WE to trigger when host drives OE
 #define KS_REPLY_WE_RAW (KS_REPLY_RAW | KS_REPLY_WE)
 
+#define CAPTURE_DMA_SWAP
+#ifdef CAPTURE_DMA_SWAP
+#define LOG_DMA_CONTROLLER DMA1
+#define LOG_DMA_CHANNEL    DMA_CHANNEL5
+#define LOG_DMA_NVIC_IRQ   NVIC_TIM2_IRQ
+#define LOG_DMA_TIMER      TIM2
+#else
 #define LOG_DMA_CONTROLLER DMA2
 #define LOG_DMA_CHANNEL    DMA_CHANNEL5
+#define LOG_DMA_NVIC_IRQ   NVIC_TIM5_IRQ
+#define LOG_DMA_TIMER      TIM5
+#endif
 
 #define CAPTURE_SW       0
 #define CAPTURE_ADDR     1
@@ -75,6 +85,8 @@
 #define timer_disable_irq(timer, irq)         TIM_DIER(timer) &= ~(irq)
 #define timer_set_dma_on_compare_event(timer) TIM_CR2(timer) &= ~TIM_CR2_CCDS
 #define timer_set_ti1_ch1(timer)              TIM_CR2(timer) &= ~TIM_CR2_TI1S
+#define nvic_enable_irq(irqn)   NVIC_ISER(irqn / 32) = (1 << (irqn % 32))
+#define nvic_disable_irq(irqn)  NVIC_ICER(irqn / 32) = (1 << (irqn % 32))
 
 extern uint8_t usb_serial_str[32];
 
@@ -101,7 +113,6 @@ static const uint16_t reboot_magic_16[] =
 static const uint16_t *reboot_magic;
 static uint16_t reboot_magic_end;
 
-static uint32_t ticks_per_200_nsec;
 static uint64_t ks_timeout_timer = 0;  // timer too frequent complaint message
 static uint     ks_timeout_count = 0;  // count of complaint messages
 
@@ -502,16 +513,28 @@ config_tim5_ch1_dma(bool verbose)
 //             (uintptr_t) buffer_rxa_lo);
     }
 
+#ifdef CAPTURE_DMA_SWAP
+    /* DMA from address GPIOs A16-A31 to memory */
+    config_dma(DMA2, DMA_CHANNEL5, 0, 16,
+               &GPIO_IDR(SOCKET_A16_PORT),
+               buffer_rxd, ADDR_BUF_COUNT);
+#else
     /* DMA from address GPIOs A0-A15 to memory */
     config_dma(DMA2, DMA_CHANNEL5, 0, 16,
                &GPIO_IDR(SOCKET_A0_PORT),
                buffer_rxa_lo, ADDR_BUF_COUNT);
+#endif
 
     /* Set up TIM5 CH1 to trigger DMA based on external PA0 pin */
     timer_disable_oc_output(TIM5, TIM_OC1);
 
+#ifdef CAPTURE_DMA_SWAP
+    /* Enable capture compare CC1 DMA */
+    timer_enable_irq(TIM5, TIM_DIER_CC1DE);
+#else
     /* Enable capture compare CC1 DMA and interrupt */
     timer_enable_irq(TIM5, TIM_DIER_CC1DE | TIM_DIER_CC1IE);
+#endif
 
     timer_set_ti1_ch1(TIM5);               // Capture input from channel 1 only
 
@@ -541,8 +564,6 @@ config_tim5_ch1_dma(bool verbose)
      * Ext clock mode 1 = external input pin (TIx)
      * Ext clock mode 2 = external trigger input (ETR)
      */
-
-//  timer_enable_oc_output(TIM5, TIM_OC1);
 }
 
 static void
@@ -561,9 +582,15 @@ config_tim2_ch1_dma(bool verbose)
     /* Word-wide DMA from data GPIOs D0-D15 to memory */
     switch (capture_mode) {
         default:
+#ifdef CAPTURE_DMA_SWAP
+        case CAPTURE_ADDR:
+            src = &GPIO_IDR(SOCKET_A0_PORT);
+            break;
+#else
         case CAPTURE_ADDR:
             src = &GPIO_IDR(SOCKET_A16_PORT);
             break;
+#endif
         case CAPTURE_DATA_LO:
             src = &GPIO_IDR(FLASH_D0_PORT);
             break;
@@ -571,7 +598,11 @@ config_tim2_ch1_dma(bool verbose)
             src = &GPIO_IDR(FLASH_D16_PORT);
             break;
     }
+#ifdef CAPTURE_DMA_SWAP
+    config_dma(DMA1, DMA_CHANNEL5, 0, 16, src, buffer_rxa_lo, ADDR_BUF_COUNT);
+#else
     config_dma(DMA1, DMA_CHANNEL5, 0, 16, src, buffer_rxd, ADDR_BUF_COUNT);
+#endif
 
     timer_set_ti1_ch1(TIM2);        // Capture input from channel 1 only
 
@@ -589,7 +620,13 @@ config_tim2_ch1_dma(bool verbose)
                 TIM_SMCR_ETPS_OFF | // no prescaler
                 TIM_SMCR_ETF_OFF;   // no filter
     TIM2_DIER = 0;
-    timer_enable_irq(TIM2, TIM_DIER_CC1DE); // DMA on capture/compare event
+#ifdef CAPTURE_DMA_SWAP
+    /* Enable capture compare CC1 DMA and interrupt */
+    timer_enable_irq(TIM2, TIM_DIER_CC1DE | TIM_DIER_CC1IE);
+#else
+    /* Enable capture compare interrupt */
+    timer_enable_irq(TIM2, TIM_DIER_CC1DE);
+#endif
 
     timer_set_dma_on_compare_event(TIM2);  // DMA on CCx event occurs
 }
@@ -602,13 +639,13 @@ configure_oe_capture_rx(bool verbose)
     config_tim2_ch1_dma(verbose);
     config_tim5_ch1_dma(verbose);
 
-    disable_irq();
-// Not enough memory bandwidth on at least one CPU I have to have both
-// DMAs active and STM32 keep up with the Amiga. That particular STM32 does
-// not have DFU, so it might be a remarked STM32F103 or something else.
-//  TIM_CCER(TIM2) |= TIM_CCER_CC1E;  // timer_enable_oc_output()
-    TIM_CCER(TIM5) |= TIM_CCER_CC1E;
-    enable_irq();
+    /*
+     * Not enough memory bandwidth on at least one CPU I have to have both
+     * DMAs active and STM32 keep up with the Amiga. That particular STM32
+     * does not have DFU, so it might be a remarked STM32F103 or something
+     * else.
+     */
+    TIM_CCER(LOG_DMA_TIMER) |= TIM_CCER_CC1E;  // timer_enable_oc_output()
 }
 
 /*
@@ -647,13 +684,6 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
     /* Stop timer DMA triggers */
     TIM_CCER(TIM2) = 0;  // Disable everything
     TIM_CCER(TIM5) = 0;
-    timer_disable_irq(TIM5, TIM_DIER_CC1IE);
-
-#if 0
-    /* Stop DMA engines */
-    timer_disable_oc_output(TIM2, TIM_OC1);
-    timer_disable_oc_output(TIM5, TIM_OC1);
-#endif
 
     if (ee_mode == EE_MODE_32) {
         /*
@@ -824,7 +854,11 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
     while (oe_input() != 0) {
         if (count++ > 100000) {
             enable_irq();
-            printf("OE low timeout\n");
+            if (timer_tick_has_elapsed(ks_timeout_timer))
+                ks_timeout_count = 0;
+            if (ks_timeout_count++ < 4)
+                printf("OE low timeout\n");
+            ks_timeout_timer = timer_tick_plus_msec(1000);
             goto oe_reply_end;
         }
     }
@@ -834,7 +868,11 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
     while ((oe_input() == 0) || (flash_oe_input() == 0)) {
         if (count++ > 100000) {
             enable_irq();
-            printf("OE high timeout\n");
+            if (timer_tick_has_elapsed(ks_timeout_timer))
+                ks_timeout_count = 0;
+            if (ks_timeout_count++ < 4)
+                printf("OE high timeout\n");
+            ks_timeout_timer = timer_tick_plus_msec(1000);
             goto oe_reply_end;
         }
     }
@@ -883,22 +921,21 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
         }
         dma_last = dma_left;
     }
-//  timer_delay_ticks(ticks_per_200_nsec);
-
 #ifdef CAPTURE_GPIOS
 }
 #endif
 
+oe_reply_end:
     if (flags & KS_REPLY_WE)
         oewe_output(0);    // Disconnect SOCKET_OE from WE
+
     data_output_disable(); // Stop driving data lines
     oe_output_disable();   // Stop doing override of FLASH_OE
 
-oe_reply_end:
     configure_oe_capture_rx(false);
     timer_set_oc_polarity_low(TIM5, TIM_OC1);
 
-    timer_enable_irq(TIM5, TIM_DIER_CC1IE);
+    nvic_enable_irq(LOG_DMA_NVIC_IRQ);
     data_output(0xffffffff);    // Return to pull-up of data pins
 
 #ifdef CAPTURE_GPIOS
@@ -1674,24 +1711,6 @@ new_cmd_post:
         switch (magic_pos) {
             case 0: {
                 uint16_t val = buffer_rxa_lo[rx_consumer];
-#if 0
-                /* Check for reboot sequence */
-                if (val == reboot_magic_end) {
-                    int pos;
-                    uint c = rx_consumer;
-
-                    for (pos = 1; pos < REBOOT_MAGIC_NUM; pos++) {
-                        if (c-- == 0)
-                            c = ARRAY_SIZE(buffer_rxa_lo) - 1;
-                        if (reboot_magic[pos] != buffer_rxa_lo[c])
-                            break;
-                    }
-                    if (pos < REBOOT_MAGIC_NUM)
-                        break;
-                    amiga_reboot_detect++;
-                    break;
-                }
-#endif
                 /* Look for start of Magic sequence (needs to be fast) */
                 if (val != sm_magic[0])
                     break;
@@ -1713,6 +1732,11 @@ new_cmd_post:
                 messages_amiga++;
                 cons_start = rx_consumer;
                 cmd_len = buffer_rxa_lo[rx_consumer];
+                if (cmd_len >= sizeof (buffer_rxa_lo) - 16) {
+                    printf("BAD msg len=%04x\n", cmd_len);
+                    magic_pos = 0;  // Invalid length
+                    break;
+                }
                 len = (cmd_len + 1) / 2;
                 magic_pos++;
                 break;
@@ -1779,16 +1803,33 @@ new_cmd_post:
                     }
                     printf("\n");
 #endif  // CRC_DEBUG
-                    magic_pos = 0;  // Restart magic detection
-                    goto new_cmd;
+                } else {
+                    cmd_len = (cmd_len + 1) & ~1;  // round up
+
+                    /* Execution phase */
+                    execute_cmd(cmd, cmd_len);
                 }
 
-                cmd_len = (cmd_len + 1) & ~1;  // round up
-
-                /* Execution phase */
-                execute_cmd(cmd, cmd_len);
                 magic_pos = 0;  // Restart magic detection
+
+                /* Clobber magic so it doesn't get executed again */
+                if (cons_start == 0)
+                    cons_start = ARRAY_SIZE(buffer_rxa_lo) - 1;
+                else
+                    cons_start--;
+                buffer_rxa_lo[cons_start] = 0;
+#if 0
+                /*
+                 * XXX: Branching back to new_cmd makes a huge performance
+                 *      difference in IOPS. I don't understand why. It seems
+                 *      to be the increment of rx_consumer causing slowness.
+                 */
+                if (++rx_consumer == ARRAY_SIZE(buffer_rxa_lo)) {
+                    rx_consumer = 0;
+                }
+#endif
                 goto new_cmd;
+                break;
             default:
                 printf("?");
                 magic_pos = 0;  // Restart magic detection
@@ -1797,12 +1838,12 @@ new_cmd_post:
 
         if (++rx_consumer == ARRAY_SIZE(buffer_rxa_lo)) {
             rx_consumer = 0;
-            if (++consumer_wrap - consumer_wrap_last_poll > 10) {
+            if (++consumer_wrap - consumer_wrap_last_poll > 20) {
                 /*
                  * Spinning too much in interrupt context.
                  * Disable interrupt -- it will be re-enabled in ee_poll().
                  */
-                timer_disable_irq(TIM5, TIM_DIER_CC1IE);
+                nvic_disable_irq(LOG_DMA_NVIC_IRQ);
                 consumer_spin++;
                 return;
             }
@@ -1813,6 +1854,14 @@ new_cmd_post:
     prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
     if (rx_consumer != prod)
         goto new_cmd_post;
+}
+
+void
+tim2_isr(void)
+{
+    TIM_SR(TIM2) = 0;  /* Clear all TIM2 interrupt status */
+
+    process_addresses();
 }
 
 void
@@ -1845,18 +1894,21 @@ address_log_replay(uint max)
         return (1);
     }
     if (max == 0x999) {  // magic value
-        printf("T2C1=%04x %08x\n"
-               "T5C1=%04x %08x\n"
-               "Wrap=%u\n"
-               "Spin=%u\n"
-               "KS Messages  Amiga=%-8u  USB=%u\n"
+        printf("T2C1=%04x %08lx->%08lx addrbuf_hi=%08x\n"
+               "T5C1=%04x %08lx->%08lx addrbuf_lo=%08x\n"
+               "Wrap=%u  Spin=%u\n"
+               "KS CMD       Amiga=%-8u  USB=%u\n"
                "KS CRC Fail  Amiga=%-8u  USB=%u\n"
                "KS Unk CMD   Amiga=%-8u  USB=%u\n"
                "Buf Messages  AtoU=%-8u UtoA=%u\n"
                "Message Prod  AtoU=%-8u UtoA=%u\n"
                "Message Cons  AtoU=%-8u UtoA=%u\n",
-               (uint) DMA_CNDTR(DMA1, DMA_CHANNEL5), (uintptr_t)buffer_rxd,
-               (uint) DMA_CNDTR(DMA2, DMA_CHANNEL5), (uintptr_t)buffer_rxa_lo,
+               (uint) DMA_CNDTR(DMA1, DMA_CHANNEL5),
+               DMA_CPAR(DMA1, DMA_CHANNEL5), DMA_CMAR(DMA1, DMA_CHANNEL5),
+               (uintptr_t)buffer_rxd,
+               (uint) DMA_CNDTR(DMA2, DMA_CHANNEL5),
+               DMA_CPAR(DMA2, DMA_CHANNEL5), DMA_CMAR(DMA2, DMA_CHANNEL5),
+               (uintptr_t)buffer_rxa_lo,
                consumer_wrap, consumer_spin, messages_amiga, messages_usb,
                fail_crc_a, fail_crc_u, fail_cmd_a, fail_cmd_u,
                messages_atou, messages_utoa, prod_atou, prod_utoa,
@@ -1978,6 +2030,8 @@ bus_snoop(uint mode)
                     cons++;
                     if (cons >= ARRAY_SIZE(buffer_rxa_lo))
                         cons = 0;
+                    if (((count++ & 0xffff) == 0) && getchar() > 0)
+                        break;
                 }
                 printf("\n");
             }
@@ -1985,7 +2039,7 @@ bus_snoop(uint mode)
         return;
     }
 
-    timer_disable_irq(TIM5, TIM_DIER_CC1IE);
+    nvic_disable_irq(LOG_DMA_NVIC_IRQ);
     while (1) {
         if (oe_input() == 0) {
             /* Capture address on falling edge of OE */
@@ -2026,7 +2080,7 @@ bus_snoop(uint mode)
             break;
         no_data = 0;
     }
-    timer_enable_irq(TIM5, TIM_DIER_CC1IE);
+    nvic_enable_irq(LOG_DMA_NVIC_IRQ);
     printf("\n");
 }
 
@@ -2039,7 +2093,7 @@ msg_poll(void)
          * Re-enable message interrupt if it was disabled during
          * interrupt processing due to excessive time.
          */
-        timer_enable_irq(TIM5, TIM_DIER_CC1IE);
+        nvic_enable_irq(LOG_DMA_NVIC_IRQ);
     }
 }
 
@@ -2456,6 +2510,11 @@ msg_usb_service(void)
             case 9:  // Length phase 2
                 len |= (ch << 8);
                 len_rounded = (len + 1) & ~1;
+                if (len > sizeof (usb_msg_buffer) - 16) {
+                    /* Bad length */
+                    pos = 0;
+                    break;
+                }
                 pos++;
                 break;
             case 10:  // Command phase 1
@@ -2505,6 +2564,8 @@ msg_usb_service(void)
 void
 msg_shutdown(void)
 {
+    nvic_disable_irq(LOG_DMA_NVIC_IRQ);
+    timer_disable_irq(TIM2, TIM_DIER_CC1IE);
     timer_disable_irq(TIM5, TIM_DIER_CC1IE);
     dma_disable_channel(DMA1, DMA_CHANNEL5);  // TIM2
     dma_disable_channel(DMA2, DMA_CHANNEL5);  // TIM5
@@ -2603,11 +2664,9 @@ msg_init(void)
     rcc_periph_reset_pulse(RST_TIM5);
 
 //  timer_clear_flag(TIM5, TIM_SR(TIM5) & TIM_DIER(TIM5));
-    nvic_set_priority(NVIC_TIM5_IRQ, 0x20);
-    nvic_enable_irq(NVIC_TIM5_IRQ);
+    nvic_set_priority(LOG_DMA_NVIC_IRQ, 0x20);
+    nvic_enable_irq(LOG_DMA_NVIC_IRQ);
 
     capture_mode = CAPTURE_ADDR;
     configure_oe_capture_rx(true);
-
-    ticks_per_200_nsec = timer_nsec_to_tick(200);
 }
