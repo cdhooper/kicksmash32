@@ -82,6 +82,12 @@ const char cmd_reset_help[] =
 "reset prom         - reset ROM flash memory (forces Amiga reset as well)\n"
 "reset usb          - reset and restart USB interface";
 
+const char cmd_set_help[] =
+"set bank [show|name|?]     - do various prom bank settings\n"
+"set led <pct>              - set the Power LED brightness level\n"
+"set mode <num>             - set prom mode (0=32, 1=16, 2=16hi, 3=auto)\n"
+"set name <name>            - set Kicksmash board name";
+
 const char cmd_snoop_help[] =
 "snoop        - capture and report ROM transactions\n"
 "snoop addr   - hardware capture A0-A19\n"
@@ -441,15 +447,19 @@ cmd_prom(int argc, char * const *argv)
     } op_mode = OP_NONE;
     rc_t        rc;
     const char *arg = argv[0];
-    const char *cmd_prom = "prom";
+    char       *this_cmd = "prom";
+    char       *temp_cmd;
     uint32_t    addr = 0;
     uint32_t    len = 0;
 
+    if (strcmp(arg, "set") == 0)
+        this_cmd = "set";
+    temp_cmd = this_cmd;
     while (*arg != '\0') {
-        if (*arg != *cmd_prom)
+        if (*arg != *temp_cmd)
             break;
         arg++;
-        cmd_prom++;
+        temp_cmd++;
     }
     if (*arg == '\0') {
         argv++;
@@ -508,7 +518,7 @@ cmd_prom(int argc, char * const *argv)
             max = 10;
         return (address_log_replay(max));
     } else if (strcmp("mode", arg) == 0) {
-        if ((argc > 1) && (argv[1][0] >= '0') && (argv[1][0] <= '3')) {
+        if ((argc > 1) && (argv[1][0] >= '0') && (argv[1][0] <= '4')) {
             uint mode = argv[1][0] - '0';
             prom_mode(mode);
         } else {
@@ -816,6 +826,55 @@ cmd_gpio(int argc, char * const *argv)
 
     return (RC_SUCCESS);
 }
+
+rc_t
+cmd_set(int argc, char * const *argv)
+{
+    if (argc <= 1) {
+        printf("Power LED   %u%%\n", config.led_level);
+        printf("Board name  ");
+        config_name(NULL);
+        printf("PROM mode   ");
+        prom_show_mode();
+        return (RC_SUCCESS);
+    }
+    if (strcmp(argv[1], "bank") == 0) {
+        return (cmd_prom(argc - 1, argv + 1));
+    } else if ((strcmp(argv[1], "help") == 0) ||
+               (strcmp(argv[1], "?") == 0)) {
+        return (RC_USER_HELP);
+    } else if (strcmp(argv[1], "led") == 0) {
+        if (argc != 3) {
+            printf("set led requires a percentage\n");
+            return (RC_FAILURE);
+        }
+        if (strcmp(argv[2], "alert") == 0) {
+            led_alert(1);
+            return (RC_SUCCESS);
+        } else if (strcmp(argv[2], "noalert") == 0) {
+            led_alert(0);
+            return (RC_SUCCESS);
+        }
+        uint percent = atoi(argv[2]);
+        if (percent > 100) {
+            printf("FAIL: Percent range is 0 to 100\n");
+            return (RC_FAILURE);
+        }
+        led_set_brightness(percent);
+        config_set_led(percent);
+    } else if (strcmp(argv[1], "mode") == 0) {
+        return (cmd_prom(argc - 1, argv + 1));
+    } else if (strcmp(argv[1], "name") == 0) {
+        config_name((argc < 2) ? NULL : argv[2]);
+        return (RC_SUCCESS);
+    } else {
+        printf("set \"%s\" unknown argument\n", argv[1]);
+        return (RC_USER_HELP);
+    }
+
+    return (RC_SUCCESS);
+}
+
 
 rc_t
 cmd_snoop(int argc, char * const *argv)

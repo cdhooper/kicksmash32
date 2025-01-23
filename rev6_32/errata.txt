@@ -1,0 +1,6 @@
+JLCPCB-assembled Power LED is too bright
+    Change to 5.1K R3 resistor for Rev 7
+
+Change cutout for USB-C connector to avoid confusion at JLCPCB
+    Probably need to go with a different footprint that doesn't
+    do its own cutout.

@@ -1,0 +1,1 @@
+../rev6_32/errata.txt

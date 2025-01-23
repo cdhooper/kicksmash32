@@ -126,7 +126,7 @@ prom_read(uint32_t addr, uint width, void *bufp)
     ee_enable();
 
     /* Handle 32-bit mode separate from 16-bit modes */
-    if (ee_mode == EE_MODE_32)
+    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP))
         return (prom_read_32(addr, width, buf));
     else
         return (prom_read_16(addr, width, buf));
@@ -221,7 +221,7 @@ prom_write(uint32_t addr, uint width, void *bufp)
 
     ee_enable();
     gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
-    if (ee_mode == EE_MODE_32)
+    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP))
         rc = prom_write_32(addr, width, bufp);
     else
         rc = prom_write_16(addr, width, bufp);
@@ -238,7 +238,7 @@ prom_erase(uint mode, uint32_t addr, uint32_t len)
 
     ee_enable();
     gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
-    if (ee_mode == EE_MODE_32)
+    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP))
         rc = ee_erase(mode, addr >> 2, len >> 2, 1);
     else
         rc = ee_erase(mode, addr >> 1, len >> 1, 1);
@@ -274,6 +274,7 @@ prom_id(void)
             printf("%08lx %s\n", part1, ee_id_string(part1));
             break;
         case EE_MODE_32:
+        case EE_MODE_32_SWAP:
             printf("%08lx %08lx %s %s\n",
                    part1, part2, ee_id_string(part1), ee_id_string(part2));
             break;
@@ -535,6 +536,9 @@ prom_show_mode(void)
         case EE_MODE_AUTO:
             mode = "auto";
             break;
+        case EE_MODE_32_SWAP:
+            mode = "32-bit swap";
+            break;
         default:
             mode = "unknown";
             break;
@@ -554,6 +558,9 @@ prom_show_mode(void)
                 break;
             case 3:
                 mode = "auto";
+                break;
+            case 4:
+                mode = "32-bit swap";
                 break;
             default:
                 mode = "unknown";

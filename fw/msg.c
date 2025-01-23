@@ -43,7 +43,7 @@
 #define KS_REPLY_WE     BIT(1)  // Set up WE to trigger when host drives OE
 #define KS_REPLY_WE_RAW (KS_REPLY_RAW | KS_REPLY_WE)
 
-#define CAPTURE_DMA_SWAP
+#undef CAPTURE_DMA_SWAP
 #ifdef CAPTURE_DMA_SWAP
 #define LOG_DMA_CONTROLLER DMA1
 #define LOG_DMA_CHANNEL    DMA_CHANNEL5
@@ -685,7 +685,7 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
     TIM_CCER(TIM2) = 0;  // Disable everything
     TIM_CCER(TIM5) = 0;
 
-    if (ee_mode == EE_MODE_32) {
+    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
         /*
          * For 32-bit mode, we need to separate low and high 16 bits as
          * they are driven out by separate DMA engines (TIM5 and TIM2).
@@ -696,6 +696,11 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             uint16_t *txl = (uint16_t *)buffer_txd_lo;
             uint16_t *txh = (uint16_t *)buffer_txd_hi;
             uint32_t val;
+
+            if (ee_mode == EE_MODE_32_SWAP) {
+                txl = (uint16_t *)buffer_txd_hi;
+                txh = (uint16_t *)buffer_txd_lo;
+            }
 
             /* Copy first chunk */
             rbp = (uint32_t *) rbuf1;
@@ -880,7 +885,7 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
     if (flags & KS_REPLY_WE)
         oewe_output(1);  // Allow SOCKET_OE to drive WE
 
-    if (ee_mode == EE_MODE_32) {
+    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
         TIM2_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
         TIM5_EGR = TIM_EGR_CC1G;         // Generate first DMA trigger
         TIM_CCER(TIM2) = TIM_CCER_CC1E;  // Enable DMA, rising edge
@@ -1038,7 +1043,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             /* Send command sequence for flash read array command */
             uint32_t addr = SWAP32(0x00555);
             ks_reply(0, KS_STATUS_OK, sizeof (addr), &addr, 0, NULL);
-            if (ee_mode == EE_MODE_32) {
+            if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
                 uint32_t data = 0x00f000f0;
                 ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             } else {
@@ -1055,7 +1060,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint      datalen;
             uint      pos;
 
-            if (ee_mode == EE_MODE_32) {
+            if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
                 count = cmd_len / 8;  // 32-bit data
                 datalen = count * 4;
             } else {
@@ -1083,7 +1088,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             }
 
             /* Swap data */
-            if (ee_mode == EE_MODE_32) {
+            if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
                 for (pos = 0; pos < count; pos++) {
                     uint32_t value = values[pos + count];
                     values[pos + count] = (value << 16) | (value >> 16);
@@ -1110,7 +1115,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 SWAP32(0x00555), SWAP32(0x002aa), SWAP32(0x00555)
             };
             ks_reply(0, KS_STATUS_OK, sizeof (addr), &addr, 0, NULL);
-            if (ee_mode == EE_MODE_32) {
+            if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
                 static const uint32_t data[] = {
                     0x00aa00aa, 0x00550055, 0x00900090
                 };
@@ -1134,7 +1139,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             if ((int) cons_s < 0)
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
 
-            if (ee_mode == EE_MODE_32) {
+            if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
                 if (cmd_len != 4) {
                     ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                     break;
@@ -1153,7 +1158,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             }
 
             ks_reply(0, KS_STATUS_OK, sizeof (addr), &addr, 0, NULL);
-            if (ee_mode == EE_MODE_32) {
+            if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
                 static uint32_t data[] = {
                     0x00aa00aa, 0x00550055, 0x00a000a0, 0
                 };
@@ -1178,7 +1183,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 break;
             }
             ks_reply(0, KS_STATUS_OK, sizeof (addr), &addr, 0, NULL);
-            if (ee_mode == EE_MODE_32) {
+            if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
                 static const uint32_t data[] = {
                     0x00aa00aa, 0x00550055, 0x00800080,
                     0x00aa00aa, 0x00550055, 0x00300030,
@@ -1948,16 +1953,17 @@ address_log_replay(uint max)
         printf(" DataHi");
     printf("\n");
 
+    uint is_32bit = (ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP);
     while (cons != prod) {
         addr = buffer_rxa_lo[cons];
         data = buffer_rxd[cons];
         if (capture_mode == CAPTURE_ADDR) {
             addr |= ((data & 0xf0) << (16 - 4));
             printf("%3u %05x   %05x\n", cons, addr,
-                   (ee_mode == EE_MODE_32) ? (addr << 2) : (addr << 1));
+                   is_32bit ? (addr << 2) : (addr << 1));
         } else {
             printf("%3u _%04x   %05x     %04x\n", cons, addr,
-                   (ee_mode == EE_MODE_32) ? (addr << 2) : (addr << 1), data);
+                   is_32bit ? (addr << 2) : (addr << 1), data);
         }
         cons++;
         if (cons >= ARRAY_SIZE(buffer_rxa_lo))

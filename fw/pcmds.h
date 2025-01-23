@@ -20,6 +20,7 @@ rc_t cmd_gpio(int argc, char * const *argv);
 rc_t cmd_map(int argc, char * const *argv);
 rc_t cmd_prom(int argc, char * const *argv);
 rc_t cmd_reset(int argc, char * const *argv);
+rc_t cmd_set(int argc, char * const *argv);
 rc_t cmd_snoop(int argc, char * const *argv);
 rc_t cmd_usb(int argc, char * const *argv);
 
@@ -27,6 +28,7 @@ extern const char cmd_cpu_help[];
 extern const char cmd_gpio_help[];
 extern const char cmd_prom_help[];
 extern const char cmd_reset_help[];
+extern const char cmd_set_help[];
 extern const char cmd_snoop_help[];
 extern const char cmd_usb_help[];
 

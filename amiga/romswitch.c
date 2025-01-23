@@ -1058,7 +1058,7 @@ show_id(void)
 
     SetAPen(&screen->RastPort, 1);  // Black
     sprintf(buf, "KickSmash%u %u.%u",
-            (id.si_mode == 0) ? 32 : 16,
+            ((id.si_mode != 1) && (id.si_mode != 2)) ? 32 : 16,
             id.si_ks_version[0], id.si_ks_version[1]);
     Print(buf, x, y += 9, 0);
 

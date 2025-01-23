@@ -124,6 +124,8 @@ config_read(void)
                     config.bi.bi_bank_current = config.bi.bi_bank_poweron;
                     config.bi.bi_bank_nextreset = 0xff;
                 }
+                if (config.led_level == 0)
+                    config.led_level = 100;  // Old board
                 return;
             }
         }
@@ -135,6 +137,7 @@ config_read(void)
     config.valid   = 0x01;
     config.version = CONFIG_VERSION;
     config.ee_mode = 3;  // EE_MODE_AUTO
+    config.led_level = 10;  // 10%
 
     config.bi.bi_bank_current = 0;
     config.bi.bi_bank_nextreset = 0xff;
@@ -255,9 +258,12 @@ config_name(const char *name)
             printf("%s\n", config.name);
         }
     } else {
-        if (strncmp(config.name, name, sizeof (config.name) - 1) == 0)
+        const char *copyname = name;
+        if ((name[0] == '-') && (name[1] == '\0'))
+            copyname = "";  // name "-" removes the board name
+        if (strncmp(config.name, copyname, sizeof (config.name) - 1) == 0)
             return;
-        strncpy(config.name, name, sizeof (config.name) - 1);
+        strncpy(config.name, copyname, sizeof (config.name) - 1);
         config.name[sizeof (config.name) - 1] = '\0';
         config_updated();
     }
@@ -324,4 +330,11 @@ config_bank_show(void)
         aspaces += 8;
         printf("\n");
     }
+}
+
+void
+config_set_led(uint value)
+{
+    config.led_level = value;
+    config_updated();
 }

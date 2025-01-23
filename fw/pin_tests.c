@@ -222,7 +222,6 @@ check_board_standalone(void)
                  GPIO_SETMODE_INPUT_PULLUPDOWN);
     conn = 0;
 
-// XXX These tests need to be fixed
     for (pass = 0; pass <= 1; pass++) {
         gpio_setv(SOCKET_A16_PORT,
                   FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN, pass);
@@ -253,6 +252,9 @@ check_board_standalone(void)
         }
         /* Anything which didn't arm within timeout period is connected */
         conn |= (armed ^ ((FLASH_A17_PIN | SOCKET_A18_PIN | SOCKET_A19_PIN)));
+
+        if (kbrst_in_amiga)
+            break;  // Only run pass 0
     }
     printf("Connected: ");
     if (!(conn & FLASH_A17_PIN))

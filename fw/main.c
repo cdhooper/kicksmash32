@@ -74,9 +74,9 @@ main(void)
     identify_cpu();
     show_reset_reason();
     config_read();
+    led_set_brightness(config.led_level);
     ee_update_bank_at_poweron();
     usb_startup();
-    led_power(1);
     check_board_standalone();
 
     adc_init();

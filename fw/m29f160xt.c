@@ -51,6 +51,7 @@
 
 /*
  * EE_MODE_32      = 32-bit flash
+ * EE_MODE_32_SWAP = 32-bit flash low / high flash swapped
  * EE_MODE_16_LOW  = 16-bit flash low device (bits 0-15)
  * EE_MODE_16_HIGH = 16-bit flash high device (bits 16-31)
  */
@@ -350,7 +351,7 @@ void
 ee_set_mode(uint new_mode)
 {
     ee_mode = new_mode;
-    if (ee_mode == EE_MODE_32) {
+    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
         ee_cmd_mask = 0xffffffff;  // 32-bit
         ee_addr_shift = 2;
         msg_mode(32);
@@ -462,7 +463,7 @@ ee_read(uint32_t addr, void *datap, uint count)
     if (addr + count > EE_DEVICE_SIZE)
         return (1);
 
-    if (ee_mode == EE_MODE_32) {
+    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
         uint32_t *data = datap;
 
         disable_irq();
@@ -561,6 +562,7 @@ ee_cmd(uint32_t addr, uint32_t cmd)
 
     switch (ee_mode) {
         case EE_MODE_32:
+        case EE_MODE_32_SWAP:
             if ((cmd >> 16) == 0)
                 cmd |= (cmd << 16);
             break;
@@ -739,11 +741,16 @@ int
 ee_write(uint32_t addr, void *datap, uint count)
 {
     int      rc;
-    uint     wordsize = (ee_mode == EE_MODE_32) ? 4 : 2;
+    uint     wordsize;
     uint8_t *data = datap;
     uint32_t value;
     uint32_t rvalue;
     uint32_t xvalue;
+
+    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP))
+        wordsize = 4;
+    else
+        wordsize = 2;
 
     if (addr + count > EE_DEVICE_SIZE)
         return (1);
@@ -754,6 +761,7 @@ try_again:
         switch (ee_mode) {
             default:
             case EE_MODE_32:
+            case EE_MODE_32_SWAP:
                 value = *(uint32_t *) data;
                 break;
             case EE_MODE_16_LOW:
@@ -1068,6 +1076,7 @@ ee_id(uint32_t *part1, uint32_t *part2)
 
     switch (ee_mode) {
         case EE_MODE_32:
+        case EE_MODE_32_SWAP:
         case EE_MODE_16_LOW:
             *part1 = (low << 16) | ((uint16_t) high);
             *part2 = (low & 0xffff0000) | (high >> 16);
@@ -1166,6 +1175,7 @@ ee_test(void)
             printf("Prom %08lx %s\n", part1, id1);
             break;
         case EE_MODE_32:
+        case EE_MODE_32_SWAP:
             id2 = ee_id_string(part2);
             if ((strcmp(id1, "Unknown") == 0) ||
                 (strcmp(id1, "Unknown") == 0) ||

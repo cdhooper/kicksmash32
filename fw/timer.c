@@ -22,10 +22,11 @@
 
 /*
  * STM32F1 timer usage
- *   TIM4 - bits 16-31 of tick timer (bits 32-63 are in global timer_high)
- *   TIM1 - bits 0-15 of tick timer, OVF trigger to TIM4
- *   TIM5 CH1 - ROM OE (PA0) trigger to DMA2 CH5 capture of address lo
- *   TIM2 CH1 - ROM OE (PA0) trigger to DMA1 CH5 capture of address hi
+ *   TIM1     - bits 0-15 of tick timer, OVF trigger to TIM3
+ *   TIM3     - bits 16-31 of tick timer (bits 32-63 are in global timer_high)
+ *   TIM4+CH3 - Power LED PWM
+ *   TIM2 CH1 - ROM OE (PA0) trigger to DMA1 CH5 capture of address lo
+ *   TIM5 CH1 - ROM OE (PA0) trigger to DMA2 CH5 capture of address hi
  */
 
 /*
@@ -41,7 +42,7 @@
  *  TIM5 | TIM2 | TIM3 | TIM4 | TIM8
  *
  *  Timer Triggers in use:
- *      TIM1 -> TIM4 ITR0
+ *      TIM1 -> TIM3 ITR0
  */
 
 /*
@@ -73,18 +74,18 @@ static inline void __dmb(void)
 
 #ifdef STM32F1
 void
-tim4_isr(void)
+tim3_isr(void)
 {
-    uint32_t flags = TIM_SR(TIM4) & TIM_DIER(TIM4);
+    uint32_t flags = TIM_SR(TIM3) & TIM_DIER(TIM3);
 
-    TIM_SR(TIM4) = ~flags;  // Clear observed flags
+    TIM_SR(TIM3) = ~flags;  // Clear observed flags
 
     if (flags & TIM_SR_UIF)
         timer_high++;  // Increment upper bits of 64-bit timer value
 
     if (flags & ~TIM_SR_UIF) {
-        TIM_DIER(TIM4) &= ~(flags & ~TIM_SR_UIF);
-        printf("Unexpected TIM4 IRQ: %04lx\n", flags & ~TIM_SR_UIF);
+        TIM_DIER(TIM3) &= ~(flags & ~TIM_SR_UIF);
+        printf("Unexpected TIM3 IRQ: %04lx\n", flags & ~TIM_SR_UIF);
     }
 }
 
@@ -93,16 +94,16 @@ timer_tick_get(void)
 {
     /*
      * TIM1       is high speed tick 72 MHz RCC_PLK2
-     * TIM4       is cascaded tick, 72 MHz / 65536 = ~1098.6 Hz
+     * TIM3       is cascaded tick, 72 MHz / 65536 = ~1098.6 Hz
      * timer_high is cascaded globak, 72 MHz / 2^32 = ~0.0168 Hz
      */
     uint32_t high   = timer_high;
-    uint32_t high16 = TIM_CNT(TIM4);
+    uint32_t high16 = TIM_CNT(TIM3);
     uint32_t low16  = TIM_CNT(TIM1);
 
     /*
      * A Data Memory Barrier (ARM "dmb") here is necessary to prevent
-     * a pipeline fetch of timer_high before the TIM4 CNT fetch has
+     * a pipeline fetch of timer_high before the TIM3 CNT fetch has
      * completed. Without it, a timer update interrupt happening at
      * this point could potentially exhibit a non-monotonic clock.
      */
@@ -112,17 +113,17 @@ timer_tick_get(void)
      * Check for unhandled timer rollover. Note this must be checked
      * twice due to an ARM pipelining race with interrupt context.
      */
-    if ((TIM_SR(TIM4) & TIM_SR_UIF) && (TIM_SR(TIM4) & TIM_SR_UIF)) {
+    if ((TIM_SR(TIM3) & TIM_SR_UIF) && (TIM_SR(TIM3) & TIM_SR_UIF)) {
         high++;
-        if ((low16 > TIM_CNT(TIM1)) || (high16 > TIM_CNT(TIM4))) {
+        if ((low16 > TIM_CNT(TIM1)) || (high16 > TIM_CNT(TIM3))) {
             /* timer wrapped */
-            high16 = TIM_CNT(TIM4);
+            high16 = TIM_CNT(TIM3);
             low16 = TIM_CNT(TIM1);
         }
-    } else if ((high16 != TIM_CNT(TIM4)) || (high != timer_high)) {
+    } else if ((high16 != TIM_CNT(TIM3)) || (high != timer_high)) {
         /* TIM1 or interrupt rollover */
         high   = timer_high;
-        high16 = TIM_CNT(TIM4);
+        high16 = TIM_CNT(TIM3);
         low16  = TIM_CNT(TIM1);
     }
     return (((uint64_t) high << 32) | (high16 << 16) | low16);
@@ -133,55 +134,55 @@ timer_init(void)
 {
     /*
      * TIM1 is the low 16 bits of the 32-bit counter.
-     * TIM4 is the high 16 bits of the 32-bit counter.
-     * We chain a rollover of TIM1 to increment TIM4.
-     * TIM4 rollover causes an interrupt, which software
+     * TIM3 is the high 16 bits of the 32-bit counter.
+     * We chain a rollover of TIM1 to increment TIM3.
+     * TIM3 rollover causes an interrupt, which software
      * uses to then increment the upper 32-bit part of
      * the 64-bit system tick counter.
      */
 
-    /* Enable and reset TIM1 and TIM4 */
+    /* Enable and reset TIM1 and TIM3 */
     RCC_APB2ENR  |=  RCC_APB2ENR_TIM1EN;
     RCC_APB2RSTR |=  RCC_APB2RSTR_TIM1RST;
     RCC_APB2RSTR &= ~(RCC_APB2RSTR_TIM1RST);
-    RCC_APB1ENR  |=  RCC_APB1ENR_TIM4EN;
-    RCC_APB1RSTR |=  RCC_APB1RSTR_TIM4RST;
-    RCC_APB1RSTR &= ~(RCC_APB1RSTR_TIM4RST);
+    RCC_APB1ENR  |=  RCC_APB1ENR_TIM3EN;
+    RCC_APB1RSTR |=  RCC_APB1RSTR_TIM3RST;
+    RCC_APB1RSTR &= ~(RCC_APB1RSTR_TIM3RST);
 
     /* Set timer CR1 mode (No clock division, Edge, Dir Up) */
-    TIM_CR1(TIM4) &= ~(TIM_CR1_CKD_CK_INT_MASK | TIM_CR1_CMS_MASK | TIM_CR1_DIR_DOWN);
+    TIM_CR1(TIM3) &= ~(TIM_CR1_CKD_CK_INT_MASK | TIM_CR1_CMS_MASK | TIM_CR1_DIR_DOWN);
     TIM_CR1(TIM1) &= ~(TIM_CR1_CKD_CK_INT_MASK | TIM_CR1_CMS_MASK | TIM_CR1_DIR_DOWN);
 
-    TIM_ARR(TIM4)  = 0xffff;       // Set period (rollover at 2^16)
+    TIM_ARR(TIM3)  = 0xffff;       // Set period (rollover at 2^16)
     TIM_ARR(TIM1)  = 0xffff;       // Set period (rollover at 2^16)
     TIM_CR1(TIM1) |= TIM_CR1_URS;  // Update on overflow
     TIM_CR1(TIM1) &= ~TIM_CR1_OPM; // Continuous mode
 
-    /* TIM1 is master - generate TRGO to TIM4 on rollover (UEV) */
+    /* TIM1 is master - generate TRGO to TIM3 on rollover (UEV) */
     TIM_CR2(TIM1) &= TIM_CR2_MMS_MASK;
     TIM_CR2(TIM1) |= TIM_CR2_MMS_UPDATE;
 
-    /* TIM4 is slave of TIM1 (ITR0) per Table 86 */
-    TIM_SMCR(TIM4) = 0;
-    TIM_SMCR(TIM4) |= TIM_SMCR_TS_ITR0;
+    /* TIM3 is slave of TIM1 (ITR0) per Table 86 */
+    TIM_SMCR(TIM3) = 0;
+    TIM_SMCR(TIM3) |= TIM_SMCR_TS_ITR0;
 
-    /* TIM4 has External Clock Mode 1 (increment on rising edge of TRGI) */
-    TIM_SMCR(TIM4) |= TIM_SMCR_SMS_ECM1;
+    /* TIM3 has External Clock Mode 1 (increment on rising edge of TRGI) */
+    TIM_SMCR(TIM3) |= TIM_SMCR_SMS_ECM1;
 
     /* Enable counters */
-    TIM_CR1(TIM4)  |= TIM_CR1_CEN;
+    TIM_CR1(TIM3)  |= TIM_CR1_CEN;
     TIM_CR1(TIM1)  |= TIM_CR1_CEN;
 
-    /* Enable TIM4 rollover interrupt, but not TIE (interrupt on trigger) */
-    TIM_DIER(TIM4) |= TIM_DIER_UIE | TIM_DIER_TDE;
-    nvic_set_priority(NVIC_TIM4_IRQ, 0x11);
-    nvic_enable_irq(NVIC_TIM4_IRQ);
+    /* Enable TIM3 rollover interrupt, but not TIE (interrupt on trigger) */
+    TIM_DIER(TIM3) |= TIM_DIER_UIE | TIM_DIER_TDE;
+    nvic_set_priority(NVIC_TIM3_IRQ, 0x11);
+    nvic_enable_irq(NVIC_TIM3_IRQ);
 }
 
 void
 timer_shutdown(void)
 {
-    TIM_DIER(TIM4) = 0;
+    TIM_DIER(TIM3) = 0;
 }
 
 void

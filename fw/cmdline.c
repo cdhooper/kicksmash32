@@ -89,6 +89,9 @@ static const cmd_t cmd_list[] = {
 #endif
     { cmd_reset,   "reset",   0, cmd_reset_help, " [dfu|amiga|prom]",
                         "reset CPU" },
+#ifdef EMBEDDED_CMD
+    { cmd_set,     "set",     0, cmd_set_help, "", "[bank|led|mode|name]" },
+#endif
 #ifdef HAVE_SPACE_PROM
     { cmd_snoop,   "snoop",   0, cmd_snoop_help, "", "snoop ROM" },
 #endif

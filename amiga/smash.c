@@ -552,7 +552,9 @@ smash_identify(void)
         printf("  Mode: %s\n",
                (id.si_mode == 0) ? "32-bit" :
                (id.si_mode == 1) ? "16-bit" :
-               (id.si_mode == 2) ? "16-bit high" : "unknown");
+               (id.si_mode == 2) ? "16-bit high" :
+               (id.si_mode == 3) ? "auto" :
+               (id.si_mode == 4) ? "32-bit swap" : "unknown");
     }
 
     usecs = smash_time();

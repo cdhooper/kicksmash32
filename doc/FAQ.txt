@@ -52,3 +52,11 @@ contains hostsmash executables for Linux, Windows, and MacOS. This
 utility is used to program firmware images on KickSmash over USB.
 
 ========================================================================
+
+* Can I use Windows as a host?
+
+Although Windows is not well supported compared to Linux, you should
+be able to program and use KickSmash from the Windows command prompt.
+See doc/windows_notes.txt for useful information.
+
+========================================================================

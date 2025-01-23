@@ -37,10 +37,13 @@ may have an error, such as
     A device which does not exist was specified.
 
 You can try using the following driver:
-    https://github.com/rogerclarkmelbourne/Arduino_STM32/blob/master/drivers/win/wdi-simple.exe
+    https://github.com/rogerclarkmelbourne/Arduino_STM32/blob/master/drivers/win/wdi-simple.exe?raw=true
 
 And tell it to manage KickSmash serial:
     wdi-simple.exe --vid 0x1209 --pid 0x1610 --type 3 --name "KickSmash Prg" --dest "maple-serial"
+
+If you have wget installed, you can run the wdikicksmash.bat file in the
+sw directory to do both.
 
 After installing the above, you will need to plug in your KickSmash board
 again.

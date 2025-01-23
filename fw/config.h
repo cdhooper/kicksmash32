@@ -23,7 +23,8 @@ typedef struct {
     bank_info_t bi;         // Flash bank information
     uint8_t     ee_mode;    // Flash mode (0=32-bit, 1=16-bit, 2=16-bit hi)
     char        name[16];   // Unique name for this board
-    uint8_t     unused[35]; // Unused
+    uint8_t     led_level;  // Power LED brightness (0 to 100)
+    uint8_t     unused[34]; // Unused
 } config_t;
 
 extern config_t config;
@@ -38,6 +39,7 @@ int  config_set_bank_merge(uint bank_start, uint bank_end, uint flag_unmerge);
 int  config_set_bank(uint bank, uint set_cur, uint set_poweron, uint set_reset);
 void config_bank_show(void);
 void config_name(const char *name);
+void config_set_led(uint value);
 
 #define STM32FLASH_FLAG_AUTOERASE 1
 
