@@ -788,7 +788,7 @@ tx_rb_flushed(void)
         return (FALSE);  // Ring buffer has output pending
 }
 
-#ifdef WIN32
+#ifdef __MINGW32__
 #include <windows.h>
 static void
 microsleep(__int64 usec)
@@ -2849,6 +2849,13 @@ run_terminal_mode(void)
  *          could be used to parse that output. I originally started down
  *          that path, but found that the function of parsing that XML just
  *          to find the serial path was way too cumbersome and code-intensive.
+ *
+ * Windows
+ *      The current code is quite lame -- it can only report the COM ports
+ *          could be successfully opened. I tried implementing code which
+ *          would use SetupDiGetClassDevs() with GUID_DEVCLASS_PORTS, but
+ *          the enumerator function SetupDiEnumDeviceInfo() fails to find
+ *          anything. Well, at least with Wine it fails to find anything.
  */
 static void
 find_mx_programmer(void)
@@ -2911,6 +2918,30 @@ find_mx_programmer(void)
     }
 
     fclose(fp);
+#endif
+#ifdef __MINGW32__
+#define MAX_COM_PORT 256
+    uint found = 0;
+    uint port;
+    char portname[32];
+    for (port = 1; port < MAX_COM_PORT; port++) {
+        sprintf(portname, "\\\\.\\com%u", port);
+        HANDLE dev_handle = CreateFile(portname, GENERIC_READ | GENERIC_WRITE,
+                                       0, NULL, OPEN_EXISTING, 0, NULL);
+
+        if (dev_handle == INVALID_HANDLE_VALUE)
+            continue;
+
+        if (found++ == 0)
+            printf("Available ports:");
+
+        printf(" COM%u", port);
+        CloseHandle(dev_handle);
+    }
+    if (found)
+        printf("\n");
+    if (port < MAX_COM_PORT)
+        strcpy(device_name, portname);
 #endif
 }
 
