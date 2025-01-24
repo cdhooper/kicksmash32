@@ -51,7 +51,7 @@ const struct Resident resident = {
     rom_main               // rt_Init - pointer to init code
 };
 
-const char SmashRomID[]   = "smashrom 1.1 (11.04.2024)\r\n";
+const char SmashRomID[]   = "smashrom 1.4 (23.01.2025)\r\n";
 
 #define ADDR32(x)   ((volatile uint32_t *) ((uintptr_t)(x)))
 typedef unsigned int uint;

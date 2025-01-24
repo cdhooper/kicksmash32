@@ -110,7 +110,7 @@ const struct Resident resident = {
     rom_main               // rt_Init - pointer to init code
 };
 
-const char RomID[]   = "romswitch 0.6 (2024-12-26)\r\n";
+const char RomID[]   = "romswitch 1.4 (2025-01-23)\r\n";
 
 struct GfxBase *GfxBase;
 struct Library *GadToolsBase;
