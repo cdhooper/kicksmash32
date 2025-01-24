@@ -2,7 +2,7 @@
 # Makefile to build KickSmash firmware, host software, and Amiga software
 #
 
-VER ?= 1.1+
+VER ?= 1.4+
 MAKE ?= make
 MAKEFLAGS += --no-print-directory
 
