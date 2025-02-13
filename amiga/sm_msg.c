@@ -111,8 +111,8 @@ rom_wait_normal(void)
             if (timeout++ > 200000)
                 break;  // Give up after 2 seconds
             pos = 0;
+            last = cur;
         }
-        last = cur;
         cia_spin(CIA_USEC(20));
     }
 }

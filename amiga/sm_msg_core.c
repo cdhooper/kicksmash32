@@ -204,6 +204,7 @@ cia_spin(unsigned int ticks)
  * ---------------
  * Wait until ROM has recovered (Kicksmash is no longer driving data.
  */
+TEXT_TO_RAM
 static void
 rom_wait_normal(void)
 {
@@ -222,8 +223,8 @@ rom_wait_normal(void)
             if (timeout++ > 200000)
                 break;  // Give up after 2 seconds
             pos = 0;
+            last = cur;
         }
-        last = cur;
         cia_spin(CIA_USEC(20));
     }
 }
