@@ -12,7 +12,10 @@
 #ifndef _CPU_CONTROL_H
 #define _CPU_CONTROL_H
 
-#ifndef _DCC
+#ifdef STANDALONE
+#include "util.h"
+#include "cache.h"
+#else
 #include <devices/cd.h>
 #include <inline/timer.h>
 #include <inline/exec.h>
@@ -21,10 +24,16 @@
 
 #define BIT(x) (1U << (x))
 
+#ifdef STANDALONE
+/* Standalone is always in supervisor state */
+#define SUPERVISOR_STATE_ENTER()
+#define SUPERVISOR_STATE_EXIT()
+#else
 #define SUPERVISOR_STATE_ENTER()    { \
                                       APTR old_stack = SuperState()
 #define SUPERVISOR_STATE_EXIT()       UserState(old_stack); \
                                     }
+#endif
 #define CACHE_DISABLE_DATA() \
         { \
             uint32_t oldcachestate = \
@@ -60,9 +69,16 @@
 #define CIA_USEC(x)      (x * 715909 / 1000000)
 #define CIA_USEC_LONG(x) (x * 7159 / 10000)
 
+#ifndef ADDR8
 #define ADDR8(x)    ((volatile uint8_t *)  ((uintptr_t)(x)))
 #define ADDR16(x)   ((volatile uint16_t *) ((uintptr_t)(x)))
 #define ADDR32(x)   ((volatile uint32_t *) ((uintptr_t)(x)))
+#endif
+#ifndef VADDR8
+#define VADDR8(x)    ((volatile uint8_t *)  ((uintptr_t)(x)))
+#define VADDR16(x)   ((volatile uint16_t *) ((uintptr_t)(x)))
+#define VADDR32(x)   ((volatile uint32_t *) ((uintptr_t)(x)))
+#endif
 
 /*
  * Define compile-time assert. This macro relies on gcc's built-in

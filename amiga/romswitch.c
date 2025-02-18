@@ -14,6 +14,15 @@
  */
 
 #include <string.h>
+#ifdef STANDALONE
+#include <stdint.h>
+#include "util.h"
+#include "draw.h"
+#include "screen.h"
+#include "intuition.h"
+#include "gadget.h"
+#include "keyboard.h"
+#else
 #include <inttypes.h>
 #include <exec/types.h>
 #include <proto/exec.h>
@@ -34,6 +43,7 @@
 #include <inline/graphics.h>
 
 #include <utility/utility.h>  // UTILITYNAME
+#endif
 
 #include "printf.h"
 #include "cpu_control.h"
@@ -42,13 +52,26 @@
 
 #define VERSION 1
 
+#ifdef DEBUG_LONGRESET_BUTTONS
+#define LPRINTF(fmt, ...) printf(fmt, ...)
+#else
+#define LPRINTF(fmt, ...)
+#endif
+
+
+#ifndef ADDR32
 #define ADDR32(x)     ((volatile uint32_t *) ((uintptr_t)(x)))
+#endif
 #define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
 #define BIT(x)        (1U << (x))
 #define MIN(X,Y)      ((X) < (Y) ? (X) : (Y))
 
+#ifdef STANDALONE
+#define RawPutChar(ch) putchar(ch)
+#else
 #define RawPutChar(___c) \
         LP1NR(0x204, RawPutChar, UBYTE, ___c, d0, , SysBase)
+#endif
 
 #define SCREEN_WIDTH         640
 #define SCREEN_HEIGHT        200
@@ -89,6 +112,7 @@
 
 typedef unsigned int uint;
 
+#ifndef STANDALONE
 extern struct DosLibrary *DOSBase;
 extern struct ExecBase *SysBase;
 
@@ -111,6 +135,7 @@ const struct Resident resident = {
 };
 
 const char RomID[]   = "romswitch 1.4 (2025-01-23)\r\n";
+#endif /* STANDALONE */
 
 struct GfxBase *GfxBase;
 struct Library *GadToolsBase;
@@ -147,14 +172,20 @@ static uint updated_poweron;
 static uint disabled_save;
 static uint disabled_switch;
 static uint bank_switchto;
+#ifndef STANDALONE
 static void *globals_base;
+#endif
 
 static uint bank_box_top    = 0;
 static uint bank_box_bottom = 0;
 static uint bank_box_left   = 0;
 static uint bank_box_right  = 0;
 static uint current_bank    = 0xff;
+
+#undef BANK_MOUSEBAR
+#ifdef BANK_MOUSEBAR
 static uint current_column  = 0;
+#endif
 
 static bank_info_t info;
 static bank_info_t info_saved;
@@ -172,10 +203,12 @@ uint    flag_debug;  // Global
 void
 dputs(const char *str)
 {
+#ifndef STANDALONE
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds="
     struct ExecBase *SysBase = *(struct ExecBase **)4UL;
 #pragma GCC diagnostic pop
+#endif
 
     while (*str != '\0')
         RawPutChar(*str++);
@@ -398,9 +431,21 @@ draw_array(const struct drawing c[], int length)
                     SetAPen(rp, pen + 1);
                     Move(rp, j + da[0] + 3, ny);
                     Draw(rp, j + da[0] + 3, ny + d.h / 4);
-
                     SetAPen(rp, pen);
+#ifdef STANDALONE
+                    /*
+                     * There seems to be a bug in the standalone RectFill().
+                     * for small areas.
+                     */
+                    Move(rp, j + da[0], ny);
+                    Draw(rp, j + da[0], ny + d.h / 4 - 1);
+                    Move(rp, j + da[0] + 1, ny);
+                    Draw(rp, j + da[0] + 1, ny + d.h / 4);
+                    Move(rp, j + da[0] + 2, ny);
+                    Draw(rp, j + da[0] + 2, ny + d.h / 4);
+#else
                     RectFill(rp, j + da[0], ny, j + da[0] + 2, ny + d.h / 4);
+#endif
                 }
                 break;
             case 5:  // Horizontal pins
@@ -896,6 +941,7 @@ show_banks(void)
     }
 }
 
+#ifdef BANK_MOUSEBAR
 /*
  * bank_mouseover
  * --------------
@@ -937,6 +983,7 @@ bank_mouseover(uint pos)
     }
     current_bank = bank;
 }
+#endif
 
 /*
  * update_save_box
@@ -1169,6 +1216,7 @@ string_hook_entry(struct Hook *hook asm("a0"), struct SGWork *sgw asm("a2"),
 }
 #endif
 
+#ifndef STANDALONE
 static void
 cleanup_bank_name_gadgets(void)
 {
@@ -1187,6 +1235,7 @@ cleanup_bank_name_gadgets(void)
         y += 9;
     }
 }
+#endif
 
 /*
  * draw_page
@@ -1266,6 +1315,7 @@ draw_page(void)
     ng.ng_LeftEdge = (banktable_pos[6] + banktable_pos[5] -
                       ng.ng_Width) / 2 - 1;
     ng.ng_GadgetID = ID_CURRENT_RADIO;
+    ng.ng_GadgetText = NULL;
     LastAdded = CreateGadget(MX_KIND, LastAdded, NewGadget,
                              GTMX_Labels, (ULONG) current_sel_labels,
                              GTMX_Active, (UWORD) info.bi_bank_poweron,
@@ -1469,7 +1519,9 @@ draw_page(void)
     AddGList(window, gadgets, -1, -1, NULL);
     RefreshGList(gadgets, window, NULL, -1);
     GT_RefreshWindow(window, NULL);
+#ifndef STANDALONE
     cleanup_bank_name_gadgets();
+#endif
 }
 
 /*
@@ -1489,8 +1541,8 @@ bank_longreset_change(uint bank, int addsub)
         if (info.bi_longreset_seq[lastpos] == 0xff)
             break;
 
-    printf("bank=%u addsub=%d lastpos=%u curpos=%u\n",
-           bank, addsub, lastpos, curpos);
+    LPRINTF("bank=%u addsub=%d lastpos=%u curpos=%u\n",
+            bank, addsub, lastpos, curpos);
 
     /* Find the current position of the bank in the sequence */
     for (pos = 0; pos < lastpos; pos++)
@@ -1499,17 +1551,17 @@ bank_longreset_change(uint bank, int addsub)
             break;
         }
 
-    printf("START:");
+    LPRINTF("START:");
     for (pos = 0; pos < ARRAY_SIZE(info.bi_longreset_seq); pos++) {
         if (info.bi_longreset_seq[pos] == 0xff)
             break;
-        printf(" %u", info.bi_longreset_seq[pos]);
+        LPRINTF(" %u", info.bi_longreset_seq[pos]);
     }
-    printf("\n");
+    LPRINTF("\n");
 
     if ((addsub < 0) && (curpos == 0xff)) {
         /* Subtract when not in list adds it to the end of the list */
-        printf("subtract when not in list\n");
+        LPRINTF("subtract when not in list\n");
         if (lastpos <= ARRAY_SIZE(info.bi_longreset_seq))
             info.bi_longreset_seq[lastpos] = bank;
         goto end;
@@ -1518,7 +1570,7 @@ bank_longreset_change(uint bank, int addsub)
 
     if ((addsub > 0) && (curpos == 0xff)) {
         /* Add when not in list adds it to the beginning of the list */
-        printf("add when not in list\n");
+        LPRINTF("add when not in list\n");
         if (lastpos < ARRAY_SIZE(info.bi_longreset_seq)) {
             for (pos = lastpos; pos > 0; pos--)
                 info.bi_longreset_seq[pos] = info.bi_longreset_seq[pos - 1];
@@ -1532,7 +1584,7 @@ bank_longreset_change(uint bank, int addsub)
 
     if ((addsub < 0) && (curpos == 0)) {
         /* Subtract when at start of list = Remove */
-        printf("subtract when at start of list = Remove\n");
+        LPRINTF("subtract when at start of list = Remove\n");
         for (pos = 0; pos < lastpos; pos++)
             info.bi_longreset_seq[pos] = info.bi_longreset_seq[pos + 1];
         info.bi_longreset_seq[lastpos - 1] = 0xff;
@@ -1541,7 +1593,7 @@ bank_longreset_change(uint bank, int addsub)
     }
     if ((addsub > 0) && (curpos == lastpos - 1)) {
         /* Add when at end of list = Remove */
-        printf("add when at end of list = Remove\n");
+        LPRINTF("add when at end of list = Remove\n");
         info.bi_longreset_seq[curpos] = 0xff;
         goto end;
         return;
@@ -1550,24 +1602,24 @@ bank_longreset_change(uint bank, int addsub)
     /* Somewhere in the middle of the list */
     if (addsub < 0) {
         /* Swap with position immediately before */
-        printf("swap with position before\n");
+        LPRINTF("swap with position before\n");
         info.bi_longreset_seq[curpos] = info.bi_longreset_seq[curpos - 1];
         info.bi_longreset_seq[curpos - 1] = bank;
     } else {
         /* Swap with position immediately after */
-        printf("swap with position after\n");
+        LPRINTF("swap with position after\n");
         info.bi_longreset_seq[curpos] = info.bi_longreset_seq[curpos + 1];
         info.bi_longreset_seq[curpos + 1] = bank;
     }
 
 end:
-    printf("  END:");
+    LPRINTF("  END:");
     for (pos = 0; pos < ARRAY_SIZE(info.bi_longreset_seq); pos++) {
         if (info.bi_longreset_seq[pos] == 0xff)
             break;
-        printf(" %u", info.bi_longreset_seq[pos]);
+        LPRINTF(" %u", info.bi_longreset_seq[pos]);
     }
-    printf("\n");
+    LPRINTF("\n");
 }
 
 /*
@@ -1744,6 +1796,8 @@ event_loop(void)
                     break;
 #endif
                 case IDCMP_INTUITICKS:
+#ifdef BANK_MOUSEBAR
+                    /* The color bar gets in the way of the string cursor */
                     if ((window->MouseY > bank_box_top) &&
                         (window->MouseY < bank_box_bottom) &&
                         (window->MouseX > bank_box_left) &&
@@ -1752,6 +1806,7 @@ event_loop(void)
                     } else if (current_bank != 0xff) {
                         bank_mouseover(bank_box_bottom);
                     }
+#endif
                     bank_update_names();
                     break;
                 case IDCMP_GADGETDOWN:
@@ -1836,7 +1891,7 @@ id_save:
                                  * I've tried various methods and all have
                                  * failed.
                                  */
-                                printf("switchto 1\n");
+//                              printf("switchto 1\n");
                             }
                             break;
                         case ID_BANK_NAME_7:
@@ -1844,7 +1899,7 @@ id_save:
                                 /*
                                  * Tab from last bank name
                                  */
-                                printf("switchto 2\n");
+//                              printf("switchto 2\n");
                             }
                             break;
                     }
@@ -1885,7 +1940,7 @@ sm_msg_copy_to_ram(void)
     __asm("lea _copy_to_ram_end,%0" : "=a" (copy_to_ram_end) ::);
 
     uint len = copy_to_ram_end - copy_to_ram_start;
-    printf("len=%x s=%x e=%x\n", len, copy_to_ram_start, copy_to_ram_end);
+//  printf("len=%x s=%x e=%x\n", len, copy_to_ram_start, copy_to_ram_end);
     copy_to_ram_ptr = AllocMem(len, MEMF_PUBLIC);
     if (copy_to_ram_ptr == NULL) {
         dputs("AllocMem fail 1\n");
@@ -1901,13 +1956,19 @@ sm_msg_copy_to_ram(void)
  * ---------
  * Handle normal program initialization, screen draw, main loop, and cleanup
  */
+#ifdef STANDALONE
+void
+#else
 static void
+#endif
 main_func(void)
 {
+#ifndef STANDALONE
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds="
     SysBase = *(struct ExecBase **)4UL;
 #pragma GCC diagnostic pop
+#endif
 
 #undef SERIAL_DEBUG
 #if defined(SERIAL_DEBUG) || defined(DEBUG_IDCMP)
@@ -1915,6 +1976,7 @@ main_func(void)
     flag_debug = 1;
 #endif
 
+#ifndef STANDALONE
     GfxBase = (struct GfxBase *)OpenLibrary("graphics.library", 0);
     IntuitionBase = OpenLibrary("intuition.library", 0);
 
@@ -1928,6 +1990,7 @@ main_func(void)
     void __ctor_stdlib_memory_init(void *);
     void __dtor_stdlib_memory_exit(void *);
     __ctor_stdlib_memory_init(SysBase);
+#endif
 
     cpu_control_init();
     sm_msg_copy_to_ram();
@@ -1937,11 +2000,14 @@ main_func(void)
     event_loop();
     cleanup_screen();
 
+#ifndef STANDALONE
     CloseLibrary(IntuitionBase);
     CloseLibrary((struct Library *)GfxBase);
     CloseLibrary(GadToolsBase);
+#endif
 }
 
+#ifndef STANDALONE
 /*
  * rom_main
  * --------
@@ -1998,10 +2064,13 @@ rom_main(struct ExecBase *SysBase asm("a6"))
 
     globals += 0x7ffe;  // offset that gcc applies to a4-relative globals
     __asm("move.l %0,a4" :: "r" (globals));
+#ifndef STANDALONE
     globals_base = globals;
+#endif
 
     /* Globals are now available */
     main_func();
 
 rom_main_end: ;  // semicolon needed for gcc 6.5
 }
+#endif

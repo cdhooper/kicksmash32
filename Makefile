@@ -6,15 +6,15 @@ VER ?= 1.4+
 MAKE ?= make
 MAKEFLAGS += --no-print-directory
 
-all: build-sw build-fw build-amiga
-clean: clean-sw clean-fw clean-amiga
+all: build-sw build-fw build-amiga build-romswitcher
+clean: clean-sw clean-fw clean-amiga clean-romswitcher
 
-build-fw build-amiga build-sw:
+build-fw build-amiga build-sw build-romswitcher:
 	@echo
 	@echo "* Building in $(@:build-%=%)"
 	@$(MAKE) -C $(@:build-%=%) all
 
-clean-sw clean-fw clean-amiga:
+clean-sw clean-fw clean-amiga clean-romswitcher:
 	@echo
 	@echo "* Cleaning in $(@:clean-%=%)"
 	@$(MAKE) -C $(@:clean-%=%) clean-all
@@ -51,6 +51,7 @@ $(eval $(call RELEASE_IT,amiga/smashfs,amiga/smashfs))
 $(eval $(call RELEASE_IT,amiga/smashfsrom,amiga/smashfsrom))
 $(eval $(call RELEASE_IT,amiga/smashfsrom_d,amiga/smashfsrom_d))
 $(eval $(call RELEASE_IT,amiga/romswitch,amiga/romswitch))
+$(eval $(call RELEASE_IT,romswitcher/switcher.rom,amiga/switcher.rom))
 $(eval $(call RELEASE_IT,README.md,README.md))
 $(eval $(call RELEASE_IT,LICENSE.md,LICENSE.md))
 $(foreach DOC,$(wildcard doc/*),$(eval $(call RELEASE_IT,$(DOC),$(DOC))))

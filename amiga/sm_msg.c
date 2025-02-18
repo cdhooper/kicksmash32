@@ -16,7 +16,9 @@
  */
 
 #include <stdio.h>
+#ifndef STANDALONE
 #include <exec/execbase.h>
+#endif
 #include <memory.h>
 #include "crc32.h"
 #include "sm_msg.h"

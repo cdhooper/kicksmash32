@@ -39,3 +39,5 @@ sw/hostsmash
 sw/hostsmash.exe
 sw/crcit
 sw/crcit.exe
+romswitcher/switcher.rom
+*.rom

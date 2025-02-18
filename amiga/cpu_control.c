@@ -15,7 +15,9 @@
  */
 
 #include <stdio.h>
+#ifndef STANDALONE
 #include <exec/execbase.h>
+#endif
 #include "cpu_control.h"
 
 #define CIAA_TBLO        ADDR8(0x00bfe601)
@@ -66,6 +68,58 @@ cia_spin(unsigned int ticks)
     }
 }
 
+#ifdef STANDALONE
+static unsigned int
+get_cpu(void)
+{
+    unsigned int cpu_type = 0;
+
+    __asm__ volatile (
+        "move.l #68000, %0\n"      // Default to 68000
+        "movec.l  cacr, d0\n"      // Check for 68020+
+        "bne 1f\n"                 // If nonzero, it's 68020+
+        "movec.l  sfc, d1\n"       // Check for 68010
+        "cmp.l #0x00008000, d1\n"
+        "bne 3f\n"                 // If different, it's 68000
+        "move.l #68010, %0\n"
+        "bra 3f\n"
+
+        // 68020+
+        "1:move.l #0x8000, d1\n"   // CACR.IE (68040 and 68060)
+        "movec.l d1, cacr\n"       // Check if CACR can be written
+        "movec.l cacr, d1\n"
+        "movec.l d0, cacr\n"       // Restore CACR
+        "cmp.l d0, d1\n"
+        "beq 2f\n"                 // Doesn't have CACR.IE (ICache Enable)
+
+        // 68040 or 68060
+        "move.l #0x4000, d1\n"     // CACR.NAI (68060)
+        "movec.l d1, cacr\n"       // Check if CACR can be written
+        "movec.l cacr, d1\n"
+        "movec.l d0, cacr\n"       // Restore CACR
+        "move.l #68040, %0\n"
+        "cmp.l d0, d1\n"
+        "beq 3f\n"                 // No CACR.NAI; 68040 detected
+        "move.l #68060, %0\n"
+        "bra 3f\n"
+
+        // 68020 or 68030
+        "2:move.l #68030, %0\n"    // 68020 or 68030 detected
+        "move.l #0x0200, d1\n"     // CACR.FD (68030)
+        "movec.l d1, cacr\n"       // Check if CACR can be written
+        "movec.l cacr, d1\n"
+        "movec.l d0, cacr\n"       // Restore CACR
+        "cmp.l d0, d1\n"
+        "bne 3f\n"                 // Has CACR.FD (Freeze Data); 68030 detected
+        "move.l #68020, %0\n"      // 68020
+        "3: nop\n"
+        : "=r" (cpu_type)          // CPU type as integer
+        :                          // No input operands
+        : "d0", "d1"               // Modified registers
+    );
+    return (cpu_type);
+}
+#else
 static unsigned int
 get_cpu(void)
 {
@@ -83,6 +137,7 @@ get_cpu(void)
         return (68010);
     return (68000);
 }
+#endif
 
 /*
  * mmu_get_tc_030
@@ -144,10 +199,21 @@ mmu_set_tc_040(register uint32_t tc asm("%d0"))
                          : "=d" (tc));
 }
 
+__attribute__ ((noinline)) uint32_t
+cpu_get_cacr(void)
+{
+    register uint32_t result;
+    __asm__ __volatile__("subq.l #4,sp \n\t"
+                         ".long 0xf0174200 \n\t"  // pmove tc,(sp)
+                         "move.l (sp)+,d0"
+                         : "=d" (result));
+    return (result);
+}
+
 void
 cpu_control_init(void)
 {
-#ifndef _DCC
+#if !defined( _DCC) && !defined(STANDALONE)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds="
     SysBase = *(struct ExecBase **)4UL;
