@@ -1,0 +1,7 @@
+Even a typical 90 degree cable is super tight between the ReSDMAC and the KickSmash. If you just want a cable, I found this one fits:
+https://www.amazon.com/dp/B0CFZRYFZB
+If you go with this one, I think it'll be too tight. You may be able to (carefully) shave down the plastic to make it fit:
+https://www.amazon.com/dp/B08HS79LTP
+Here's an alternative that I've tested and confirmed that it works, just looks a bit ugly:
+https://www.amazon.com/dp/B0BWDR7JMV
+

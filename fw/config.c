@@ -23,7 +23,7 @@
 #include "m29f160xt.h"
 
 #define CONFIG_MAGIC     0x19460602
-#define CONFIG_VERSION   0x01
+#define CONFIG_VERSION   0x02
 #define CONFIG_AREA_BASE 0x3e000
 #define CONFIG_AREA_SIZE 0x02000
 #define CONFIG_AREA_END  (CONFIG_AREA_BASE + CONFIG_AREA_SIZE)
@@ -112,8 +112,11 @@ config_read(void)
         ptr = (config_t *) addr;
         if ((ptr->magic == CONFIG_MAGIC) && (ptr->valid)) {
             uint crcpos = offsetof(config_t, crc) + sizeof (ptr->crc);
-            uint crclen = sizeof (config_t) - crcpos;
-            uint32_t crc = crc32(0, &ptr->crc + 1, crclen);
+            uint crclen = ptr->size - crcpos;
+            uint32_t crc;
+            if (crclen > 1024)  // sanity check
+                crclen = 1024;
+            crc = crc32(0, &ptr->crc + 1, crclen);
             if (crc == ptr->crc) {
                 printf("Valid config at %lx", addr);
                 memcpy(&config, (void *) addr, sizeof (config));
@@ -126,6 +129,11 @@ config_read(void)
                 }
                 if (config.led_level == 0)
                     config.led_level = 100;  // Old board
+                if (config.version < 2) {
+                    /* Structure expanded for this new field */
+                    memset(config.nv_mem, 0, sizeof (config.nv_mem));
+                }
+                config.version = CONFIG_VERSION;
                 return;
             }
         }

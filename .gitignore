@@ -34,10 +34,13 @@ amiga/romswitch
 amiga/romswitch.rom
 sw/hostsmash
 sw/crcit
+sw/win/
 kicksmash_*
 sw/hostsmash
 sw/hostsmash.exe
 sw/crcit
 sw/crcit.exe
 romswitcher/switcher.rom
+romswitcher/switcher
+romswitcher/unused/
 *.rom

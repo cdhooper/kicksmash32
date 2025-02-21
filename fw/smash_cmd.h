@@ -21,6 +21,7 @@
 #define KS_CMD_TESTPATT      0x05  // Send test pattern
 #define KS_CMD_LOOPBACK      0x06  // Reply with (exact) sent message
 #define KS_CMD_SET           0x07  // Set Kicksmash value (options in high bits)
+#define KS_CMD_GET           0x08  // Get Kicksmash value (options in high bits)
 #define KS_CMD_FLASH_READ    0x10  // Generate flash read mode sequence
 #define KS_CMD_FLASH_CMD     0x11  // Generate low level command to EEPROM
 #define KS_CMD_FLASH_ID      0x12  // Generate flash ID sequence
@@ -53,6 +54,9 @@
 
 /* Command-specific options (upper byte of command) */
 #define KS_SET_NAME        0x0100  // Set board name
+#define KS_SET_NV          0x0200  // Set non-volatile bytes
+
+#define KS_GET_NV          0x0200  // Get non-volatile bytes
 
 #define KS_BANK_SETCURRENT 0x0100  // Set current ROM bank (immediate change)
 #define KS_BANK_SETRESET   0x0200  // Set ROM bank in effect at next reset
@@ -195,11 +199,23 @@
  *   KS_CMD_FLASH_MWRITE
  *        This command will set up a multiple data write sequence for the
  *        flash. It is not currently implemented.
+ *   KS_CMD_GET
+ *        Get Kicksmash value. The following option must be specified with
+ *            KS_GET_NV - Get non-volatile byte(s). The following byte
+ *                        specifies the starting byte number. The next byte
+ *                        specifies the number of bytes to retrieve.
  *   KS_CMD_SET
  *        Set Kicksmash value. The following option must be specified with
  *        this command:
  *            KS_SET_NAME - Set the board name. A string of up to 16
  *                          characters (including ending NIL) follows.
+ *            KS_SET_NV - Set non-volatile byte(s). The following byte
+ *                        specifies the starting byte number. The next byte
+ *                        specifies the number of bytes to store. Following
+ *                        that, the remaining bytes of the packet are the
+ *                        data to store (there are 32 NV cells).
+ *                        NV[0] is the default bank for the switcher to choose
+ *                        NV[1] is the timeout (0=infinite)
  *   KS_CMD_BANK_INFO
  *        ROM bank information, having structure bank_info_t, will be
  *        returned to the requester. This information includes the current

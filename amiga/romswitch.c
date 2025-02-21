@@ -85,6 +85,8 @@
 #define ID_CANCEL            5
 #define ID_SAVE              6
 #define ID_SWITCH            7
+#define ID_BANK_TIMEOUT      8
+#define ID_BANK_DEFAULT      9
 #define ID_LONGRESET_MINUS_0 10
 #define ID_LONGRESET_MINUS_1 11
 #define ID_LONGRESET_MINUS_2 12
@@ -154,6 +156,8 @@ static struct Gadget *gadget_switch;
 static struct Gadget *gadget_switch_pre;
 static struct Gadget *gadget_switchto;
 static struct Gadget *gadget_switchto_pre;
+static struct Gadget *gadget_timeout_seconds;
+static struct Gadget *gadget_timeout_bank;
 static uint gadget_cancel_x;
 static uint gadget_cancel_y;
 static short gadget_cancel_w;
@@ -169,6 +173,7 @@ static short gadget_switch_h;
 static uint updated_names;
 static uint updated_longreset;
 static uint updated_poweron;
+static uint updated_bank_timeout;
 static uint disabled_save;
 static uint disabled_switch;
 static uint bank_switchto;
@@ -373,7 +378,7 @@ draw_array(const struct drawing c[], int length)
 {
     struct RastPort *rp = &screen->RastPort;
     struct RastPort *wrp = window->RPort;
-    int x = 230, y = 60;  // drawing base
+    int x = 215, y = 60;  // drawing base
     int i;
     int j;
 
@@ -526,7 +531,6 @@ update_status(const char *fmt, ...)
     Text(rp, buf, sizeof (buf));
 }
 
-
 /*
  * send_cmd_retry
  * --------------
@@ -581,6 +585,79 @@ get_banks(bank_info_t *bi)
         update_status("FAIL info %d", rc);
 #endif
     return (0);
+}
+
+static uint    timeout_seconds;
+static uint    timeout_seconds_saved;  // Current value in NVM
+static uint    timeout_seconds_remaining;
+static uint    timeout_seconds_ticks;  // INTUITICKS count (rollover at 10)
+static uint8_t timeout_active;
+static uint8_t timeout_bank;
+static uint8_t timeout_bank_saved;     // Current value in NVM
+
+/*
+ * get_bank_timeout
+ * ----------------
+ * Acquire settings from Kicksmash that indicate whether a timeout is
+ * active and what default bank to use.
+ */
+static void
+get_bank_timeout(uint *seconds, uint8_t *bank)
+{
+    int  rc;
+    uint rlen;
+    uint8_t buf[2];
+    uint8_t rbuf[8];
+
+    /* Initialize to 0 in case request fails */
+    *seconds = 0;
+    *bank = 0;
+
+    buf[0] = 0;  // Start at NV0
+    buf[1] = 4;  // Also read NV1
+    rc = send_cmd_retry(KS_CMD_GET | KS_GET_NV,
+                        buf, sizeof (buf), rbuf, sizeof (rbuf), &rlen);
+    if (rc == 0) {
+        uint8_t data = rbuf[0];
+        if (data & 0x80)
+            *seconds = 60 * (data & 0x7f);  // Minutes
+        else
+            *seconds = data;                // Seconds
+        *bank = rbuf[1];
+    } else {
+        update_status("FAIL Get NV %d", rc);
+    }
+}
+
+/*
+ * set_bank_timeout
+ * ----------------
+ * Store settings with Kicksmash that indicate whether a timeout is
+ * active and what default bank to use.
+ */
+static int
+set_bank_timeout(uint seconds, uint8_t bank)
+{
+    int  rc;
+    uint rlen;
+    uint8_t buf[4];
+    buf[0] = 0;  // Start at NV0
+    buf[1] = 2;  // Also write NV1
+    if (seconds < 127) {
+        buf[2] = seconds;           // store seconds
+    } else {
+        seconds /= 60;
+        if (seconds > 127)
+            seconds = 127;
+        buf[2] = seconds | BIT(7);  // store minutes
+    }
+    buf[3] = bank;
+    rc = send_cmd_retry(KS_CMD_SET | KS_SET_NV,
+                        buf, sizeof (buf), NULL, 0, &rlen);
+    if (rc != 0)
+        update_status("FAIL set timeout %d", rc);
+
+    return (rc);
 }
 
 /*
@@ -647,6 +724,8 @@ bank_state_save(void)
                                 strlen(argbuf + 2) + 3, NULL, 0, &rlen);
             if ((rc != 0) && (had_error++ == 0))
                 update_status("FAIL name %d: %d", bank, rc);
+            if (rc == 0)
+                updated_names &= ~BIT(bank);
         }
         if (updated_names & BIT(ROM_BANKS)) {
             /* Board name was updated */
@@ -654,15 +733,17 @@ bank_state_save(void)
                                 id.si_name, sizeof (id.si_name), NULL, 0, NULL);
             if ((rc != 0) && (had_error++ == 0))
                 update_status("FAIL name: %d", rc);
+            if (rc == 0)
+                updated_names &= ~BIT(ROM_BANKS);
         }
-        updated_names = 0;
     }
     if (updated_longreset) {
         rc = send_cmd_retry(KS_CMD_BANK_LRESET, info.bi_longreset_seq,
                             sizeof (info.bi_longreset_seq), NULL, 0, NULL);
         if ((rc != 0) && (had_error++ == 0))
             update_status("FAIL set longreset: %d", rc);
-        updated_longreset = 0;
+        if (rc == 0)
+            updated_longreset = 0;
     }
     if (updated_poweron) {
         uint16_t argval = info.bi_bank_poweron;
@@ -670,7 +751,15 @@ bank_state_save(void)
                             &argval, sizeof (argval), NULL, 0, &rlen);
         if ((rc != 0) && (had_error++ == 0))
             update_status("FAIL set poweron: %d", rc);
-        updated_poweron = 0;
+        if (rc == 0)
+            updated_poweron = 0;
+    }
+    if (updated_bank_timeout) {
+        if (set_bank_timeout(timeout_seconds, timeout_bank) == 0) {
+            updated_bank_timeout = 0;
+            timeout_seconds_saved = timeout_seconds;
+            timeout_bank_saved = timeout_bank;
+        }
     }
     if (had_error == 0) {
         update_status("Success");
@@ -993,8 +1082,8 @@ bank_mouseover(uint pos)
 static void
 update_save_box(void)
 {
-    ULONG state = (updated_names | updated_longreset | updated_poweron) ?
-                  FALSE : TRUE;
+    ULONG state = (updated_names | updated_longreset | updated_poweron |
+                   updated_bank_timeout) ? FALSE : TRUE;
     static ULONG lstate = 0xff;
 
     if (lstate != state) {
@@ -1063,7 +1152,7 @@ bank_update_names(void)
             continue;
         if (gad->Activation & GACT_ACTIVEGADGET) {
             STRPTR string;
-            GT_GetGadgetAttrs(gadget_banktable_name[bank], NULL, NULL,
+            GT_GetGadgetAttrs(gad, NULL, NULL,
                               GTST_String, (LONG) &string, TAG_DONE);
             strcpy(info.bi_name[bank], string);
             if (strcmp(info_saved.bi_name[bank], string) != 0) {
@@ -1124,6 +1213,109 @@ show_id(void)
     Print("Board name", x, y + 16, 0);
     SetAPen(&screen->RastPort, 1);
 }
+
+static void
+switch_to_timeout_bank(void)
+{
+    update_status("Switching to bank %u", timeout_bank & 0x7);
+    bank_switchto = timeout_bank;
+    bank_set_current_and_reboot();
+}
+
+static void
+bank_update_timeout(void)
+{
+    uint value;
+    uint did_update = FALSE;
+    static uint8_t timeout_was_active;
+
+    if (timeout_active) {
+        timeout_was_active = TRUE;
+        if (++timeout_seconds_ticks == 10) {
+            timeout_seconds_ticks = 0;
+            timeout_seconds_remaining--;
+            if (timeout_seconds_remaining == 0) {
+                switch_to_timeout_bank();
+                timeout_active = FALSE;
+            }
+        }
+        if (timeout_seconds_ticks == 0) {
+            update_status("Switching to bank %u in %u",
+                          timeout_bank & 0x7, timeout_seconds_remaining);
+        }
+    } else if (timeout_was_active) {
+        timeout_was_active = FALSE;
+        update_status("");
+    }
+
+    if (gadget_timeout_bank->Activation & GACT_ACTIVEGADGET) {
+        GT_GetGadgetAttrs(gadget_timeout_bank, NULL, NULL,
+                          GTIN_Number, (uintptr_t) &value, TAG_DONE);
+        timeout_bank = value;
+        did_update = TRUE;
+    }
+    if (gadget_timeout_seconds->Activation & GACT_ACTIVEGADGET) {
+        GT_GetGadgetAttrs(gadget_timeout_seconds, NULL, NULL,
+                          GTIN_Number, (uintptr_t) &value, TAG_DONE);
+        timeout_seconds = value;
+        did_update = TRUE;
+    }
+    if (did_update) {
+        timeout_active = FALSE;
+// printf("[%x,%x %x,%x]", timeout_bank, timeout_bank_saved, timeout_seconds, timeout_seconds_saved);
+        updated_bank_timeout = (timeout_bank != timeout_bank_saved) ||
+                               (timeout_seconds != timeout_seconds_saved);
+        update_save_box();
+    }
+}
+
+void
+show_bank_timeout(void)
+{
+    struct RastPort *rp = &screen->RastPort;
+    get_bank_timeout(&timeout_seconds, &timeout_bank);
+    timeout_seconds_saved = timeout_seconds;
+    timeout_bank_saved = timeout_bank;
+
+    if (timeout_seconds != 0) {
+        timeout_seconds_remaining = timeout_seconds;
+        timeout_active = TRUE;
+    }
+    SetAPen(rp, 2);
+    Print("Auto Switch", 508, 38, 0);
+
+    struct NewGadget ng;
+    ng.ng_TextAttr   = NULL;
+    ng.ng_Flags      = 0;
+    ng.ng_VisualInfo = visualInfo;
+
+    ng.ng_Width      = 30;
+    ng.ng_Height     = 10;
+    ng.ng_TopEdge    = 43;
+    ng.ng_LeftEdge   = 541;
+    ng.ng_GadgetText = "Bank";
+    ng.ng_GadgetID   = ID_BANK_DEFAULT;
+    LastAdded = CreateGadget(INTEGER_KIND, LastAdded, &ng,
+                             GTIN_MaxChars, 1,
+                             GTIN_Number, timeout_bank,
+                             GA_TabCycle, TRUE,
+                             TAG_DONE);
+    gadget_timeout_bank = LastAdded;
+
+    ng.ng_Width      = 52;
+    ng.ng_Height     = 10;
+    ng.ng_TopEdge    = 56;
+    ng.ng_LeftEdge   = 541;
+    ng.ng_GadgetText = "Timeout";
+    ng.ng_GadgetID   = ID_BANK_TIMEOUT;
+    LastAdded = CreateGadget(INTEGER_KIND, LastAdded, &ng,
+                             GTIN_MaxChars, 4,
+                             GTIN_Number, timeout_seconds,
+                             GA_TabCycle, TRUE,
+                             TAG_DONE);
+    gadget_timeout_seconds = LastAdded;
+}
+
 
 #if 0
 static ULONG
@@ -1290,6 +1482,7 @@ draw_page(void)
     set_initial_bank_switchto();
     show_banks();
     show_id();
+    show_bank_timeout();
 
     /* LongReset + and - buttons */
     ng.ng_Width = 14;
@@ -1318,7 +1511,7 @@ draw_page(void)
     ng.ng_GadgetText = NULL;
     LastAdded = CreateGadget(MX_KIND, LastAdded, NewGadget,
                              GTMX_Labels, (ULONG) current_sel_labels,
-                             GTMX_Active, (UWORD) info.bi_bank_poweron,
+                             GTMX_Active, (UWORD) 0,
                              GTMX_Spacing, (UWORD) 1,
                              GTMX_Scaled, TRUE,
                              TAG_DONE);
@@ -1658,6 +1851,7 @@ event_loop(void)
                     update_status("vanilla %x %x\n", icode, msg->Qualifier);
                     break;
                 case IDCMP_RAWKEY:
+                    timeout_active = FALSE;
                     if ((esc_trigger) && (icode != RAWKEY_ESC) &&
                                          (icode != RAWKEY_ESC + 0x80)) {
                         update_status("");
@@ -1807,7 +2001,13 @@ event_loop(void)
                         bank_mouseover(bank_box_bottom);
                     }
 #endif
+                    if ((msg->MouseX > SCREEN_WIDTH / 3) |
+                        (msg->MouseY > SCREEN_HEIGHT / 3)) {
+                        /* Mouse movement disables automatic bank select */
+                        timeout_active = FALSE;
+                    }
                     bank_update_names();
+                    bank_update_timeout();
                     break;
                 case IDCMP_GADGETDOWN:
                     switch (gad->GadgetID) {
@@ -1879,6 +2079,10 @@ id_save:
                         case ID_SWITCH:
                             /* Request update Current & Reset */
                             bank_set_current_and_reboot();
+                            break;
+                        case ID_BANK_TIMEOUT:
+                            break;
+                        case ID_BANK_DEFAULT:
                             break;
                         case ID_BOARD_NAME:
                             if (msg->Qualifier == 0x8001) {

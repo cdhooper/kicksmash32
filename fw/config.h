@@ -25,6 +25,7 @@ typedef struct {
     char        name[16];   // Unique name for this board
     uint8_t     led_level;  // Power LED brightness (0 to 100)
     uint8_t     unused[34]; // Unused
+    uint8_t     nv_mem[32]; // Non-volatile storage for Amiga
 } config_t;
 
 extern config_t config;

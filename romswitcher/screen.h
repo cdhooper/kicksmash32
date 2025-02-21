@@ -27,7 +27,7 @@
 #define BITPLANE_1_BASE   (BITPLANE_0_BASE + BITPLANE_OFFSET)
 #define BITPLANE_2_BASE   (BITPLANE_1_BASE + BITPLANE_OFFSET)
 
-#define TEXTPEN      2  // White
+#define TEXTPEN      1  // Black
 #define HIGHLIGHTPEN 4  // Gold
 
 void dbg_show_char(uint ch);

@@ -21,7 +21,7 @@
 #include <libopencm3/stm32/timer.h>
 #include <libopencm3/stm32/rcc.h>
 
-static uint8_t  led_alert_state = 0;
+uint8_t         led_alert_state = 0;
 static uint8_t  led_brightness = 0;  // Percent value (0 to 100)
 static uint64_t led_power_timer;
 

@@ -1220,6 +1220,63 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 }
                 ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
                 config_updated();
+            } else if (cmd & KS_SET_NV) {
+                /* First byte is start position and second is count */
+                uint8_t pos;
+                uint8_t count;
+                uint8_t tcount;
+                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+                if ((int) cons_s < 0)
+                    cons_s += ARRAY_SIZE(buffer_rxa_lo);
+                pos   = buffer_rxa_lo[cons_s] >> 8;
+                count = buffer_rxa_lo[cons_s];
+                if (pos + count > sizeof (config.nv_mem)) {
+                    ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
+                    break;
+                }
+                for (tcount = count; tcount > 0; tcount--) {
+                    if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
+                        cons_s = 0;
+                    config.nv_mem[pos++] = buffer_rxa_lo[cons_s] >> 8;
+                    if (--tcount == 0)
+                        break;
+                    config.nv_mem[pos++] = buffer_rxa_lo[cons_s];
+                }
+                ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+                config_updated();
+#if 0
+                printf("NVM now:");
+                for (pos = 0; pos < 32; pos++)
+                    printf(" %02x", config.nv_mem[pos]);
+                printf("\n");
+#endif
+            } else {
+                ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
+            }
+            break;
+        }
+        case KS_CMD_GET: {
+            if (cmd & KS_GET_NV) {
+                /* First byte is start position and second is count */
+                uint8_t pos;
+                uint8_t count;
+                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+                if ((int) cons_s < 0)
+                    cons_s += ARRAY_SIZE(buffer_rxa_lo);
+                pos   = buffer_rxa_lo[cons_s] >> 8;
+                count = buffer_rxa_lo[cons_s];
+                if (pos + count > sizeof (config.nv_mem)) {
+                    ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
+                    break;
+                }
+                count = (count + 3) & ~3;  // Round up to uint32_t
+                ks_reply(0, KS_STATUS_OK, count, config.nv_mem + pos, 0, NULL);
+#if 0
+                printf("get nv pos=%u count=%u: %02x %02x [%02x]\n",
+                       pos, count,
+                       config.nv_mem[pos], config.nv_mem[pos + 1],
+                       buffer_rxa_lo[cons_s]);
+#endif
             } else {
                 ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
             }
@@ -1424,7 +1481,6 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 }
                 state_amiga_app = (state_amiga_app & ~mask) | (state & mask);
                 expire_update_amiga_app = timer_tick_plus_msec(expire);
-//printf("m=%04x s=%04x expire=%u\n", mask, state, expire);
             }
             if (timer_tick_has_elapsed(expire_update_amiga_app))
                 state_amiga_app = 0;

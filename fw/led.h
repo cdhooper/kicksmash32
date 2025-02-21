@@ -19,4 +19,6 @@ void led_alert(int turn_on);
 void led_poll(void);
 void led_set_brightness(unsigned int value);
 
+extern uint8_t led_alert_state;
+
 #endif /* _LED_H */

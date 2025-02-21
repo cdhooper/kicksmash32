@@ -217,15 +217,24 @@ void usb_poll(void)
 void
 usb_signal_reset_to_host(int restart)
 {
+//  gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO11 | GPIO12);
+
+    rcc_periph_clock_enable(RCC_GPIOA);
+    rcc_periph_clock_enable(RCC_AFIO);
+
+    gpio_setv(GPIOA, GPIO11 | GPIO12, 0);
+    gpio_setmode(GPIOA, GPIO11 | GPIO12, GPIO_SETMODE_OUTPUT_PPULL_2);
 #ifdef DEBUG_NO_USB
     return;
 #endif
-#if 0
-    rcc_periph_clock_enable(RCC_GPIOA);
-    rcc_periph_clock_enable(RCC_GPIOB);
-    rcc_periph_clock_enable(RCC_AFIO);
-
-#endif
+    if (restart) {
+        if (restart == 2) {
+            timer_delay_msec(10);
+        } else {
+            timer_delay_msec(100);
+        }
+        gpio_setmode(GPIOA, GPIO11 | GPIO12, GPIO_SETMODE_INPUT);
+    }
 }
 
 /* libopencm3 */
@@ -665,21 +674,21 @@ usb_startup(void)
     usbd_usr_serial(usb_serial_str);
     usb_strings[2] = (char *)usb_serial_str;
 
-#ifdef STM32F4
+#if defined(STM32F4)
     /* GPIO9 should be left as an INPUT */
     gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO11 | GPIO12);
     gpio_set_af(GPIOA, GPIO_AF10, GPIO11 | GPIO12);
 
 #define USB_DRIVER otgfs_usb_driver
 
-#else
-#ifdef STM32F103xE
+#elif defined(STM32F103xE)
 #define USB_DRIVER st_usbfs_v1_usb_driver
-    usb_signal_reset_to_host(1);
+
 #else
 #define USB_DRIVER stm32f107_usb_driver
 #endif
-#endif
+
+    usb_signal_reset_to_host(2);
     usbd_gdev = usbd_init(&USB_DRIVER,
                           (const struct usb_device_descriptor *)
                              &USBD_FS_DeviceDesc[0], &config,

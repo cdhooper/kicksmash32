@@ -566,6 +566,26 @@ smash_identify(void)
         }
     }
 
+    uint8_t nvdata[32];
+    uint16_t what = 0x0020;  // Get all 32 bytes of NV data
+    rc = send_cmd(KS_CMD_GET | KS_GET_NV, &what, sizeof (what),
+                   nvdata, sizeof (nvdata), &rlen);
+    printf("  NV Data:");
+    if (rc == 0) {
+        uint pos;
+        for (pos = 0; pos < sizeof (nvdata); pos++) {
+            if (pos == 16)
+                printf("\n          ");
+            printf(" %02x", nvdata[pos]);
+        }
+        printf("\n");
+    } else {
+        if (rc == KS_STATUS_UNKCMD)
+            printf(" Unavailable\n");
+        else
+            printf(" Fail (%s)\n", smash_err(rc));
+    }
+
     return (0);
 }
 
@@ -2791,7 +2811,8 @@ fail_end:
 /*
  * cmd_set
  * -------
- * Set a KickSmash value. Currently only the board name is supported.
+ * Set a KickSmash value, such as board name, or NVRAM value available to
+ * AmigaOS.
  */
 int
 cmd_set(int argc, char *argv[])
@@ -2801,7 +2822,9 @@ cmd_set(int argc, char *argv[])
 
     if (argc < 2) {
 cmd_set_usage:
-        printf("set name <string> - up to 15 characters for board name\n");
+        printf("set name <string>    - up to 15 characters for board name\n"
+               "set nv<n> <value...> - set non-volatile data\n"
+               "    nv0 is switcher timeout and nv1 is ROM bank to use\n");
         return (1);
     }
     if (strcmp(argv[1], "name") == 0) {
@@ -2835,6 +2858,47 @@ cmd_set_usage:
         } else {
             printf("Set board name to \"%s\"\n", buf);
         }
+        return (rc);
+    } else if (strncmp(argv[1], "nv", 2) == 0) {
+        char *ptr = argv[1] + 2;
+        uint8_t buf[34];
+        uint count = 2;
+        int pos = 0;
+        uint addr;
+        uint argstart = 2;
+        if (*ptr == '\0')
+            ptr = argv[argstart++];
+
+        if ((sscanf(ptr, "%u%n", &addr, &pos) != 1) ||
+            (pos == 0) || (ptr[pos] != '\0') || (addr > 31)) {
+            printf("Invalid argument \"%s\" for set\n", ptr);
+            goto cmd_set_usage;
+        }
+        for (arg = argstart; arg < argc; arg++) {
+            uint value;
+            pos = 0;
+            if (count >= sizeof (buf)) {
+                printf("Too many values: %s\n", argv[arg]);
+                return (1);
+            }
+            if ((sscanf(argv[arg], "%x%n", &value, &pos) != 1) ||
+                (pos == 0) || (argv[arg][pos] != '\0') || (value > 0xff)) {
+                printf("Invalid argument \"%s\" for set %s\n",
+                       argv[arg], argv[1]);
+                goto cmd_set_usage;
+            }
+            buf[count++] = value;
+        }
+        if (count == 2) {
+            printf("You must specify at least one value to set\n");
+            return (1);
+        }
+        buf[0] = addr;
+        buf[1] = count - 2;
+        rc = send_cmd(KS_CMD_SET | KS_SET_NV, buf, (count + 1) & ~1,
+                      NULL, 0, NULL);
+        if (rc != 0)
+            printf("Failed to set NV data: (%s)\n", smash_err(rc));
         return (rc);
     } else {
         printf("Unknown set %s\n", argv[1]);

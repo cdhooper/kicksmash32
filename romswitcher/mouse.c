@@ -52,7 +52,7 @@ mouse_poll_buttons(void)
         gadget_mouse_button(MOUSE_BUTTON_LEFT, mouse_left);
     }
     if (mouse_right_last != mouse_right) {
-        printf(" RMB%u", mouse_right);
+//      printf(" RMB%u", mouse_right);
         mouse_right_last = mouse_right;
         gadget_mouse_button(MOUSE_BUTTON_RIGHT, mouse_right);
     }

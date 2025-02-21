@@ -40,11 +40,14 @@ create_intuitext(const char *str)
     IntuiText *it = malloc(sizeof (*it));
     memset(it, 0, sizeof (*it));
     it->IText = strdup(str);
+    it->FrontPen = TEXTPEN;
+    it->BackPen  = 0;       // Screen background
+    it->TopEdge  = 1;
     return (it);
 }
 
 struct Gadget *
-CreateGadget(uint32_t kind, Gadget *gad, struct NewGadget *ng, ...)
+CreateGadget(uint32_t kind, Gadget *pgad, struct NewGadget *ng, ...)
 {
     uint scan_again = 0;
     uint scans = 0;
@@ -79,10 +82,6 @@ CreateGadget(uint32_t kind, Gadget *gad, struct NewGadget *ng, ...)
 //  g.SelectRender =
     if (ng->ng_GadgetText != NULL) {
         IntuiText *it = create_intuitext(ng->ng_GadgetText);
-        it->FrontPen = TEXTPEN;
-        it->BackPen  = 0;       // Screen background
-        it->LeftEdge = 0;
-        it->TopEdge  = 0;
         g.GadgetText = it;
         if (ng->ng_TextAttr != NULL)
             it->ITextFont = ng->ng_TextAttr;
@@ -94,6 +93,7 @@ CreateGadget(uint32_t kind, Gadget *gad, struct NewGadget *ng, ...)
 
     switch (kind) {
         case STRING_KIND:
+        case INTEGER_KIND:
             si = malloc(sizeof (StringInfo));
             if (si != NULL) {
                 memset(si, 0, sizeof (*si));
@@ -101,6 +101,7 @@ CreateGadget(uint32_t kind, Gadget *gad, struct NewGadget *ng, ...)
                 si->CLeft = 6;  // String starts # pixels from gadget left
             }
             g.Flags |= GFLG_TABCYCLE;  // Strings default to tab cycle list
+            g.Flags |= GFLG_GADGHBOX;  // Default to draw border
             break;
         case MX_KIND:
             mx = malloc(sizeof (MxInfo));
@@ -176,13 +177,23 @@ creategadget_scan_again:
                 if (mx != NULL)
                     mx->mx_spacing = arg;
                 break;
-            case GTIN_MaxChars:
             case GTST_MaxChars:
+            case GTIN_MaxChars:
+            case GTNM_MaxNumberLen:
                 if ((si != NULL) && (arg > 0) && (arg < 256) &&
                     (si->MaxChars != arg)) {
                     si->MaxChars = arg;
                     si->DispCount = arg;
+                    if (arg < 2)
+                        arg = 2;  // Space for at least 2 characters and NULL
+                    if ((kind != STRING_KIND) && (arg < 8))
+                        arg = 8;  // Space for large number
                     si->Buffer = malloc(arg + 1);
+                    if (si->Buffer == NULL) {
+                        printf("Malloc %u fail\n");
+                        si->MaxChars = 0;
+                        break;
+                    }
                     memset(si->Buffer, 0, arg + 1);
                     scan_again = 1;  // Scan again for string tag
                 }
@@ -198,6 +209,20 @@ creategadget_scan_again:
                     si->NumChars = len;
                     si->DispPos = 0;
                     si->BufferPos = len;
+                }
+                break;
+            case GTIN_Number:
+            case GTNM_Number:  // Wrong tag, but support it anyway
+                if (kind == NUMBER_KIND) {
+                    char buf[32];
+                    sprintf(buf, "%d", arg);
+                    if (g.GadgetText != NULL)
+                        free(g.GadgetText);
+                    g.GadgetText = create_intuitext(buf);
+                } else if ((si != NULL) & (si->Buffer != NULL)) {
+                    sprintf(si->Buffer, "%u", arg);
+                    si->NumChars = strlen(si->Buffer);
+                    si->DispPos = si->NumChars;
                 }
                 break;
             case GA_TabCycle:
@@ -244,8 +269,8 @@ creategadget_scan_again:
 
     Gadget *newgad = malloc(sizeof (Gadget) + extrasize);
     memcpy(newgad, &g, sizeof (*newgad));
-    if (gad != NULL)
-        gad->NextGadget = newgad;
+    if (pgad != NULL)
+        pgad->NextGadget = newgad;
 
 //  printf("CGkind=%x %x\n", gad->GadgetType, g.GadgetType);
     return (newgad);
@@ -397,7 +422,7 @@ DrawBevelBox(RastPort *rp, long left, long top, long width, long height,
             boxtype = 0;
             break;
         case BBFT_RIDGE: {
-            /* box for STRING_KIND gadgets */
+            /* box for STRING_KIND and INTEGER_KIND gadgets */
             int x1 = left;
             int x2 = left + width - 1;
             int y1 = top + 1;
@@ -515,7 +540,7 @@ gadget_draw_button(Gadget *gad, uint activated)
         }
     }
     if (gad->Flags & GFLG_DISABLED) {
-        gray_rect(6, x - 1, y - 1, x + gad->Width, y + gad->Height - 2);
+        gray_rect(6, x, y, x + gad->Width, y + gad->Height - 2);
     }
 
     gadget_draw_bounding_box(gad, BBFT_BUTTON, activated);
@@ -658,7 +683,9 @@ gadget_update_string(Gadget *gad, uint update_type)
         uint max = si->MaxChars;
         uint x = gad->LeftEdge + si->CLeft;
         uint y = gadget_string_calc_y(gad);
-        memset(si->Buffer + len, ' ', max - len);
+        uint padlen = max - len;
+        if (padlen < 100)
+            memset(si->Buffer + len, ' ', max - len);
         /* Render text of string to be edited and set cursor position */
         render_text_at(si->Buffer, max, x, y, 1, 0);
         si->Buffer[len] = '\0';
@@ -673,7 +700,6 @@ gadget_draw_string(Gadget *gad)
     uint x = gad->LeftEdge;
     uint y = gad->TopEdge;
     struct IntuiText *it = gad->GadgetText;
-    uint textlen_max = gad->Width / FONT_WIDTH;
 
     /*
      * The string box title should appear to the left of the string,
@@ -690,21 +716,16 @@ gadget_draw_string(Gadget *gad)
             rstart = slen - rlen;
             rpos = x - rlen * FONT_WIDTH - 6;
         }
-        // XXX: Maybe this intelligence should be built into render_text_at()
-        //      so it can always trim to the screen borders.
-        render_text_at(it->IText + rstart, textlen_max, rpos, y,
+        // XXX: Maybe this clipping intelligence should be built into
+        //      render_text_at() so it can always trim to the screen borders.
+        render_text_at(it->IText + rstart, 0, rpos, y + it->TopEdge,
                        it->FrontPen, it->BackPen);
     }
     gadget_update_string(gad, GADGET_STRING_UPDATE_ALL);
 
-    // XXX: border should only be drawn if GTTX_Border / GTNM_Border is set
-    //      Need to have KIND_STRING code which fills this out, I think.
-    //      Can GA_Border also set the border flag?
-//  if (gad->Flags & GFLG_GADGHBOX) {
-//      printf("flags=%x ", gad->Flags);
-//      gadget_draw_bounding_box(gad, BBFT_RIDGE, FALSE);
-//  }
-    gadget_draw_bounding_box(gad, BBFT_RIDGE, FALSE);
+    /* Default is to draw border, turn off using GTTX_BORDER tag */
+    if (gad->Flags & GFLG_GADGHBOX)
+        gadget_draw_bounding_box(gad, BBFT_RIDGE, FALSE);
 }
 
 static void
@@ -724,11 +745,8 @@ gadget_draw_text(Gadget *gad)
         it = it->NextText;
     }
 
-    // XXX: border should only be drawn if GTTX_Border / GTNM_Border is set
-    if (gad->Flags & GFLG_GADGHBOX) {
-//      printf("flags=%x ", gad->Flags);
+    if (gad->Flags & GFLG_GADGHBOX)
         gadget_draw_bounding_box(gad, BBFT_RIDGE, FALSE);
-    }
 }
 
 static void
@@ -749,14 +767,29 @@ gadget_notify(Gadget *gad, uint class, uint code, uint qual)
 }
 
 static void
+gadget_deactivate(Gadget *gad, uint code, uint qual)
+{
+    gad->Activation &= ~GACT_ACTIVEGADGET;
+    gadget_notify(gad, IDCMP_GADGETUP, code, qual);
+    switch (gad->GadgetType) {
+        case STRING_KIND:
+        case INTEGER_KIND:
+            cursor_visible = 0;
+            break;
+    }
+    active_gadget = NULL;
+}
+
+static void
 gadget_activate(Gadget *gad)
 {
-    if (active_gadget != NULL)
-        active_gadget->Activation &= ~GACT_ACTIVEGADGET;
+    if ((active_gadget != NULL) && (active_gadget != gad))
+        gadget_deactivate(active_gadget, 0, 0);
 
     if (gad != NULL) {
         switch (gad->GadgetType) {
-            case STRING_KIND: {
+            case STRING_KIND:
+            case INTEGER_KIND: {
                 StringInfo *si = gad->SpecialInfo;
                 cursor_x_start = gad->LeftEdge + ((si != NULL) ? si->CLeft : 0);
                 cursor_y_start = gadget_string_calc_y(gad);
@@ -769,22 +802,6 @@ gadget_activate(Gadget *gad)
         gad->Activation |= GACT_ACTIVEGADGET;
     }
     active_gadget = gad;
-}
-
-
-static void
-gadget_deactivate(Gadget *gad, uint code, uint qual)
-{
-//  printf("Deact");
-
-    gad->Activation &= ~GACT_ACTIVEGADGET;
-    gadget_notify(gad, IDCMP_GADGETUP, code, qual);
-    switch (gad->GadgetType) {
-        case STRING_KIND:
-            cursor_visible = 0;
-            break;
-    }
-    active_gadget = NULL;
 }
 
 int
@@ -820,14 +837,10 @@ RefreshGList(Gadget *gadgets, Window *window, Requester *requester, uint numGad)
                 break;
             case CHECKBOX_KIND:
                 break;
-            case INTEGER_KIND:
-                break;
             case LISTVIEW_KIND:
                 break;
             case MX_KIND:
                 gadget_draw_mx(gad);
-                break;
-            case NUMBER_KIND:
                 break;
             case CYCLE_KIND:
                 break;
@@ -838,9 +851,11 @@ RefreshGList(Gadget *gadgets, Window *window, Requester *requester, uint numGad)
             case SLIDER_KIND:
                 break;
             case STRING_KIND:
+            case INTEGER_KIND:
                 gadget_draw_string(gad);
                 break;
             case TEXT_KIND:
+            case NUMBER_KIND:
                 gadget_draw_text(gad);
                 break;
         }
@@ -1432,7 +1447,8 @@ gadget_handle_keyboard_input(int ch)
 #endif
 
     if ((active_gadget != NULL) &&
-        (active_gadget->GadgetType == STRING_KIND)) {
+        ((active_gadget->GadgetType == STRING_KIND) ||
+         (active_gadget->GadgetType == INTEGER_KIND))) {
         /* String gadget implements editor */
         gadget_string_edit(active_gadget, qual, ch);
         return;
@@ -1507,6 +1523,7 @@ gadget_handle_click_hover(Gadget *gad, Gadget *oldgad, uint hover_type)
                     gadget_draw_button(gad, 1);
                     break;
                 case STRING_KIND:
+                case INTEGER_KIND:
                     gadget_update_string_mouse(gad);  // update cursor_x
                     break;
             }
@@ -1517,6 +1534,7 @@ gadget_handle_click_hover(Gadget *gad, Gadget *oldgad, uint hover_type)
                     gadget_update_mx_mouse(gad);
                     break;
                 case STRING_KIND:
+                case INTEGER_KIND:
                     gadget_update_string_mouse(gad);  // update cursor_x
                     break;
             }
@@ -1529,7 +1547,8 @@ gadget_handle_click_hover(Gadget *gad, Gadget *oldgad, uint hover_type)
                 case MX_KIND:
                     gadget_update_mx_mouse(gad);
                     break;
-                case STRING_KIND: {
+                case STRING_KIND:
+                case INTEGER_KIND: {
                     gadget_activate(gad);
                     gui_wants_all_input = 1;
                     gadget_update_string_mouse(gad);  // update cursor_x
@@ -1546,6 +1565,7 @@ gadget_handle_click_hover(Gadget *gad, Gadget *oldgad, uint hover_type)
                     gadget_draw_button(gad, 0);
                     break;
                 case STRING_KIND:
+                case INTEGER_KIND:
                     // XXX: update cursor X position
                     //      If click in middle of string, move cursor to
                     //      that spot. Otherwise, move cursor to end of string
@@ -1692,9 +1712,21 @@ GT_GetGadgetAttrs(Gadget *gad, Window *win, Requester *req, ...)
         arg = (uint *) va_arg(ap, ULONG);
         switch (tag) {
             case GTST_String:
-                if (gad->GadgetType == STRING_KIND) {
+                if (((gad->GadgetType == STRING_KIND) ||
+                     (gad->GadgetType == INTEGER_KIND)) &&
+                    (si != NULL))  {
                     *(char **)arg = si->Buffer;
                     processed++;
+                }
+                break;
+            case GTIN_Number:
+            case GTNM_Number:  // Wrong tag, but support it anyway
+                if (((gad->GadgetType == STRING_KIND) ||
+                     (gad->GadgetType == INTEGER_KIND)) &&
+                    (si != NULL))  {
+                    uint value = 0;
+                    sscanf(si->Buffer, "%u", &value);
+                    *(uint *)arg = value;
                 }
                 break;
             case GTMX_Active: {
@@ -1747,6 +1779,15 @@ GT_SetGadgetAttrs(Gadget *gad, Window *win, Requester *req, ...)
                 }
                 refresh = 1;
                 break;
+            case GTIN_Number:
+            case GTNM_Number:  // Wrong tag, but support it anyway
+                if ((si != NULL) & (si->Buffer != NULL)) {
+                    sprintf(si->Buffer, "%u", arg);
+                    si->NumChars = strlen(si->Buffer);
+                    si->DispPos = si->NumChars;
+                }
+                refresh = 1;
+                break;
             case GTMX_Active: {
                 MxInfo *mx = gad->SpecialInfo;
                 if (mx != NULL) {
@@ -1765,6 +1806,7 @@ GT_SetGadgetAttrs(Gadget *gad, Window *win, Requester *req, ...)
                 gadget_update_mx(gad);
                 break;
             case STRING_KIND:
+            case INTEGER_KIND:
                 gadget_update_string(gad, GADGET_STRING_UPDATE_ALL);
                 break;
             case BUTTON_KIND:

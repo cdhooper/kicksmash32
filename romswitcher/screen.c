@@ -707,4 +707,6 @@ screen_init(void)
     *INTENA   = INTENA_SETCLR |  // Set
                 INTENA_INTEN |   // Enable interrupts
                 INTENA_VERTB;    // Vertical blank
+
+    dbg_all_scroll = 25;  // If scrolling, start by scrolling all bitplanes
 }

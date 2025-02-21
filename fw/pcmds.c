@@ -831,10 +831,12 @@ rc_t
 cmd_set(int argc, char * const *argv)
 {
     if (argc <= 1) {
-        printf("Power LED   %u%%\n", config.led_level);
-        printf("Board name  ");
+        printf("led %-3u   Power LED   %u%%%s\n",
+               config.led_level, config.led_level,
+               led_alert_state ? " ALERT" : "");
+        printf("name      Board name  ");
         config_name(NULL);
-        printf("PROM mode   ");
+        printf("mode %-2u   PROM mode   ", config.ee_mode);
         prom_show_mode();
         return (RC_SUCCESS);
     }
@@ -851,7 +853,7 @@ cmd_set(int argc, char * const *argv)
         if (strcmp(argv[2], "alert") == 0) {
             led_alert(1);
             return (RC_SUCCESS);
-        } else if (strcmp(argv[2], "noalert") == 0) {
+        } else if (strcmp(argv[2], "normal") == 0) {
             led_alert(0);
             return (RC_SUCCESS);
         }
