@@ -343,6 +343,7 @@ rc_t
 prom_read_binary(uint32_t addr, uint32_t len)
 {
     rc_t     rc;
+    __attribute__((aligned(16)))
     uint8_t  buf[256];
     uint32_t crc = 0;
     uint     crc_next = DATA_CRC_INTERVAL;

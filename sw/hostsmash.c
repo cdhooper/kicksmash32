@@ -686,6 +686,7 @@ rx_rb_put(int ch)
         return (1);  // Discard input because ring buffer is full
 
     rx_rb[rx_rb_producer] = (uint8_t) ch;
+    __sync_synchronize();  // Memory barrier required here on ARM
     rx_rb_producer = new_prod;
     return (0);
 }

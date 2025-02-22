@@ -267,11 +267,11 @@ clean clean-all:
 UDEV_DIR        := /etc/udev/rules.d
 UDEV_FILENAMES  := 70-st-link.rules 70-ttymxprog.rules
 UDEV_FILE_PATHS := $(UDEV_FILENAMES:%=$(UDEV_DIR)/%)
-ifneq (,$(wildcard $(UDEV_FILE_PATHS)))
 $(UDEV_FILE_PATHS) &:
 	sudo cp -np udev/* $(UDEV_DIR)
 	sudo udevadm control --reload
-endif
+	sudo udevadm trigger
+udev-files: $(UDEV_FILE_PATHS)
 
 # Write STM32 flash using DFU mode
 just-dfu:

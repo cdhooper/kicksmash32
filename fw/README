@@ -10,6 +10,8 @@ libraries installed on your host.
         libusb-compat-0.1-devel libusb1-devel
         python3
         dfu-util
+    Debian
+        dfu-util
 
 To build using libopencm3, ensure that the OPENCM3_DIR points to the libopencm3 
 directory and simply type:
