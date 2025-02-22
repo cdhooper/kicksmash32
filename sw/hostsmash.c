@@ -709,6 +709,7 @@ rx_rb_get(void)
         return (-1);  // Ring buffer empty
 
     ch = rx_rb[rx_rb_consumer];
+    __sync_synchronize();
     rx_rb_consumer = (rx_rb_consumer + 1) % sizeof (rx_rb);
     return (ch);
 }
@@ -730,6 +731,7 @@ tx_rb_put(int ch)
         return (1);  // Discard input because ring buffer is full
 
     tx_rb[tx_rb_producer] = (uint8_t) ch;
+    __sync_synchronize();
     tx_rb_producer = new_prod;
     return (0);
 }
@@ -752,6 +754,7 @@ tx_rb_get(void)
         return (-1);  // Ring buffer empty
 
     ch = tx_rb[tx_rb_consumer];
+    __sync_synchronize();
     tx_rb_consumer = (tx_rb_consumer + 1) % sizeof (tx_rb);
     return (ch);
 }
