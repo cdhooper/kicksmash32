@@ -58,7 +58,8 @@ void fill_rect_cpu(uint fgpen, uint x1, uint y1, uint x2, uint y2);
 void fill_rect_blit(uint fgpen, uint x1, uint y1, uint x2, uint y2,
                     uint8_t xor, uint8_t fill_carry_input);
 void gray_rect(uint fgpen, uint x1, uint y1, uint x2, uint y2);
-
+void blit_fill(APTR dst_base, UWORD dst_stride_b, UWORD x, UWORD y,
+               UWORD width, UWORD height);
 
 void     Move(RastPort *rp, int x, int y);
 void     Draw(RastPort *rp, int x, int y);

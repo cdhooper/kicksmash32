@@ -32,6 +32,7 @@
 #undef TEST_TEXT
 #undef TEST_POLYDRAW
 #undef TEST_AREAFILL
+#undef TEST_BLITFILL
 
 #ifdef TEST_LINE_DRAW
 static void
@@ -430,6 +431,35 @@ test_areafill(void)
 }
 #endif
 
+#ifdef TEST_BLITFILL
+static void
+test_blitfill(void)
+{
+    struct RastPort *rp = &sscreen.RastPort;
+    SetAPen(rp, 2);
+    Move(rp, 300, 40); Text(rp, "Blit Fill inside rect", 21);
+
+    draw_rect(3, 50, 10, 150, 40);
+    blit_fill((APTR)BITPLANE_0_BASE, SCREEN_WIDTH / 8, 40, 14, 200, 20);
+
+    SetAPen(rp, 2);
+    Move(rp, 300, 100); Text(rp, "Blit Fill inside polygon", 24);
+
+    SetAPen(rp, 7);
+    Move(rp, 20, 80);
+    Draw(rp, 60, 60);
+    Draw(rp, 110, 80);
+    Draw(rp, 150, 110);
+    Draw(rp, 110, 130);
+    Draw(rp, 90, 100);
+    Draw(rp, 50, 150);
+    Draw(rp, 40, 90);
+    Draw(rp, 20, 80);
+//  blit_fill((APTR)BITPLANE_0_BASE, SCREEN_WIDTH / 8, 10, 62, 160, 20);
+    blit_fill((APTR)BITPLANE_0_BASE, SCREEN_WIDTH / 8, 10, 60, 160, 90);
+}
+#endif
+
 static void (*test_handlers[])(void) = {
 #ifdef TEST_LINE_DRAW
     test_line_draw,
@@ -460,6 +490,9 @@ static void (*test_handlers[])(void) = {
 #endif
 #ifdef TEST_AREAFILL
     test_areafill,
+#endif
+#ifdef TEST_BLITFILL
+    test_blitfill,
 #endif
     NULL,  // Must be last
 };

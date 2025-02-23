@@ -51,24 +51,28 @@ fill_rect_cpu(uint fgpen, uint x1, uint y1, uint x2, uint y2)
             uint16_t *ptr = rptr;
             if ((fgpen & BIT(plane)) == 0) {
                 /* Erase in this bitplane */
-                *ptr &= ~left_mask;
                 if (num_words > 1) {
+                    *ptr &= ~left_mask;
                     ptr++;
                     for (word = 1; word < num_words - 1; word++) {
                         *(ptr++) = 0x0000;
                     }
+                    *ptr &= ~right_mask;
+                } else {
+                    *ptr &= ~(left_mask & right_mask);
                 }
-                *ptr &= ~right_mask;
             } else {
                 /* Draw in this bitplane */
-                *ptr |= left_mask;
                 if (num_words > 1) {
+                    *ptr |= left_mask;
                     ptr++;
                     for (word = 1; word < num_words - 1; word++) {
                         *(ptr++) = 0xffff;
                     }
+                    *ptr |= right_mask;
+                } else {
+                    *ptr |= (left_mask & right_mask);
                 }
-                *ptr |= right_mask;
             }
             rptr += SCREEN_WIDTH / 8 / 2;
         }
@@ -262,10 +266,19 @@ gray_rect_cpu(uint fgpen, uint x1, uint y1, uint x2, uint y2)
 void
 gray_rect(uint fgpen, uint x1, uint y1, uint x2, uint y2)
 {
+    // XXX: gray_rect_cpu() can't handle the case where x2 - x1 < 16
     gray_rect_cpu(fgpen, x1, y1, x2, y2);
 }
 
+#undef TAKEN_FROM_THE_INTERNET_UNTESTED
 #ifdef TAKEN_FROM_THE_INTERNET_UNTESTED
+//
+// The below code is from modsurfer:
+//
+// https://github.com/amigageek/modsurfer/blob/master/blit.c
+// I've only tried to get blit_fill() to work, but don't know how to
+// drive it properly to fill an irregular polygon: see test_blitfill()
+//
 #ifndef BOOL
 #define BOOL int
 #endif

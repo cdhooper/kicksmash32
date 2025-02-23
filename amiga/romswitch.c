@@ -433,24 +433,12 @@ draw_array(const struct drawing c[], int length)
             case 4:  // Vertical pins
                 for (j = 0; j < d.w; j += 7) {
                     int ny = y + d.y / 4 - (d.x + j) / 4;
+
                     SetAPen(rp, pen + 1);
                     Move(rp, j + da[0] + 3, ny);
                     Draw(rp, j + da[0] + 3, ny + d.h / 4);
                     SetAPen(rp, pen);
-#ifdef STANDALONE
-                    /*
-                     * There seems to be a bug in the standalone RectFill().
-                     * for small areas.
-                     */
-                    Move(rp, j + da[0], ny);
-                    Draw(rp, j + da[0], ny + d.h / 4 - 1);
-                    Move(rp, j + da[0] + 1, ny);
-                    Draw(rp, j + da[0] + 1, ny + d.h / 4);
-                    Move(rp, j + da[0] + 2, ny);
-                    Draw(rp, j + da[0] + 2, ny + d.h / 4);
-#else
                     RectFill(rp, j + da[0], ny, j + da[0] + 2, ny + d.h / 4);
-#endif
                 }
                 break;
             case 5:  // Horizontal pins
