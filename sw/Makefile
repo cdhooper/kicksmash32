@@ -25,6 +25,9 @@ TIME := $(shell date -d "@$(NOW)" '+%H:%M:%S')
 endif
 CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 
+VERSION := $(shell awk '/Version/{print $$2}' ../fw/version.c)
+CFLAGS += -DVERSION=\"$(VERSION)\"
+
 # Get the default target operating system
 ifneq (,$(filter $(OS),Windows_NT Windows win))
     TARGET_OS ?= Windows_NT

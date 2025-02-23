@@ -563,7 +563,7 @@ atou(const char *str)
 static void
 usage(FILE *fp)
 {
-    fprintf(fp, "\nhostsmash built "BUILD_DATE" "BUILD_TIME"\n");
+    fprintf(fp, "\nhostsmash "VERSION" built "BUILD_DATE" "BUILD_TIME"\n");
     (void) fputs(usage_text, fp);
 }
 

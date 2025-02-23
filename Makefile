@@ -2,7 +2,7 @@
 # Makefile to build KickSmash firmware, host software, and Amiga software
 #
 
-VER ?= 1.4+
+VER ?= 1.5+
 MAKE ?= make
 MAKEFLAGS += --no-print-directory
 
@@ -37,6 +37,7 @@ endef
 $(eval $(call RELEASE_IT,sw/objs.x86_64/hostsmash,sw/hostsmash.linux_x86_64))
 $(eval $(call RELEASE_IT,sw/objs.mac/hostsmash,sw/hostsmash.mac))
 $(eval $(call RELEASE_IT,sw/objs.armv7l/hostsmash,sw/hostsmash.pi32))
+$(eval $(call RELEASE_IT,sw/objs.aarch64/hostsmash,sw/hostsmash.pi64))
 $(eval $(call RELEASE_IT,sw/objs.win32/hostsmash.exe,sw/hostsmash_win32.exe))
 $(eval $(call RELEASE_IT,sw/objs.win64/hostsmash.exe,sw/hostsmash_win64.exe))
 $(eval $(call RELEASE_IT,sw/wdikicksmash.bat,sw/wdikicksmash.bat))

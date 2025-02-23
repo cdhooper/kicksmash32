@@ -19,7 +19,7 @@
 #include "printf.h"
 #include "sm_msg.h"
 
-#define VERSION 1
+#define ROM_VERSION 1
 
 #define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
 
@@ -43,7 +43,7 @@ const struct Resident resident = {
     (void *) &resident,    // rt_MatchTag - pointer to the above
     rom_end,               // rt_EndSkip - address to continue scan
     RTF_AFTERDOS,          // rt_Flags - various tag flags
-    VERSION,               // rt_Version - release version number
+    ROM_VERSION,           // rt_Version - release version number
     NT_UNKNOWN,            // rt_Type - type of module
     5,                     // rt_Pri - initialization priority (before bootmenu)
     (char *) "smashrom",   // rt_Name - pointer to node name
@@ -51,7 +51,7 @@ const struct Resident resident = {
     rom_main               // rt_Init - pointer to init code
 };
 
-const char SmashRomID[]   = "smashrom 1.4 (23.01.2025)\r\n";
+const char SmashRomID[]   = "smashrom "VERSION" ("BUILD_DATE")\r\n";
 
 #define ADDR32(x)   ((volatile uint32_t *) ((uintptr_t)(x)))
 typedef unsigned int uint;

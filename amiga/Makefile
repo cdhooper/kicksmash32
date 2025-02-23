@@ -49,13 +49,25 @@ LDFLAGS_SMASH = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -m
 LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -lgcc -lamiga -lc -noixemul
 LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -mcrt=clib2 -lgcc -lc -lamiga
 
+NOW  := $(shell date +%s)
+ifeq ($(OS),Darwin)
+DATE := $(shell date -j -f %s $(NOW)  '+%Y-%m-%d')
+TIME := $(shell date -j -f %s $(NOW)  '+%H:%M:%S')
+else
+DATE := $(shell date -d "@$(NOW)" '+%Y-%m-%d')
+TIME := $(shell date -d "@$(NOW)" '+%H:%M:%S')
+endif
+CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
+
 # The below makes smashftp huge
 #LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lgcc -lc -lamiga -noixemul
 
 LDFLAGS_FSROM = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
 LDFLAGS_SWITCH = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
 
-PROGVER := kicksmash_$(shell awk '/char[[:space:]]*\*version =/{print $$7}' smash.c)
+VERSION := $(shell awk '/Version/{print $$2}' ../fw/version.c)
+CFLAGS += -DVERSION=\"$(VERSION)\"
+PROGVER := kicksmash_$(VERSION)
 
 NDK_PATH := /opt/amiga/m68k-amigaos/ndk-include
 VASM     := vasmm68k_mot

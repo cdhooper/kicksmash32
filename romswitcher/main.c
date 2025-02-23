@@ -49,7 +49,7 @@
  *    0x00030000 [0x10000] globals
  */
 
-const char RomID[] = "ROM Switcher 0.1 (" BUILD_DATE ")\n";
+const char RomID[] = "ROM Switcher "VERSION" (" BUILD_DATE ")\n";
 
 #define VECTORS_BASE (RAM_BASE + 0x200)
 #define COUNTER0     (RAM_BASE + 0x1000)

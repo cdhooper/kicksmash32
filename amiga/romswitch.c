@@ -50,7 +50,7 @@
 #include "sm_msg.h"
 #include "smash_cmd.h"
 
-#define VERSION 1
+#define ROM_VERSION 1
 
 #ifdef DEBUG_LONGRESET_BUTTONS
 #define LPRINTF(fmt, ...) printf(fmt, ...)
@@ -128,7 +128,7 @@ const struct Resident resident = {
     (void *) &resident,    // rt_MatchTag - pointer to the above
     rom_end,               // rt_EndSkip - address to continue scan
     RTF_COLDSTART,         // rt_Flags - various tag flags
-    VERSION,               // rt_Version - release version number
+    ROM_VERSION,           // rt_Version - release version number
     NT_UNKNOWN,            // rt_Type - type of module
     5,                     // rt_Pri - initialization priority (before bootmenu)
     (char *) "romswitch",  // rt_Name - pointer to node name
@@ -136,7 +136,7 @@ const struct Resident resident = {
     rom_main               // rt_Init - pointer to init code
 };
 
-const char RomID[]   = "romswitch 1.4 (2025-01-23)\r\n";
+const char RomID[]   = "romswitch 1.5 (2025-02-23)\r\n";
 #endif /* STANDALONE */
 
 struct GfxBase *GfxBase;
@@ -1458,7 +1458,9 @@ draw_page(void)
     }
 #endif
     SetAPen(rp, 1);
-    Print("KickSmash ROM switcher", 0, 10, TRUE);
+    char buf[32];
+    sprintf(buf, "KickSmash ROM switcher %3s", VERSION);
+    Print(buf, 0, 10, TRUE);
     box(40, 0, 560, 14, GTBB_Recessed);
 
     gadgets = CreateContext(&LastAdded);

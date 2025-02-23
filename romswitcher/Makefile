@@ -51,8 +51,9 @@ LDFLAGS += -lgcc -lc --verbose
 #	   -L/opt/amiga13/m68k-amigaos/libnix/lib/libb
 #LDFLAGS += -lgcc -lnix4 --verbose
 
-# const char RomID[] = "ROM MED 0.1 (2025-01-09)\n";
-PROGVER := $(PROG)_$(shell awk '/const char RomID/{print $$7}' main.c)
+VERSION := $(shell awk '/Version/{print $$2}' ../fw/version.c)
+CFLAGS += -DVERSION=\"$(VERSION)\"
+PROGVER := $(PROG)_$(VERSION)
 
 NDK_PATH := /opt/amiga/m68k-amigaos/ndk-include
 VASM     := vasmm68k_mot
