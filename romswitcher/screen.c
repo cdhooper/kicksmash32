@@ -693,8 +693,23 @@ screen_init(void)
     *DDFSTRT  = 0x3c;    // Bit plane DMA start
     *DDFSTOP  = 0xd4;    // Bit plane DMA stop
 
+    /* Initialize the Blitter */
     *BLTAFWM  = 0xffff;
     *BLTALWM  = 0xffff;
+    *BLTADAT  = 0;
+    *BLTBDAT  = 0;
+    *BLTCDAT  = 0;
+    *BLTAPT   = 0;
+    *BLTBPT   = 0;
+    *BLTCPT   = 0;
+    *BLTDPT   = 0;
+    *BLTAMOD  = 0;
+    *BLTBMOD  = 0;
+    *BLTCMOD  = 0;
+    *BLTDMOD  = 0;
+    *BLTCON0  = 0;
+    *BLTCON1  = 0;
+    *BLTSIZE  = 0;
 
     serial_puts("\bB");
 
