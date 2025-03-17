@@ -17,12 +17,14 @@
 #define _AMIGA_CHIPSET_H
 
 /* Amiga chipset registers */
-#define BTIMEOUT  VADDR8(0x00de0000)   // Timeout type: 1=BERR 0=DSACK (bit 7)
-#define BTOENB    VADDR8(0x00de0001)   // Timeout enable: 1=enable (bit 7)
-#define COLDSTART VADDR8(0x00de0002)   // Coldstart (bit 7)
-#define DSPRST    VADDR8(0x00de1000)   // DSP reset line (bit 7)
-#define KBRSTEN   VADDR8(0x00de1001)   // Keyboard reset control (bit 7)
-#define GARY_ID   VADDR8(0x00de1002)   // Gary ID code
+#define GARY_BTIMEOUT  VADDR8(0x00de0000)  // Timeout type: 1=BERR 0=DSACK (b7)
+#define GARY_BTOENB    VADDR8(0x00de0001)  // Timeout enable: 1=enable (bit 7)
+#define COLDSTART      VADDR8(0x00de0002)  // Coldstart (bit 7)
+#define DSPRST         VADDR8(0x00de1000)  // DSP reset line (bit 7)
+#define KBRSTEN        VADDR8(0x00de1001)  // Keyboard reset control (bit 7)
+#define GARY_ID        VADDR8(0x00de1002)  // Gary ID code
+#define RAMSEY_CONTROL VADDR8(0x00de0003)  // Ramsey control
+#define RAMSEY_VERSION VADDR8(0x00de0043)  // Ramsey version
 
 /* Amiga graphics registers */
 #define DMACONR   VADDR16(0x00dff002)  // DMA enable register (read)
@@ -404,5 +406,15 @@
 #define CIA_CRB_INMODE0 BIT(5) // 00=clock, 01=CNT
 #define CIA_CRB_INMODE1 BIT(6) // 10=timer A, 11=timer A+
 #define CIA_CRB_ALARM   BIT(7) // 0=TOD, 1=Alarm
+
+#define RAMSEY_CONTROL_PAGE     BIT(0) // 1=Page mode enabled
+#define RAMSEY_CONTROL_BURST    BIT(1) // 1=Burst mode enabled
+#define RAMSEY_CONTROL_WRAP     BIT(2) // 1=wrap, 0=no backward bursts
+#define RAMSEY_CONTROL_RAMSIZE  BIT(3) // 1=1Mx4 (4MB), 0=256x4 (1MB)
+#define RAMSEY_CONTROL_RAMWIDTH BIT(4) // Ramsey-4 1=4-bit, 0=1=bit
+#define RAMSEY_CONTROL_SKIP     BIT(4) // Ramsey-7 1=4-clocks, 0=5 clocks
+#define RAMSEY_CONTROL_REFRESH0 BIT(5) // 00=154, 01=238, 10=380, 11=Off
+#define RAMSEY_CONTROL_REFRESH1 BIT(6) // 00=154, 01=238, 10=380, 11=Off
+#define RAMSEY_CONTROL_TEST     BIT(7) // 1=Test mode
 
 #endif /* _AMIGA_CHIPSET_H */

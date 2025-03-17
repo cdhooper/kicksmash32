@@ -105,7 +105,7 @@ uart_flush(void)
 #undef CTRL
 #define CTRL(x) ((x) - '@')
 
-/* Magic sequence to dump registers and reset */
+/* Magic sequence to dump stack and reset */
 static const uint8_t magic_seq[] = {
     CTRL('R'), CTRL('E'), CTRL('S'), CTRL('E'), CTRL('T')
 };

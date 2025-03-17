@@ -160,7 +160,9 @@ static const char usage_text[] =
 "    TERM_DEBUG_HEX=1        show debug output in hex instead of ASCII\n"
 "\n"
 "Example (including specific TTY to open):\n"
-#ifdef OSX
+#if defined(__MINGW32__)
+"    hostsmash -d com5 -t\n"
+#elif defined(OSX)
 "    hostsmash -d /dev/cu.usbmodem* -t\n"
 #else
 "    hostsmash -d /dev/ttyACM0 -t\n"
@@ -2175,14 +2177,18 @@ eeprom_erase(uint bank, uint addr, uint len)
         if (recv_output(cmd_output, sizeof (cmd_output), &rxcount, 100))
             return (1); // "timeout" was reported in this case
         if (rxcount == 0) {
-            if (no_data++ == 20) {
+            if (no_data++ == 40) {
                 printf("Receive timeout\n");
-                break;  // No output for 2 seconds
+                return (1);  // No output for 4 seconds
             }
         } else {
             no_data = 0;
             printf("%.*s", rxcount, cmd_output);
             fflush(stdout);
+            if ((strstr(cmd_output, "FAIL") != NULL) ||
+                (strstr(cmd_output, "Invalid>") != NULL)) {
+                return (1);
+            }
             if (strstr(cmd_output, "CMD>") != NULL) {
                 /* Normal end */
                 break;
@@ -6154,7 +6160,17 @@ handle_atou_messages(void)
                    (status == KS_STATUS_LOCKED)) {
             break;
         } else {
-            printf("status=%04x\n", status);
+            printf("status=%04x len=%x", status, rxlen);
+            if (rxlen > 0) {
+                uint pos;
+                printf(" data=");
+                for (pos = 0; pos < rxlen; pos++) {
+                    if (pos > 0)
+                        printf(" ");
+                    printf("%02x", rxdata[pos]);
+                }
+            }
+            printf("\n");
             break;
         }
     }

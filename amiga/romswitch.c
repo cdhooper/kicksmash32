@@ -522,13 +522,13 @@ update_status(const char *fmt, ...)
 /*
  * send_cmd_retry
  * --------------
- * Send a request to Kicksmash, retrying up to 4 times on error.
+ * Send a request to Kicksmash, retrying up to 5 times on error.
  */
 static uint
 send_cmd_retry(uint16_t cmd, void *arg, uint16_t arglen,
                void *reply, uint replymax, uint *replyalen)
 {
-    uint tries = 3;
+    uint tries = 5;
     uint rc;
 
     do {

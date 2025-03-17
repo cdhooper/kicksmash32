@@ -71,6 +71,9 @@ reset(void)
 void
 chipset_init(void)
 {
+    /* Ramsey config */
+    *RAMSEY_CONTROL = RAMSEY_CONTROL_REFRESH0;  // Clobber burst/page/wrap
+
     /* Shut down interrupts and DMA */
     *CIAA_ICR = 0x7f;    // Disable interrupt forwarding to chipset
     *INTENA   = 0x7fff;  // Disable interrupt forwarding to m68k

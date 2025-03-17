@@ -15,6 +15,7 @@
  */
 #include <stdint.h>
 #include "util.h"
+#include "cpu_control.h"
 
 static inline uint32_t
 get_cacr(void)

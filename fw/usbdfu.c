@@ -2,7 +2,7 @@
  * Stand-alone DFU programmer for STM32F1xx parts.
  *
  * The original version of this file was taken from an example in the
- * libopencm3 projec by Gareth McMullin <gareth@blacksphere.co.nz>.
+ * libopencm3 project by Gareth McMullin <gareth@blacksphere.co.nz>.
  * It has been heavily modified for KickSmash, but still retains the
  * GNU Lesser General Public License.
  */

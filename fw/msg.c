@@ -1744,6 +1744,64 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
 }
 
 /*
+ * fast_magic_search() looks for the next occurrence of the start of the
+ *                     magic address sequence for when an Amiga program
+ *                     wants to send a message to Kicksmash.
+ *
+ * The algorithm is implemented in a manner to reduce the SRAM bandwidth
+ * required so that the DMA engine has lower latency. This is done by
+ * fetching a 32-bit value at a time, and then comparing the entire
+ * value against the first two 16-bit magic values, or the high 16 bits
+ * against the first 16-bit magic value. Since a single fetch is done,
+ * and the loop is small, memory bandwidth should be lower.
+ */
+static inline uint
+fast_magic_search(uint prod)
+{
+    uint count;
+    uint32_t *ptr;
+
+    if (rx_consumer & 1) {
+        /* Not 32-bit aligned */
+        if (buffer_rxa_lo[rx_consumer] == sm_magic[0])
+            return (0);  // found
+        else
+            return (1);  // not found
+    }
+
+    if (prod > rx_consumer)
+        count = prod - rx_consumer;
+    else
+        count = ARRAY_SIZE(buffer_rxa_lo) - rx_consumer;
+
+    ptr = (void *) &buffer_rxa_lo[rx_consumer];
+    while (count > 1) {
+        uint32_t value = *ptr;
+        if (value == (((uint32_t) sm_magic[1] << 16) | sm_magic[0])) {
+            return (0);
+        }
+        if ((value >> 16) == sm_magic[0]) {
+            rx_consumer++;
+            return (0);
+        }
+        count       -= 2;
+        rx_consumer  = (rx_consumer + 2) % ARRAY_SIZE(buffer_rxa_lo);
+        ptr++;
+    }
+
+    if (count == 1) {
+        /* Not 32-bit aligned */
+        if (buffer_rxa_lo[rx_consumer] == sm_magic[0])
+            return (0);  // found
+        else
+            return (1);  // not found
+    }
+
+    rx_consumer--;  // Back up, since it will be incremented later
+    return (1);
+}
+
+/*
  * process_addresses
  * -----------------
  * Walk the ring of captured ROM addresses to detect and act upon commands
@@ -1770,14 +1828,11 @@ new_cmd:
 new_cmd_post:
     while (rx_consumer != prod) {
         switch (magic_pos) {
-            case 0: {
-                uint16_t val = buffer_rxa_lo[rx_consumer];
-                /* Look for start of Magic sequence (needs to be fast) */
-                if (val != sm_magic[0])
+            case 0:
+                if (fast_magic_search(prod))
                     break;
                 magic_pos = 1;
                 break;
-            }
             case 1:
             case 2:
             case 3:  // 1 ... ARRAY_SIZE(sm_magic) - 1

@@ -225,6 +225,9 @@ long_to_short_t long_to_short_readwrite[] = {
     { "-s", "swap" },
     { "-v", "verify" },
     { "-y", "yes" },
+    { "-r", "read" },
+    { "-v", "verify" },
+    { "-w", "write" },
 };
 
 BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
@@ -2154,7 +2157,7 @@ read_from_flash(uint bank, uint addr, void *buf, uint len)
 #endif
     rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    cia_spin(1);
+    cia_spin(6);
 #ifdef USE_OVERLAY
     local_memcpy(buf, (void *) (addr), len);
     *CIAA_PRA &= ~(CIAA_PRA_OVERLAY | CIAA_PRA_LED);
@@ -2367,12 +2370,26 @@ cmd_readwrite(int argc, char *argv[])
     uint8_t    *buf;
     uint8_t    *vbuf = NULL;
 
-    if ((strcmp(argv[0], "-w") == 0) || (strcmp(argv[0], "write") == 0))
-        writemode = 1;
-    else if ((strcmp(argv[0], "-v") == 0) || (strcmp(argv[0], "verify") == 0))
-        verifymode = 1;
-    else
-        readmode = 1;
+    /* First Just determine the read/write/verify mode */
+    for (arg = 0; arg < argc; arg++) {
+        ptr = long_to_short(argv[arg], long_to_short_readwrite,
+                            ARRAY_SIZE(long_to_short_readwrite));
+        if (*ptr == '-') {
+            for (++ptr; *ptr != '\0'; ptr++) {
+                switch (*ptr) {
+                    case 'r':  // read
+                        readmode = 1;
+                        break;
+                    case 'v':  // verify
+                        verifymode = 1;
+                        break;
+                    case 'w':  // write
+                        writemode = 1;
+                        break;
+                }
+            }
+        }
+    }
 
     for (arg = 1; arg < argc; arg++) {
         ptr = long_to_short(argv[arg], long_to_short_readwrite,

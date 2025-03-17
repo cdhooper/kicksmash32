@@ -395,7 +395,10 @@ get_new_input_line(const char *prompt, char **line)
                     ch = KEY_LINE_BEGIN;
                     break;
                 default:
-                    printf("\nUnknown 'ESC [ 1 ; 2|3|5 %c'\n", ch);
+                    printf("\nUnknown 'ESC [ 1 ; %c %c'\n",
+                           (input_mode == INPUT_MODE_1SEMI2) ? '2' :
+                           (input_mode == INPUT_MODE_1SEMI3) ? '3' : '5',
+                           ch);
                     goto redraw_prompt;
             }
             break;
