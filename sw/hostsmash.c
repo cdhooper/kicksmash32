@@ -934,7 +934,14 @@ config_dev(void)
 {
     COMMTIMEOUTS timeouts;
     DCB port;
+    TIMECAPS timecaps;
 
+    if(timeGetDevCaps(&timecaps, sizeof(timecaps)) == MMSYSERR_NOERROR)
+    {
+        // Set improved timer-accuracy for Sleep/Wait functions
+        if(timeBeginPeriod(timecaps.wPeriodMin)!= TIMERR_NOERROR)
+            printf("timeBeginPeriod() failed\n");
+    }
     /* Get the current DCB, and adjust to our liking */
     memset(&port, 0, sizeof (port));
     port.DCBlength = sizeof (port);
@@ -946,11 +953,11 @@ config_dev(void)
         system_error("adjusting port settings");
 
     /* Set short timeouts on the COM port */
-    timeouts.ReadIntervalTimeout = 1;
-    timeouts.ReadTotalTimeoutMultiplier = 1;
-    timeouts.ReadTotalTimeoutConstant = 1;
-    timeouts.WriteTotalTimeoutMultiplier = 1;
-    timeouts.WriteTotalTimeoutConstant = 1;
+    timeouts.ReadIntervalTimeout = MAXDWORD;
+    timeouts.ReadTotalTimeoutMultiplier = 0;
+    timeouts.ReadTotalTimeoutConstant = 0;
+    timeouts.WriteTotalTimeoutMultiplier = 0;
+    timeouts.WriteTotalTimeoutConstant = 10;
     if (!SetCommTimeouts(dev_handle, &timeouts))
         system_error("setting port time-outs.");
 
@@ -2428,7 +2435,9 @@ eeprom_write(const uint8_t *filebuf, uint addr, uint len)
 
     printf("Writing 0x%06x bytes to EEPROM starting at address 0x%x\n",
            len, addr);
-
+#ifdef __MINGW32__
+    DWORD dwTickStart = GetTickCount();
+#endif
     snprintf(cmd, sizeof (cmd) - 1, "prom write %x %x", addr, len);
     if (send_cmd(cmd))
         return (-1); // "timeout" was reported in this case
@@ -2444,6 +2453,14 @@ eeprom_write(const uint8_t *filebuf, uint addr, uint len)
         time_delay_msec(1);
     }
     printf("Wrote 0x%x bytes to device\n", len);
+#ifdef __MINGW32__
+    DWORD dwElapsed = (GetTickCount() - dwTickStart);
+    if(dwElapsed > 0)
+    {
+        printf("Elapsed time = %lums\n", dwElapsed);
+        printf("bytes/sec = %lu\n", (DWORD)(len/((float)dwElapsed/1000.0)));
+    }
+#endif
 
     return (0);
 }

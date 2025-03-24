@@ -39,7 +39,7 @@ endif
 ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
     CFLAGS := $(filter-out -DALLOW_CREATE_LINK, $(CFLAGS))
     # -static works for Vista+, but doesn't work for XP
-    LDFLAGS += -lws2_32 -static
+    LDFLAGS += -lws2_32 -lwinmm -static
     OBJDIR := objs.win64
     HOSTSMASH_SRCS += mingw-realpath.c
     CC := x86_64-w64-mingw32-gcc
