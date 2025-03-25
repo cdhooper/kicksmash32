@@ -42,7 +42,7 @@ SWITCH_SRCS  := romswitch.c sm_msg.c cpu_control.c printf.c \
 CC      := m68k-amigaos-gcc
 STRIP   := m68k-amigaos-strip
 CFLAGS  := -Wall -Wextra -Wno-pointer-sign -Wno-format -Wno-strict-aliasing
-CFLAGS  += -Wno-sign-compare -fomit-frame-pointer -I../fw
+CFLAGS  += -Wno-sign-compare -fomit-frame-pointer -I../fw -mcpu=68060
 CFLAGS_ROMFS := -DROMFS -fbaserel -resident -mcpu=68060
 LDFLAGS_SMASH = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -mcrt=clib2 -lgcc -lc -lamiga
 #LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -nostdlib -lgcc -lamiga -lc

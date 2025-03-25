@@ -16,6 +16,7 @@ generated.*.ld
 cscope.out
 .cscope_cmd.*
 .genromrc
+box/
 objs/
 objs.*/
 rev1/

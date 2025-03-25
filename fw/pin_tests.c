@@ -57,9 +57,10 @@ static const pin_config_t pin_config[] =
     { "SOCKET_D31", SOCKET_D31_PORT, SOCKET_D31_PIN, FS_PU, PIN_INPUT },
     { "SOCKET_OE",  SOCKET_OE_PORT,  SOCKET_OE_PIN,  FS_PU, PIN_INPUT },
     { "FLASH_OEWE", FLASH_OEWE_PORT, FLASH_OEWE_PIN, FS_0,  PIN_EXT_PULLDOWN },
-    { "USB_CC1",    USB_CC1_PORT,    USB_CC1_PIN,    FS_IN, PIN_EXT_PULLDOWN },
-    { "USB_CC2",    USB_CC2_PORT,    USB_CC2_PIN,    FS_IN, PIN_EXT_PULLDOWN },
     { "BOOT1",      GPIOB,           GPIO2,          FS_IN, PIN_EXT_PULLDOWN },
+    /* USB-C host may pull these low */
+//  { "USB_CC1",    USB_CC1_PORT,    USB_CC1_PIN,    FS_IN, PIN_EXT_PULLDOWN },
+//  { "USB_CC2",    USB_CC2_PORT,    USB_CC2_PIN,    FS_IN, PIN_EXT_PULLDOWN },
 };
 
 static const char *
@@ -452,6 +453,7 @@ pin_tests(void)
      * specifies the pins to test and expected behavior of those pins.
      * All 32 FLASH_D* pins and all 20 SOCKET_A* pins are also verified.
      * This is accomplished in the loops by adding 32 and 19 to the
+     * number of elements in the pin_config[] table.
      */
     for (pass = 0; pass < 2; pass++) {
         uint     state;

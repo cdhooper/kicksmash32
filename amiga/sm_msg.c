@@ -91,12 +91,12 @@ dump_memory(void *buf, uint len, uint dump_base)
 }
 
 /*
- * rom_wait_normal
- * ---------------
+ * rom_wait_recover
+ * ----------------
  * Wait until ROM has recovered (Kicksmash is no longer driving data.
  */
 static void
-rom_wait_normal(void)
+rom_wait_recover(void)
 {
     uint     pos;
     uint32_t last = 0;
@@ -106,16 +106,31 @@ rom_wait_normal(void)
     uint     timeout = 0;
     cia_spin(CIA_USEC(30));
 
-    /* Wait until Kickstart ROM data is consistent for 2 ms */
+    /* Wait until Kickstart ROM data is consistent for 5 ms */
     for (pos = 0; pos < 100; pos++) {
-        cur = *ADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        if ((last != cur) || (*ADDR32(ROM_BASE) != 0x11144ef9)) {
+        cur = *VADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
+        if ((last != cur) || (*VADDR32(ROM_BASE) != 0x11144ef9)) {
             if (timeout++ > 200000)
                 break;  // Give up after 2 seconds
             pos = 0;
             last = cur;
         }
-        cia_spin(CIA_USEC(20));
+        cia_spin(CIA_USEC(50));
+    }
+}
+
+/*
+ * rom_wait_normal
+ * ---------------
+ * Wait until Kicksmash has re-enabled normal ROM access.
+ */
+static void
+rom_wait_normal(uint32_t romval)
+{
+    uint timeout = 0;
+    while (*VADDR32(ROM_BASE) != romval) {
+        if (timeout++ > 1000)
+            break;  // Took too long. Oh well!
     }
 }
 
@@ -153,24 +168,25 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     uint16_t  val;
     uint32_t  val32 = 0;
     uint      replyround;
+    uint32_t  rombase_value = *VADDR32(ROM_BASE);
 
     for (pos = 0; pos < ARRAY_SIZE(sm_magic); pos++)
-        (void) *ADDR32(ROM_BASE + (sm_magic[pos] << smash_cmd_shift));
+        (void) *VADDR32(ROM_BASE + (sm_magic[pos] << smash_cmd_shift));
 
-    (void) *ADDR32(ROM_BASE + (arglen << smash_cmd_shift));
+    (void) *VADDR32(ROM_BASE + (arglen << smash_cmd_shift));
     crc = crc32(0, &arglen, sizeof (arglen));
     crc = crc32(crc, &cmd, sizeof (cmd));
     crc = crc32(crc, argbuf, arglen);
-    (void) *ADDR32(ROM_BASE + (cmd << smash_cmd_shift));
+    (void) *VADDR32(ROM_BASE + (cmd << smash_cmd_shift));
 
     /* Send message payload */
     for (pos = 0; pos < (arglen + 1) / sizeof (uint16_t); pos++) {
-        (void) *ADDR32(ROM_BASE + (argbuf[pos] << smash_cmd_shift));
+        (void) *VADDR32(ROM_BASE + (argbuf[pos] << smash_cmd_shift));
     }
 
     /* CRC high and low words */
-    (void) *ADDR32(ROM_BASE + ((crc >> 16) << smash_cmd_shift));
-    (void) *ADDR32(ROM_BASE + ((crc & 0xffff) << smash_cmd_shift));
+    (void) *VADDR32(ROM_BASE + ((crc >> 16) << smash_cmd_shift));
+    (void) *VADDR32(ROM_BASE + ((crc & 0xffff) << smash_cmd_shift));
 
     /*
      * Delay to prevent reads before Kicksmash has set up DMA hardware
@@ -200,8 +216,10 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         if (word & 1) {
             val = (uint16_t) val32;
         } else {
-            val32 = *ADDR32(ROM_BASE + 0x1554); // remote addr 0x0555 or 0x0aaa
-//          *ADDR32(0x7770000 + word * 2) = val;
+            val32 = *VADDR32(ROM_BASE + 0x1554); // remote addr 0x0555 or 0x0aaa
+#ifdef SM_MSG_DEBUG
+            *VADDR32(0x7770030 + word * 2) = val32;
+#endif
             val = val32 >> 16;
         }
         if ((flag_debug > 2) && (replybuf != NULL) && (word < (replymax / 2))) {
@@ -234,7 +252,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             if (*replyalen > replymax)
                 *replyalen = replymax;
         }
-        rom_wait_normal();  // Wait until ROM is accessible again
+        rom_wait_recover();  // Wait until ROM is accessible again
         goto scc_cleanup;
     }
 
@@ -262,7 +280,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             if (word & 1) {
                 val = (uint16_t) val32;
             } else {
-                val32 = *ADDR32(ROM_BASE);
+                val32 = *VADDR32(ROM_BASE);
                 val = val32 >> 16;
             }
             *(replybuf++) = val;
@@ -271,35 +289,38 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     if (pos < replylen) {
         /* Discard data that doesn't fit */
         for (; pos < replylen; pos += 4)
-            val32 = *ADDR32(ROM_BASE);
+            val32 = *VADDR32(ROM_BASE);
     }
 
     /* Read CRC */
     if (word & 1) {
-        replycrc = (val32 << 16) | *ADDR16(ROM_BASE);
+        replycrc = (val32 << 16) | *VADDR16(ROM_BASE);
     } else {
-        replycrc = *ADDR32(ROM_BASE);
+        replycrc = *VADDR32(ROM_BASE);
     }
 
 scc_cleanup:
 #if 0
     /* Debug cleanup */
     for (pos = 0; pos < 4; pos++)
-        *ADDR32(0x7770010 + pos * 4) = *ADDR32(ROM_BASE);
+        *VADDR32(0x7770010 + pos * 4) = *VADDR32(ROM_BASE);
 #endif
 
     if ((replystatus & 0xffffff00) != 0) {
-        rom_wait_normal();  // Wait until ROM is accessible again
+        rom_wait_recover();  // Wait until ROM is accessible again
     }
 
     if (((replystatus & 0xffff0000) == 0) && (replystatus != KS_STATUS_CRC)) {
         crc = crc32(crc, reply, replylen);
         if (crc != replycrc) {
-//          *ADDR32(0x7770000) = crc;
-//          *ADDR32(0x7770004) = replycrc;
+#ifdef SM_MSG_DEBUG
+            *VADDR32(0x7770000) = crc;
+            *VADDR32(0x7770004) = replycrc;
+#endif
             return (MSG_STATUS_BAD_CRC);
         }
     }
+    rom_wait_normal(rombase_value);
     return (replystatus);
 }
 #endif
@@ -339,6 +360,7 @@ send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
          void *reply, uint replymax, uint *replyalen)
 {
     uint rc;
+
     SUPERVISOR_STATE_ENTER();
     INTERRUPTS_DISABLE();
     CACHE_DISABLE_DATA();
@@ -346,6 +368,7 @@ send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
 
     rc = send_cmd_core(cmd, arg, arglen, reply, replymax, replyalen);
 
+    CACHE_FLUSH();
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();

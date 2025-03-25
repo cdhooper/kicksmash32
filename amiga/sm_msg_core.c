@@ -202,13 +202,13 @@ cia_spin(unsigned int ticks)
 }
 
 /*
- * rom_wait_normal
- * ---------------
+ * rom_wait_recover
+ * ----------------
  * Wait until ROM has recovered (Kicksmash is no longer driving data.
  */
 TEXT_TO_RAM
 static void
-rom_wait_normal(void)
+rom_wait_recover(void)
 {
     uint     pos;
     uint32_t last = 0;
@@ -228,6 +228,22 @@ rom_wait_normal(void)
             last = cur;
         }
         cia_spin(CIA_USEC(20));
+    }
+}
+
+/*
+ * rom_wait_normal
+ * ---------------
+ * Wait until Kicksmash has re-enabled normal ROM access.
+ */
+TEXT_TO_RAM
+static void
+rom_wait_normal(uint32_t romval)
+{
+    uint timeout = 0;
+    while (*VADDR32(ROM_BASE) != romval) {
+        if (timeout++ > 1000)
+            break;  // Took too long. Oh well!
     }
 }
 
@@ -266,6 +282,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     uint16_t  val;
     uint32_t  val32 = 0;
     uint      replyround;
+    uint32_t  rombase_value = *VADDR32(ROM_BASE);
     uint16_t  sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };  // on stack
     //        Decimal        516     4119    281     279
 
@@ -358,7 +375,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             if (*replyalen > replymax)
                 *replyalen = replymax;
         }
-        rom_wait_normal();  // Wait until ROM is accessible again
+        rom_wait_recover();  // Wait until ROM is accessible again
         goto scc_cleanup;
     }
 
@@ -403,7 +420,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
 
     /* Read CRC */
     if (word & 1) {
-        replycrc = (val32 << 16) | *ADDR16(ROM_BASE);
+        replycrc = (val32 << 16) | *VADDR16(ROM_BASE);
     } else {
         replycrc = *VADDR32(ROM_BASE);
     }
@@ -416,7 +433,7 @@ scc_cleanup:
 #endif
 
     if ((replystatus & 0xffffff00) != 0) {
-        rom_wait_normal();  // Wait until ROM is accessible again
+        rom_wait_recover();  // Wait until ROM is accessible again
     }
 
     if (((replystatus & 0xffff0000) == 0) && (replystatus != KS_STATUS_CRC)) {
@@ -429,5 +446,6 @@ scc_cleanup:
             return (MSG_STATUS_BAD_CRC);
         }
     }
+    rom_wait_normal(rombase_value);
     return (replystatus);
 }

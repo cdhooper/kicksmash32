@@ -1,0 +1,8 @@
+If you are using a Raspberry Pi, you may need to install some packages
+to build hostsmash:
+    sudo apt-get -y update
+    sudo apt-get -y install libusb-dev
+
+To set up automatic access to the /dev/ttyACM0 file:
+    cd ../fw
+    make udev-files

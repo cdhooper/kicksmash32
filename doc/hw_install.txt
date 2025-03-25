@@ -14,11 +14,13 @@ that system enough to confirm.
     I usually put a female Dupont connector on a wire, and solder the
     other side to a component on the motherboard. The Dupont connetor
     would then attach to the KBRST pin on KickSmash.
-    For the Amiga 3000, I recommend soldering or clipping a wire to
-    pin 1 of U713. You can also solder to pin 6 of RP701 if you want
-    to be more discrete.
-    For the Amiga 4000, I recommend using U141 pin 1.
-    For the Amiga 4000T, I also recommend using U141 pin 1.
+    Amiga 1200: I recommend soldering or clipping a wire to U13 pin 38
+                or U5 pin 63, or a via near the E121R silkscreen.
+    Amiga 3000: I recommend using RP701 pin 6 or U713 pin 1.
+    Amiga 3000T: I recommend using RP701 pin 6 or U713 pin 1.
+    Amiga 4000: I recommend using U141 pin 1.
+    Amiga 4000CR: I recommend using U141 pin 1.
+    Amiga 4000T: I recommend using U141 pin 1.
 
 3. Remove your old Kickstart ROMs
     It's best to use a chip extractor to remove the ROM chips. If you must use a flat head
@@ -27,10 +29,19 @@ that system enough to confirm.
 4. Install KickSmash in place of the ROMs
     The USB connector of KickSmash should face the same side of the ROM
     sockets as the notch of the ROMs you've removed.
-    In the Amiga 3000, KickSmash will be oriented with the USB-C
-    connector facing Gary.
-    In the Amiga 4000, KickSmash will be oriented with the USB-C
-    connector facing the 50 MHz oscillator and Gary.
+    Amiga 1200: Orient KickSmash with the USB connector facing Gayle and
+            the 28 MHz crystal oscillator. If KickSmash pins A20 and A21
+            are not populated, do not install the KickSmash in A1200
+            socket pins 1 and 42.
+    Amiga 3000: Orient KickSmash with the USB connector facing Fat Gary.
+    Amiga 3000T: Orient KickSmash with the USB connector next to the
+            motherboard's SCSI connector.
+    Amiga 4000: Orient KickSmash with the USB connector facing the 50 MHz
+            oscillator and Fat Gary.
+    Amiga 4000CR: Orient KickSmash with the USB connector emerging next
+            to Ramsey.
+    Amiga 4000T: Orient KickSmash with the USB connector overlapping Fat Gary.
+
     Be careful to ensure that all pins are aligned correctly with the
     socket leaf springs before applying force to install KickSmash
     into the sockets.

@@ -31,7 +31,8 @@ set_cacr(uint32_t cacr)
     __asm volatile("movec.l %0, cacr" :: "r" (cacr):);
 }
 
-
+// XXX: Need to flush TLB before turning on caches
+//
 uint32_t
 CacheControl(uint32_t cache_bits, uint32_t cache_mask)
 {

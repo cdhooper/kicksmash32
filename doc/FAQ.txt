@@ -19,16 +19,18 @@ Amiga is not able to boot. The Amiga must be held in reset in this case.
 * Which Amiga models are supported by KickSmash32?
 
 KickSmash32 is currently only tested in Amiga 3000 rev 9 and
-Amiga 4000 rev B motherboards. It will likely work in Amiga 3000T and
-Amiga 4000T systems, but has not been tested. It will not work in
-Amiga 3000 rev 7 and below motherboards, as those require a ROM Tower.
+Amiga 4000 rev B motherboards. KickSmash32 will not work in Amiga 3000
+rev 7 and below motherboards, as those require a ROM Tower.
 An Amiga 3000 ROM tower replacement with spacing identical to the
-rev 9 motherboard is in development, but is not available yet.
+rev 9 motherboard is available here:
+    https://github.com/cdhooper/amiga_rombankswitcher_a3000_romtower
+KickSmash4KT is for the Amiga 4000T, and has been tested.
+KickSmash3KT is for the Amiga 3000T. It has not yet been tested.
+KickSmash1200 is for the Amiga 1200. It has not yet been tested.
+KickSmash4KCR is for the Amiga 4000CR. It has not yet been tested.
 
-KickSmash32 might also work in the Amiga 1200, but this has not been
-tested. With further software development, it can probably be made to
-support the Amiga 500 and 2000. A lower cost version could be made
-which supports those Amiga models.
+With further software development, a version can probably be made to
+support the Amiga 500 and 2000.
 
 ========================================================================
 

@@ -1,6 +1,6 @@
 # KickSmash32
 
-KickSmash32 is a Kickstart ROM replacement module for the Amiga 3000 and Amiga 4000 computer systems. 
+KickSmash32 is a Kickstart ROM replacement module for the Amiga 3000 and Amiga 4000 computer systems. There are other versions here for the Amiga 1200, 3000T, 4000T, and 4000CR. There is not yet a version for 16-bit Amigas such as the Amiga 500, 600, and 2000.
 
 Features include:
 
@@ -10,7 +10,7 @@ Features include:
 * Configurable ROM bank switching on long reboot or cold power-on
 * Optional host file service to the Amiga over the USB-C link (smashfs and smashftp)
 
-![KickSmash32 photo](photos/2024_11_07_kicksmash32_rev5_profile_view_2.jpg?raw=true "Kicksmash32")
+<IMG SRC="photos/2024_11_07_kicksmash32_rev5_profile_view_2.jpg" WIDTH="50%">
 
 All hardware, firmware, and software is open source.
 
@@ -18,66 +18,67 @@ View files in the doc directory for complete documentation.
 
 -------------------------------------------------------
 
-## Usage Example
+## [Amiga CLI](doc/AMIGACLI.md)
+[![smash bank show](doc/smash_bank_show.jpg?raw=true "smash bank show")](doc/AMIGACLI.md)
 
-If you are familiar with the Amiga CLI and have the ability to get
-ROM images to your Amiga, then programming and switching between Kickstart
-ROM banks in the running system is not difficult.
+The smash utility is used to interact with Kicksmash, including writing
+Kickstart ROM images and switching to them. The smashftp program can be
+used to transfer files with your host PC. The smashfs program will
+automatically mount volumes exported from your host PC.
 
-List all banks.
-
-![smash bank show](doc/smash_example_1_bank_show.jpg?raw=true "smash bank show")
-
-Write DiagROM to a bank.
-
-![smash write](doc/smash_example_2_write.jpg?raw=true "smash write")
-
-Name that bank for future reference.
-
-![smash bank name](doc/smash_example_3_bank_name.jpg?raw=true "smash bank name")
-
-It's always a good idea to verify what you wrote.
-
-![smash verify](doc/smash_example_4_verify.jpg?raw=true "smash verif")
-
-Switch to that bank and reboot.
-
-![smash bank current](doc/smash_example_5_bank_current.jpg?raw=true "smash bank current")
-
-After pressing Enter, your computer is now running DiagROM.
-
-How do you switch back? If you had specified a "long reset" sequence, you could press and hold Control-Amiga-Amiga to switch back. Since you haven't yet done that, you will need to power cycle your Amiga or connect to the KickSmash over USB and tell it from the host to switch.
+See [doc/AMIGACLI.md](doc/AMIGACLI.md) for usage examples.
 
 -------------------------------------------------------
 
-## ROM Switcher
-
+## [ROM Switcher](doc/SWITCHER.md)
 The ROM switcher is a Kickstart module which, when linked with your
 favorite (3.1.4+ recommended) Kickstart image, will provide a list of
 ROM images and allow you to pick which one to use. It's recommended
 that you include the ROM switcher in your LongReset list.
+[![rom switcher](doc/rom_switcher_teaser.jpg?raw=true "rom switcher")](doc/SWITCHER.md)
 
-![rom_switcher](doc/rom_switcher.jpg?raw=true "ROM switcher example")
+See [doc/SWITCHER.md](doc/SWITCHER.md) for examples.
 
 -------------------------------------------------------
 
-## Dev Environment
+## [Development Environment](doc/DEVENV.md)
 
-The easiest way to build the software is to use VSCode with the pre-configured devcontainer. You will however need a working Docker daemon and Git installation in order to clone the repo and run the container image.
+[![make](doc/linux_make.jpg?raw=true "make")](doc/DEVENV.md)
 
-> [!NOTE]
-> if you are not familiar with VSCode and devcontainers please read [Developing inside a Container](https://code.visualstudio.com/docs/devcontainers/containers)
+Instructions for building Kicksmash firmware, Amiga utilities,
+and host programs are
+[available in doc/DEVENV.md](doc/DEVENV.md).
 
-There are now just two steps to get the devcontainer up and running.
+-------------------------------------------------------
 
-1. Clone the repo using VSCode. ![clone repo](doc/vscode_clone.png)
-2. Click `reopen in container` from the notification. ![reopen in container](doc/reopen_in_container.png)
+## [Which Kicksmash do I need?](doc/WHICH.md)
 
-> [!TIP]
->It may take some time to build/download the container image the first time you click `reopen in container` just be patient.
+Commodore produced a variety of Amiga machines over the years.
+Unlike the Zorro slot, one thing that they did not standardize is the
+location, orientation, and spacing of the ROM socket(s) in the machine.
+Very few of the Amigas have a compatible layout. In fact the only two
+are the Amiga 3000 and the original Amiga 4000.
 
-Once these two steps are complete, you can open a new terminal in VSCode (`ctrl` + `shift` + `'`). This terminal will be attached to the Fedora devcontainer.
+[See doc/WHICH.md](doc/WHICH.md) for a guide on which KickSmash you
+should choose based on your Amiga model.
 
-To build the software, simply press `ctrl` + `shift` + `b`, or alternatively select `Run Build Task` from the `Termianl` Menu.
+-------------------------------------------------------
 
-This will invoke `Make All` inside the devcontainer and the root directory of the repo.
+## [Yes, there is FAQ](doc/FAQ.txt)
+
+But it may not have the answers you seek. Check the doc directory
+for additional information (any txt file). Here are some:
+
+* [Hardware Build](doc/hw_build.txt)
+* [Hardware Programming](doc/hw_programming.txt)
+* [Hardware Installation](doc/hw_install.txt)
+* [Software Build](doc/sw_build.txt)
+* [Software installation](doc/sw_install.txt)
+* [Hostsmash Utility, for your host PC](doc/sw_hostsmash.txt)
+* [Kicksmash Firmware](doc/sw_kicksmash.txt)
+* [AmigaOS Smash Utility](doc/sw_smash.txt)
+* [AmigaOS SmashFS](doc/sw_smashfs.txt)
+* [AmigaOS SmashFS for Kickstart ROM](doc/sw_smashfsrom.txt)
+* [AmigaOS SmashFTP](doc/sw_smashftp.txt)
+* [USB Cable options](doc/usb_cables.txt)
+* [Windows Notes](doc/windows_notes.txt)

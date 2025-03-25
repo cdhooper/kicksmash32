@@ -59,6 +59,30 @@
             } else if ((cpu_type == 68040) || (cpu_type == 68060)) { \
                 mmu_set_tc_040(oldmmustate); \
             } \
+            __asm volatile("nop"); \
+        }
+
+#define CACHE_FLUSH() \
+        switch (cpu_type) { \
+            case 68030: \
+                cpu_set_cacr(cpu_get_cacr() | CACRF_ClearI | CACRF_ClearD); \
+                break; \
+            case 68040: \
+            case 68060: \
+                cpu_cache_flush_040_both(); \
+                break; \
+        } \
+        __asm volatile("nop");
+
+#define MMU_FLUSH() \
+        switch (cpu_type) { \
+            case 68030: \
+                flush_tlb_030(); \
+                break; \
+            case 68040: \
+            case 68060: \
+                flush_tlb_040(); \
+                break; \
         }
 
 #define INTERRUPTS_DISABLE() if (irq_disabled++ == 0) \
@@ -97,6 +121,47 @@ __attribute__ ((noinline)) uint32_t mmu_get_tc_030(void);
 __attribute__ ((noinline)) uint32_t mmu_get_tc_040(void);
 __attribute__ ((noinline)) void mmu_set_tc_030(register uint32_t tc asm("%d0"));
 __attribute__ ((noinline)) void mmu_set_tc_040(register uint32_t tc asm("%d0"));
+
+__attribute__((unused))
+static inline uint32_t
+cpu_get_cacr(void)
+{
+    uint32_t cacr;
+    __asm volatile("movec.l cacr, %0" : "=r" (cacr)::);
+    return (cacr);
+}
+
+__attribute__((unused))
+static inline void
+cpu_set_cacr(uint32_t cacr)
+{
+    __asm volatile("movec.l %0, cacr" :: "r" (cacr):);
+}
+
+__attribute__((unused))
+static inline void
+cpu_cache_flush_040_both(void)
+{
+    __asm volatile("nop\n\t"
+                   "cpusha %bc");
+}
+
+static __inline void __attribute__((__unused__))
+flush_tlb_030(void)
+{
+    /* Using exact opcode because 68030 pflusha differs from 68040 pflusha */
+    __asm volatile(".word 0xf000 \n\r"  // 68030 pflusha
+                   ".word 0x2400");
+}
+
+static __inline void __attribute__((__unused__))
+flush_tlb_040(void)  // Also 68060
+{
+    /* Using exact opcode because 68040 pflusha differs from 68030 pflusha */
+    __asm volatile(".word 0xf518");  // 68040 pflusha
+}
+
+void cpu_cache_flush(void);
 
 extern unsigned int cpu_type;
 extern unsigned int irq_disabled;

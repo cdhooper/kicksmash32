@@ -223,7 +223,6 @@ long_to_short_t long_to_short_readwrite[] = {
     { "-l", "len" },
     { "-l", "length" },
     { "-s", "swap" },
-    { "-v", "verify" },
     { "-y", "yes" },
     { "-r", "read" },
     { "-v", "verify" },
@@ -243,8 +242,12 @@ uint8_t *test_loopback_buf = NULL;
 static BOOL
 is_user_abort(void)
 {
-    if (SetSignal(0, 0) & SIGBREAKF_CTRL_C)
+    if (SetSignal(0, 0) & SIGBREAKF_CTRL_C) {
+        static uint8_t printed = 0;
+        if (printed++ == 0)
+            printf("^C Abort\n");
         return (1);
+    }
     return (0);
 }
 
@@ -474,6 +477,7 @@ spin_memory(uint32_t addr)
 
     spin(MEM_LOOPS);
 
+    CACHE_FLUSH();
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
@@ -499,6 +503,7 @@ spin_memory_ovl(uint32_t addr)
 
     spin(MEM_LOOPS);
 
+    CACHE_FLUSH();
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
@@ -1036,12 +1041,9 @@ smash_test_msg_loopback(void)
                     printf("Data corrupt at %x of %x: %02x != expected %02x\n",
                            pos, rlen, buf[pos], (uint8_t)pos);
                     buf[pos] = pos;
-                    break;
+                    rc = MSG_STATUS_FAIL;
+                    goto fail;
                 }
-            }
-            if (pos < rlen) {
-                rc = MSG_STATUS_FAIL;
-                goto fail;
             }
             if ((rc = get_msg_info(&msginfo)) != 0)
                 goto fail;
@@ -1487,6 +1489,7 @@ flash_cmd(uint32_t cmd, void *arg, uint argsize)
 
     rc = flash_cmd_core(cmd, arg, argsize);
 
+    CACHE_FLUSH();
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
@@ -1539,6 +1542,7 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
     }
     rc2 = flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
 
+    CACHE_FLUSH();
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
@@ -1982,10 +1986,8 @@ ask_again:
     printf("%s - are you sure? (y/n) ", prompt);
     fflush(stdout);
     while ((ch = getchar()) != EOF) {
-        if (is_user_abort()) {
-            printf("^C\n");
+        if (is_user_abort())
             return (FALSE);
-        }
         if ((ch == 'y') || (ch == 'Y'))
             return (TRUE);
         if ((ch == 'n') || (ch == 'N'))
@@ -2166,8 +2168,9 @@ read_from_flash(uint bank, uint addr, void *buf, uint len)
 #endif
     rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
                         &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    cia_spin(CIA_USEC(100));
+    cia_spin(CIA_USEC(1000));
 
+    CACHE_FLUSH();
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
@@ -2278,6 +2281,7 @@ write_to_flash(uint bank, uint addr, void *buf, uint len)
                         &bankarg, sizeof (bankarg), NULL, 0, NULL);
     cia_spin(CIA_USEC(1000));
 
+    CACHE_FLUSH();
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
@@ -2322,6 +2326,7 @@ erase_flash_block(uint bank, uint addr)
         rc = rc1;
     cia_spin(CIA_USEC(1000));
 
+    CACHE_FLUSH();
     MMU_RESTORE();
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
@@ -2721,7 +2726,6 @@ usage:
                 fflush(stdout);
             }
             if (is_user_abort()) {
-                printf("^C\n");
                 rc = 2;
                 goto fail_end;
             }
@@ -3202,7 +3206,6 @@ usage:
             break;
         }
         if (is_user_abort()) {
-            printf("^C\n");
             rc = 2;
             break;
         }
@@ -3620,10 +3623,8 @@ main(int argc, char *argv[])
                 break;
             }
         }
-        if (is_user_abort()) {
-            printf("^C Abort\n");
+        if (is_user_abort())
             goto end_now;
-        }
     }
     if (loop < loops) {
         printf("Failed");
