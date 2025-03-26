@@ -193,7 +193,7 @@ $(OBJDIR)/%.elf: $(OBJS) $(LDSCRIPT) $(OPENCM3_LIB)
 # $(OBJS) to finally create fw.elf and fw.bin
 $(UBINARY).elf: $(UOBJS) usbdfu.ld $(OPENCM3_LIB)
 	@echo Building $@
-	$(QUIET)$(LD) --static -nostartfiles -nostdlib -Tusbdfu.ld -mthumb -mcpu=cortex-m3 -msoft-float -ggdb3 -Wl,-Map=$(UBINARY).map -Wl,--cref -Wl,--gc-sections -Llibopencm3/lib $(UOBJS) $(LDLIBS) -o $@
+	$(QUIET)$(LD) --static -nostartfiles -nostdlib -Tusbdfu.ld -mthumb -mcpu=cortex-m3 -msoft-float -ggdb3 -Wl,-Map=$(UBINARY).map -Wl,--cref -Wl,--gc-sections -L$(OPENCM3_DIR)/lib $(UOBJS) $(LDLIBS) -o $@
 
 $(DFUBIN_OBJ): $(UBINARY).bin Makefile
 	@echo Building $@

@@ -531,8 +531,8 @@ struct GfxBase {
 extern Screen sscreen;
 // extern struct Window window;
 
-Screen *OpenScreenTagList(struct NewScreen *, struct TagItem *);
-Screen *OpenScreenTags(struct NewScreen *, uint32_t, uint32_t, ...);
+Screen *OpenScreenTagList(struct NewScreen *ns, struct TagItem *taglist);
+Screen *OpenScreenTags(struct NewScreen *ns, ULONG taglist, ...);
 int     CloseScreen(struct Screen *screen);
 Window *OpenWindowTags(const struct NewWindow *newWindow,
                        uint32_t tag1Type, ... );

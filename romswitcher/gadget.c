@@ -409,7 +409,7 @@ DrawBevelBox(RastPort *rp, long left, long top, long width, long height,
         default:
         case BBFT_ICONDROPBOX:
             /* box for icon drop box imagery */
-        case BBFT_BUTTON:
+        case BBFT_BUTTON: {
             /* box for BUTTON_KIND gadgets (default) */
             int x1 = left;
             int x2 = left + width - 1;
@@ -421,6 +421,7 @@ DrawBevelBox(RastPort *rp, long left, long top, long width, long height,
             draw_line(top_pen, x1, y1, x1, y2);
             boxtype = 0;
             break;
+        }
         case BBFT_RIDGE: {
             /* box for STRING_KIND and INTEGER_KIND gadgets */
             int x1 = left;

@@ -36,16 +36,20 @@ init_screen_struct(void)
     sscreen.BlockPen = 2;
 }
 
-struct Screen *
-OpenScreenTagList(struct NewScreen *, struct TagItem *)
+Screen *
+OpenScreenTagList(struct NewScreen *ns, struct TagItem *taglist)
 {
+    (void) ns;
+    (void) taglist;
     init_screen_struct();
     return (&sscreen);
 }
 
-struct Screen *
-OpenScreenTags(struct NewScreen *, ULONG, ULONG, ...)
+Screen *
+OpenScreenTags(struct NewScreen *ns, ULONG taglist, ...)
 {
+    (void) ns;
+    (void) taglist;
     init_screen_struct();
     return (&sscreen);
 }

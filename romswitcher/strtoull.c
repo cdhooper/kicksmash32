@@ -127,6 +127,7 @@ strtoull(const char * nptr, char ** endptr, int base)
 //      errno = ERANGE;
     } else if (!any) {
 noconv:
+        ;
 //      errno = EINVAL;
     } else if (neg)
         acc = -acc;
