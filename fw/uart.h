@@ -53,7 +53,10 @@ int getchar(void);
  */
 void uart_init(void);
 
+void ami_rb_put(uint ch);
 void usb_rb_put(uint ch);
+
+uint ami_get_output(uint8_t **buf, uint maxlen);
 
 /*
  * input_break_pending() returns true if a ^C is pending in the input buffer.
@@ -67,6 +70,7 @@ int input_break_pending(void);
 
 void uart_putchar(int ch);
 void uart_puts(const char *str);
+void uart_puthex(uint32_t x);
 void uart_flush(void);
 int puts_binary(const void *buf, uint32_t len);
 

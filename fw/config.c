@@ -127,6 +127,7 @@ config_read(void)
                     config.bi.bi_bank_current = config.bi.bi_bank_poweron;
                     config.bi.bi_bank_nextreset = 0xff;
                 }
+                config.bi.bi_valid = 1;
                 if (config.led_level == 0)
                     config.led_level = 100;  // Old board
                 if (config.version < 2) {
@@ -147,6 +148,7 @@ config_read(void)
     config.ee_mode = 3;  // EE_MODE_AUTO
     config.led_level = 10;  // 10%
 
+    config.bi.bi_valid = 1;
     config.bi.bi_bank_current = 0;
     config.bi.bi_bank_nextreset = 0xff;
     config.bi.bi_bank_poweron = 0;

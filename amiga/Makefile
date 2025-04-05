@@ -16,13 +16,13 @@ OBJDIR       := objs
 ROM_OBJDIR   := objs.rom
 ROM_OBJDIR_D := objs.rom_d
 CRC32_C      := ../fw/crc32.c
-SMASH_SRCS   := smash.c sm_msg.c cpu_control.c $(CRC32_C)
+SMASH_SRCS   := smash.c sm_msg.c sm_msg_core.c cpu_control.c $(CRC32_C)
 SMASH_HDRS   := cpu_control.h sm_msg.h sm_file.h host_cmd.h \
                 ../fw/smash_cmd.h ../fw/crc32.h
 FS_SRCS      := fs_hand.c fs_timer.c fs_vol.c fs_packet.c \
-		printf.c sm_msg.c sm_file.c cpu_control.c $(CRC32_C)
+		printf.c sm_msg.c sm_msg_core.c sm_file.c cpu_control.c $(CRC32_C)
 FS_HDRS	     := fs_hand.h fs_packet.h fs_timer.h fs_vol.h printf.h
-FTP_SRCS     := smashftp.c smashftp_cli.c sm_msg.c cpu_control.c \
+FTP_SRCS     := smashftp.c smashftp_cli.c sm_msg.c sm_msg_core.c cpu_control.c \
 		readline.c sm_file.c $(CRC32_C)
 FTP_HDRS     := smashftp.h smashftp_cli.h readline.h
 FSROM_SRCS   := fs_rom.c \

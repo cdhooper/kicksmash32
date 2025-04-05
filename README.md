@@ -31,10 +31,11 @@ See [doc/AMIGACLI.md](doc/AMIGACLI.md) for usage examples.
 -------------------------------------------------------
 
 ## [ROM Switcher](doc/SWITCHER.md)
-The ROM switcher is a Kickstart module which, when linked with your
-favorite (3.1.4+ recommended) Kickstart image, will provide a list of
-ROM images and allow you to pick which one to use. It's recommended
-that you include the ROM switcher in your LongReset list.
+The ROM switcher is either a stand-alone ROM image or a Kickstart module
+which, when linked with your favorite (3.1.4+ recommended) Kickstart image,
+will provide a list of ROM images and allow you to pick which one to use.
+It's recommended that you include the ROM switcher in your LongReset list.
+<BR>
 [![rom switcher](doc/rom_switcher_teaser.jpg?raw=true "rom switcher")](doc/SWITCHER.md)
 
 See [doc/SWITCHER.md](doc/SWITCHER.md) for examples.
@@ -52,12 +53,15 @@ and host programs are
 -------------------------------------------------------
 
 ## [Which Kicksmash do I need?](doc/WHICH.md)
+<A HREF="doc/WHICH.md">
+<IMG SRC="photos/all_kicksmash_pcbs.jpg" WIDTH="60%">
+</A>
 
 Commodore produced a variety of Amiga machines over the years.
 Unlike the Zorro slot, one thing that they did not standardize is the
 location, orientation, and spacing of the ROM socket(s) in the machine.
-Very few of the Amigas have a compatible layout. In fact the only two
-are the Amiga 3000 and the original Amiga 4000.
+Very few of the Amiga models have a compatible layout. In fact the only
+two are the Amiga 3000 and the original Amiga 4000.
 
 [See doc/WHICH.md](doc/WHICH.md) for a guide on which KickSmash you
 should choose based on your Amiga model.

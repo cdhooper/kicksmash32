@@ -430,7 +430,10 @@ FillInfoBlock(FileInfoBlock_t *fib, fileattr_t *fattr, hm_fdirent_t *dent)
 
     fib->fib_Protection = dent->hmd_aperms;
     fib->fib_EntryType = fib->fib_DirEntryType;  // must be the same
-    fib->fib_Size = dent->hmd_size_lo;
+    if (dent->hmd_size_hi != 0)
+        fib->fib_Size = 0xffffffff;
+    else
+        fib->fib_Size = dent->hmd_size_lo;
     fib->fib_NumBlocks = dent->hmd_blks;
 
     fib->fib_Comment[0] = 0;
@@ -1255,7 +1258,8 @@ action_set_date(void)
 
     sec = amiga_datestamp_to_unix_time(ds, &nsec);
 
-    /* Example
+    /*
+     * Example
      * setdate tt:9 12-10-2024 10:30:02
      * Fri Oct 12 10:30:02 PDT 2024
      *     Days 17086

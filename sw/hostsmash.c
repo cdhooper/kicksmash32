@@ -1928,7 +1928,7 @@ ask_again:
  *
  * @param  [io]  buf     - Buffer to modify.
  * @param  [in]  len     - Length of data in the buffer.
- * @gloabl [in]  dir     - Image swap direction (SWAP_TO_ROM or SWAP_FROM_ROM)
+ * @global [in]  dir     - Image swap direction (SWAP_TO_ROM or SWAP_FROM_ROM)
  * @return       None.
  */
 static void
@@ -2559,7 +2559,7 @@ fail_verify_read:
             if (first_fail_pos == -1)
                 first_fail_pos = pos;
             if (miscompares == miscompares_max) {
-                /* Report now and only count futher miscompares */
+                /* Report now and only count further miscompares */
                 show_fail_range(filebuf, eebuf, pos - first_fail_pos + 1,
                                 addr, first_fail_pos, miscompares_max);
                 first_fail_pos = -1;
@@ -3333,7 +3333,7 @@ send_ks_cmd_core(uint cmd, uint len, void *buf)
     uint32_t crc;
     uint16_t txlen = len;
     uint16_t txcmd = cmd;
-    uint     len_roundup = (len + 1) & ~1;
+    uint     len_roundup = (len + 3) & ~3;
 
     crc = crc32r(0, &txlen, 2);
     crc = crc32r(crc, &txcmd, 2);
@@ -3505,7 +3505,7 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
                 break;
             case 9:  // Length phase 2
                 len |= (ch << 8);
-                len_roundup = (len + 1) & ~1; // Round up for odd length
+                len_roundup = (len + 3) & ~3; // Round up for odd length
                 pos++;
                 break;
             case 10:  // Command phase 1
@@ -3521,14 +3521,6 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
                     /* CRC */
                     uint crcpos = (pos - len_roundup - KS_MSG_HEADER_LEN) ^ 2;
                     crc_rx |= (ch << (8 * crcpos));
-#if 0
-#ifdef ENDIAN_IS_BIG
-                    crc_rx = (crc_rx << 8) | ch;
-#else
-                    uint shift = 8 * (pos - len - KS_MSG_HEADER_LEN);
-                    crc_rx |= (ch << shift);
-#endif
-#endif
                 }
                 if (pos == len_roundup + KS_MSG_HEADER_LEN + 3) {
                     /* Last byte of CRC */
@@ -4462,10 +4454,15 @@ sm_loopback(km_msg_hdr_t *km, uint8_t *rxdata, uint rxlen, uint *status)
     km->km_status = KM_STATUS_OK;
     km->km_op |= KM_OP_REPLY;
 #if 0
-    fsprintf("lb l=%x s=%04x data=%02x %02x\n",
-             rxlen, status, rxdata[0], rxdata[1]);
-#endif
+    printf("lb l=%x s=%04x data=%02x %02x\n",
+             rxlen, *status, rxdata[0], rxdata[1]);
+    int rc = send_msg(rxdata, rxlen, status);
+    if (rc != 0)
+        printf("[%d]\n", rc);
+    return (rc);
+#else
     return (send_msg(rxdata, rxlen, status));
+#endif
 }
 
 static uint
@@ -6638,10 +6635,10 @@ errx(EXIT_FAILURE, "how did we get here?");
                 break;
             case 'c':
                 if (strcmp(optarg, "set") == 0) {
-                    mode |= MODE_CLOCK_GET;
+                    mode |= MODE_CLOCK_SET;
                 } else if ((strcmp(optarg, "show") == 0) ||
                            (strcmp(optarg, "get") == 0)) {
-                    mode |= MODE_CLOCK_SET;
+                    mode |= MODE_CLOCK_GET;
                 } else {
                     errx(EXIT_FAILURE, "Invalid clock '%s': use set or show\n",
                          optarg);

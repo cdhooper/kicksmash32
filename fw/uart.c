@@ -48,8 +48,12 @@ static volatile uint cons_in_rb_producer; // Console input current writer pos
 static uint          cons_in_rb_consumer; // Console input current reader pos
 static uint8_t       cons_in_rb[4096];    // Console input ring buffer (FIFO)
 static uint8_t       usb_out_buf[4096];   // USB output buffer
+static uint8_t       ami_out_buf[1024];   // Amiga output buffer
 static uint16_t      usb_out_bufpos = 0;  // USB output buffer position
+static uint16_t      ami_out_prod = 0;    // Amiga output buffer producer
+static uint16_t      ami_out_cons = 0;    // Amiga output buffer consumer
 static bool          uart_console_active = false;
+static bool          ami_console_active = false;
 
 uint8_t last_input_source = 0;
 
@@ -232,6 +236,12 @@ input_break_pending(void)
 }
 
 void
+ami_rb_put(uint ch)
+{
+    cons_rb_put(ch);
+}
+
+void
 usb_rb_put(uint ch)
 {
     cons_rb_put(ch);
@@ -280,6 +290,55 @@ usb_putchar_wait(int ch)
         }
     }
     usb_putchar(ch);
+}
+
+static void
+ami_putchar(int ch)
+{
+    uint new_prod = (ami_out_prod + 1) % sizeof (ami_out_buf);
+    if (new_prod == ami_out_cons)
+        return;  // Buffer full
+    ami_out_buf[ami_out_prod] = ch;
+    ami_out_prod = new_prod;
+}
+
+uint
+ami_get_output(uint8_t **buf, uint maxlen)
+{
+    uint count;
+    ami_console_active = true;
+    if (ami_out_prod >= ami_out_cons)
+        count = ami_out_prod - ami_out_cons;
+    else
+        count = sizeof (ami_out_buf) - ami_out_cons;
+    if (count > maxlen)
+        count = maxlen;
+    if (count > 0) {
+        *buf = ami_out_buf + ami_out_cons;
+        ami_out_cons = (ami_out_cons + count) % sizeof (ami_out_buf);
+        return (count);
+    }
+    *buf = NULL;
+    return (0);
+}
+
+static void
+ami_putchar_wait(int ch)
+{
+    if (ami_console_active == true) {
+        uint new_prod = (ami_out_prod + 1) % sizeof (ami_out_buf);
+        if (new_prod == ami_out_cons) {
+            /* Buffer is full; need to first force a flush */
+            uint64_t timeout = timer_tick_plus_msec(10);
+            while (new_prod == ami_out_cons) {
+                if (timer_tick_has_elapsed(timeout)) {
+                    ami_console_active = false;
+                    return;
+                }
+            }
+        }
+        ami_putchar(ch);
+    }
 }
 
 static int
@@ -340,10 +399,13 @@ putchar(int ch)
     if ((ch == '\n') && (last_putc != '\r') && (last_putc != '\n')) {
         uart_putchar('\r');  // Always do CRLF
         usb_putchar_wait('\r');
+        ami_putchar_wait('\r');
     }
     last_putc = ch;
 
     usb_putchar_wait(ch);
+    if (ami_console_active)
+        ami_putchar_wait(ch);
     if (usb_console_active && !uart_console_active)
         return (0);
     uart_putchar(ch);
@@ -379,6 +441,27 @@ getchar(void)
         }
     }
     return (ch);
+}
+
+void
+uart_puts(const char *str)
+{
+    while (*str != '\0')
+        uart_putchar(*(str++));
+}
+
+void
+uart_puthex(uint32_t x)
+{
+    uint32_t digit;
+    char buf[32];
+    char *ptr = buf + sizeof (buf) - 1;
+    *ptr = '\0';
+    for (digit = 0; digit < 8; digit++) {
+        *(--ptr) = "0123456789abcdef"[x & 0xf];
+        x >>= 4;
+    }
+    uart_puts(ptr);
 }
 
 void

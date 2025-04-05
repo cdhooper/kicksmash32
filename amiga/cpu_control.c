@@ -74,7 +74,7 @@ get_cpu(void)
 {
     unsigned int cpu_type = 0;
 
-    __asm__ volatile (
+    __asm__ volatile(
         "move.l #68000, %0\n"      // Default to 68000
         "movec.l  cacr, d0\n"      // Check for 68020+
         "bne 1f\n"                 // If nonzero, it's 68020+
@@ -253,7 +253,7 @@ cpu_cache_flush(void)
 void
 cpu_control_init(void)
 {
-#if !defined( _DCC) && !defined(STANDALONE)
+#if !defined(_DCC) && !defined(STANDALONE)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds="
     SysBase = *(struct ExecBase **)4UL;

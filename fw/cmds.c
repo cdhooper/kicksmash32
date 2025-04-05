@@ -155,6 +155,7 @@ const char cmd_test_patterns[] =
     "<mode> may be one, zero, rand, walk0, walk1, or read\n";
 
 const char cmd_time_help[] =
+"time amiga     - tracked Amiga time\n"
 "time cmd <cmd> - measure command execution time\n"
 #ifndef AMIGA
 "time now       - display the current time\n"

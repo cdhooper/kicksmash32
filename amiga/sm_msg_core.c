@@ -26,21 +26,20 @@
 #include "host_cmd.h"
 #include "cpu_control.h"
 
+#define CIAA_TBLO        ADDR8(0x00bfe601)
+#define CIAA_TBHI        ADDR8(0x00bfe701)
+#define ROM_BASE         0x00f80000  /* Base address of Kickstart ROM */
+
+#define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
+
+uint smash_cmd_shift = 2;
+extern uint flag_debug;
+
+#ifdef ROMFS
 #define crc32 lcrc32
 #define cia_ticks lcia_ticks
 #define cia_spin lcia_spin
 
-#define CIAA_TBLO        ADDR8(0x00bfe601)
-#define CIAA_TBHI        ADDR8(0x00bfe701)
-
-#define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
-
-#define ROM_BASE         0x00f80000  /* Base address of Kickstart ROM */
-
-extern uint smash_cmd_shift;
-extern uint flag_debug;
-
-#ifdef ROMFS
 #define TEXT_TO_RAM  __attribute__((section(".text_to_ram")))
 #define CONST_TO_RAM const __attribute__((section(".data")))
 #else
@@ -48,6 +47,7 @@ extern uint flag_debug;
 #define CONST_TO_RAM
 #endif
 
+#ifdef ROMFS
 /*
  * STM32 CRC polynomial (also used in ethernet, SATA, MPEG-2, and ZMODEM)
  *      x^32 + x^26 + x^23 + x^22 + x^16 + x^12 + x^11 + x^10 + x^8 +
@@ -200,6 +200,7 @@ cia_spin(unsigned int ticks)
         __asm__ __volatile__("nop");
     }
 }
+#endif
 
 /*
  * rom_wait_recover
@@ -218,7 +219,7 @@ rom_wait_recover(void)
     uint     timeout = 0;
     cia_spin(CIA_USEC(30));
 
-    /* Wait until Kickstart ROM data is consistent for 2 ms */
+    /* Wait until Kickstart ROM data is consistent for 5 ms */
     for (pos = 0; pos < 100; pos++) {
         cur = *VADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
         if ((last != cur) || (*VADDR32(ROM_BASE) != 0x11144ef9)) {
@@ -227,7 +228,7 @@ rom_wait_recover(void)
             pos = 0;
             last = cur;
         }
-        cia_spin(CIA_USEC(20));
+        cia_spin(CIA_USEC(50));
     }
 }
 
@@ -306,6 +307,10 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     for (pos = 0; pos < (arglen + 1) / sizeof (uint16_t); pos++) {
         (void) *VADDR32(ROM_BASE + (argbuf[pos] << smash_cmd_shift));
     }
+    if (pos & 1) {
+        /* Pad to 32-bit alignment */
+        (void) *VADDR32(ROM_BASE + (0xaaaa << smash_cmd_shift));
+    }
 
     /* CRC high and low words */
     (void) *VADDR32(ROM_BASE + ((crc >> 16) << smash_cmd_shift));
@@ -340,8 +345,9 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             val = (uint16_t) val32;
         } else {
             val32 = *VADDR32(ROM_BASE + 0x1554); // remote addr 0x0555 or 0x0aaa
+#undef SM_MSG_DEBUG
 #ifdef SM_MSG_DEBUG
-            *VADDR32(0x7770030 + word * 2) = val32;
+            *VADDR32(0x77780 + word * 2) = val32;
 #endif
             val = val32 >> 16;
         }
@@ -382,7 +388,14 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     if (replyalen != NULL)
         *replyalen = replylen;
 
-    replyround = (replylen + 1) & ~1;  // Round up reply length to word
+#ifdef SM_MSG_DEBUG
+    uint16_t *dptr = (uint16_t *) ADDR16(0x77700);
+    for (pos = 0; pos < ARRAY_SIZE(sm_magic); pos++)
+        *(dptr++) = sm_magic[pos];
+    *(dptr++) = replylen;
+    *(dptr++) = replystatus;
+#endif
+    replyround = (replylen + 3) & ~3;  // Round up reply length to long
 
     if (replyround > replymax) {
         replystatus = MSG_STATUS_BAD_LENGTH;
@@ -404,11 +417,11 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
                 val = (uint16_t) val32;
             } else {
                 val32 = *VADDR32(ROM_BASE);
-#ifdef SM_MSG_DEBUG
-                *VADDR32(0x7770030 + word * 2) = val32;
-#endif
                 val = val32 >> 16;
             }
+#ifdef SM_MSG_DEBUG
+            *(dptr++) = val;
+#endif
             *(replybuf++) = val;
         }
     }
@@ -419,19 +432,14 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     }
 
     /* Read CRC */
-    if (word & 1) {
-        replycrc = (val32 << 16) | *VADDR16(ROM_BASE);
-    } else {
-        replycrc = *VADDR32(ROM_BASE);
-    }
+    replycrc = *VADDR32(ROM_BASE);
 
-scc_cleanup:
-#if 0
-    /* Debug cleanup */
-    for (pos = 0; pos < 4; pos++)
-        *VADDR32(0x7770010 + pos * 4) = *VADDR32(ROM_BASE);
+#ifdef SM_MSG_DEBUG
+    *(dptr++) = replycrc >> 16;
+    *(dptr++) = replycrc;
 #endif
 
+scc_cleanup:
     if ((replystatus & 0xffffff00) != 0) {
         rom_wait_recover();  // Wait until ROM is accessible again
     }
@@ -442,10 +450,19 @@ scc_cleanup:
 #ifdef SM_MSG_DEBUG
             *VADDR32(0x7770000) = crc;
             *VADDR32(0x7770004) = replycrc;
+            *(dptr++) = crc >> 16;
+            *(dptr++) = crc;
+            *(dptr++) = 0;
+            *(dptr++) = 0;
+            *(dptr++) = 0xdead;
+            *(dptr++) = 0xdead;
 #endif
             return (MSG_STATUS_BAD_CRC);
         }
     }
-    rom_wait_normal(rombase_value);
+
+    /* Wait for ROM to be normal unless it's a flash operation */
+    if ((cmd & 0xf0) != KS_CMD_FLASH_READ)
+        rom_wait_normal(rombase_value);
     return (replystatus);
 }

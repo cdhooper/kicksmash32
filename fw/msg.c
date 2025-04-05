@@ -122,7 +122,7 @@ static uint8_t  msg_lock;       // Bits !USB 0=atou 1=utoa, !Amiga 2=atou 3=utoa
 static uint     consumer_wrap;
 static uint     consumer_wrap_last_poll;
 static uint     rx_consumer = 0;
-static uint64_t amiga_time = 0;           // Seconds and microseconds
+uint64_t        amiga_time = 0;           // Seconds and microseconds
 static uint64_t expire_update_amiga_app;  // Expiration time for last Amiga app
 static uint64_t expire_update_usb_app;    // Expiration time for last USB app
 static uint16_t state_amiga_app;          // Amiga app state
@@ -159,7 +159,6 @@ ALIGN uint16_t buffer_a[ADDR_BUF_COUNT];
 ALIGN uint16_t buffer_b[ADDR_BUF_COUNT];
 ALIGN uint16_t buffer_c[ADDR_BUF_COUNT];
 ALIGN uint16_t buffer_d[ADDR_BUF_COUNT];
-
 
 static uint
 gpio_watch(void)
@@ -270,7 +269,7 @@ gpio_showbuf(uint count)
  *
  * Producer / consumer scenarios
  *  _ _ _ _ _ _ _ _    _ _ _ _ _ _ _ _    _ _ _ _ _ _ _ _
- * |.|_|_|.|.|.|.|.|  |_|.|.|_|_|_|_|_|  |_|_|_|_|_|_|_|_|
+ * |#|_|_|#|#|#|#|#|  |_|#|#|_|_|_|_|_|  |_|_|_|_|_|_|_|_|
  *    P   C              C   P              C
  *    r   o              o   r              o
  *    o   n              n   o              P
@@ -326,6 +325,7 @@ utoa_add(uint len, void *ptr)
         memcpy(msg_utoa + prod_utoa, sptr, xlen);
         memcpy(msg_utoa, sptr + xlen, len - xlen);
     }
+    __asm__ volatile("dmb");
     prod_utoa = (prod_utoa + len) & (sizeof (msg_utoa) - 1);
     messages_utoa++;
     return (0);
@@ -358,7 +358,7 @@ atou_next_msg_len(void)
     }
 
     len     = *(uint16_t *) (msg_atou + pos);
-    len     = (len + 1) & ~1;  // Round up
+    len     = (len + 3) & ~3;  // Round up
     return (len + KS_HDR_AND_CRC_LEN);
 }
 
@@ -387,7 +387,7 @@ utoa_next_msg_len(void)
     }
 
     len     = *(uint16_t *) (msg_utoa + pos);
-    len     = (len + 1) & ~1;  // Round up
+    len     = (len + 3) & ~3;  // Round up
     return (len + KS_HDR_AND_CRC_LEN);
 }
 
@@ -654,6 +654,18 @@ configure_oe_capture_rx(bool verbose)
  * This function sends a reply message to the Amiga host operating system.
  * It will disable flash output and drive data lines directly from the STM32.
  * This routine is called from interrupt context.
+ *
+ * flags  - message send flags
+ *          0               - normal message; encapsulate with header + CRC
+ *          KS_REPLY_RAW    - do not encapsulate the message with header + CRC
+ *          KS_REPLY_WR     - enable flash write latch during transfer
+ *          KS_REPLY_WR_RAW - do not encapsulate and enable flash write latch
+ * status - reply status, stored in the cmd field of the message header.
+ * rlen1  - Length of the reply message (first part).
+ *          This length may be zero if the reply is just status.
+ * rbuf1  - Reply message buffer (first part).
+ * rlen2  - Length of the second part of the reply message (optional).
+ * rbuf2  - Second part of the reply message buffer (optional).
  */
 static void
 ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
@@ -687,15 +699,23 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
 
     if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
         /*
-         * For 32-bit mode, we need to separate low and high 16 bits as
-         * they are driven out by separate DMA engines (TIM5 and TIM2).
+         * For 32-bit mode, separate low and high 16 bits as they are
+         * driven out by separate DMA engines (TIM5 and TIM2).
          */
         uint32_t *rbp;
+        uint32_t  val;
+        uint      rlen1_odd = (rlen1 + 1) & 2;
+        /*
+         * Calculation for rlen alignment:
+         *     (rlen1 & 3) == 0: EVEN (ends on 32-bit boundary)
+         *     (rlen1 & 3) == 1: ODD
+         *     (rlen1 & 3) == 2: ODD
+         *     (rlen1 & 3) == 3: EVEN (ends on 32-bit boundary)
+         */
         if (flags & KS_REPLY_RAW) {
-            uint     rlen1_orig = rlen1;
+            /* Raw message -- send without header or CRC */
             uint16_t *txl = (uint16_t *)buffer_txd_lo;
             uint16_t *txh = (uint16_t *)buffer_txd_hi;
-            uint32_t val;
 
             if (ee_mode == EE_MODE_32_SWAP) {
                 txl = (uint16_t *)buffer_txd_hi;
@@ -712,11 +732,11 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             }
             if (rlen2 != 0) {
                 uint32_t *rbp2 = (uint32_t *) rbuf2;
-                uint      rlen2_orig = rlen2;
+                uint      rlen2_odd = (rlen2 + 1) & 2;
 
                 rlen2 = (rlen2 + 3) / 4;
 
-                if ((rlen1_orig & 3) == 0) {
+                if (rlen1_odd == 0) {
                     /* First chunk was even multiple of 4 bytes */
                     for (count = rlen2; count != 0; count--) {
                         val = *(rbp2++);
@@ -732,12 +752,13 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
                         *(txl++) = (uint16_t) val;
                         *(txh++) = val >> 16;
                     }
-                    if ((rlen2_orig & 3) != 0)
+                    if (rlen2_odd)
                         txh--;          // Odd first + odd second = even
                 }
             }
             pos = (rlen + 3) / 4;
         } else {
+            /* Encapsulate reply data in header + CRC */
             uint16_t *txl = (uint16_t *)buffer_txd_lo;
             uint16_t *txh = (uint16_t *)buffer_txd_hi;
             uint32_t crc;
@@ -752,19 +773,40 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             crc = crc32r(crc, &status, 2);
             crc = crc32(crc, rbuf1, rlen1);
 
-            for (count = rlen1 / 4; count > 0; count--, pos++) {
-                uint32_t val = *(rbp++);
+            for (count = (rlen1 + 3) / 4; count > 0; count--) {
+                val = *(rbp++);
                 *(txh++) = (val << 8)  | ((val >> 8) & 0x00ff);
                 *(txl++) = (val >> 24) | ((val >> 8) & 0xff00);
             }
             if (rlen2 != 0) {
+                uint rlen2_odd = (rlen2 + 1) & 2;
+
                 crc = crc32(crc, rbuf2, rlen2);
                 rbp = (uint32_t *) rbuf2;
-                for (count = rlen2 / 4; count > 0; count--, pos++) {
-                    uint32_t val = *(rbp++);
-                    *(txh++) = (val << 8)  | ((val >> 8) & 0x00ff);
-                    *(txl++) = (val >> 24) | ((val >> 8) & 0xff00);
+                if (rlen1_odd == 0) {
+                    /* First chunk was even multiple of 4 bytes */
+                    for (count = (rlen2 + 3) / 4; count > 0; count--) {
+                        val = *(rbp++);
+                        *(txh++) = (val << 8)  | ((val >> 8) & 0x00ff);
+                        *(txl++) = (val >> 24) | ((val >> 8) & 0xff00);
+                    }
+                } else {
+                    /* First chunk was not even multiple of 4 bytes */
+                    txl--;   // Fixup first chunk overrun
+
+                    for (count = (rlen2 + 3) / 4; count > 0; count--) {
+                        val = *(rbp++);
+                        *(txl++) = (val << 8)  | ((val >> 8) & 0x00ff);
+                        *(txh++) = (val >> 24) | ((val >> 8) & 0xff00);
+                    }
+                    if (rlen2_odd) {
+                        txh--;              // Odd first + odd second = even
+                    } else {
+                        *(txl++) = 0xaaaa;  // Align for CRC
+                    }
                 }
+            } else if (rlen1_odd) {
+                txl[-1] = 0xbbbb;  // Alignment data (DEBUG)
             }
             *(txh++) = crc >> 16;
             *(txl++) = (uint16_t) crc;
@@ -905,7 +947,7 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
 
     while (dma_last != 0) {
         dma_left = dma_get_number_of_data(DMA2, DMA_CHANNEL5);
-        while (dma_last == dma_left) {
+        if (dma_last == dma_left) {
             for (count = 0; dma_last == dma_left; count++) {
                 if (count > 100000) {
                     if (flags & KS_REPLY_WE)
@@ -1020,6 +1062,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint len1;
             uint len2;
             uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
+            raw_len = (raw_len + 3) & ~3;                 // round up
+
+            /* Compute start of raw message */
             cons_s = rx_consumer - (raw_len - 2 + 1) / 2;
             if ((int) cons_s >= 0) {
                 /* Send data doesn't wrap */
@@ -1073,8 +1118,12 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 break;
             }
 
+            /* Compute start of message payload */
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+
             /* Capture addresses and data */
-            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
             for (pos = 0; pos < cmd_len / 2; pos++) {
                 *(valuep++) = buffer_rxa_lo[cons_s];
                 if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
@@ -1135,7 +1184,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             };
             uint32_t wdata;
 
-            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            /* Compute start of message payload */
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
             if ((int) cons_s < 0)
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
 
@@ -1205,7 +1255,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                     break;
                 }
-                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+
+                /* Compute start of message payload */
+                cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
                 if ((int) cons_s < 0)
                     cons_s += ARRAY_SIZE(buffer_rxa_lo);
                 for (pos = 0; pos < sizeof (config.name); pos += 2) {
@@ -1225,7 +1277,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 uint8_t pos;
                 uint8_t count;
                 uint8_t tcount;
-                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+
+                /* Compute start of message payload */
+                cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
                 if ((int) cons_s < 0)
                     cons_s += ARRAY_SIZE(buffer_rxa_lo);
                 pos   = buffer_rxa_lo[cons_s] >> 8;
@@ -1260,7 +1314,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 /* First byte is start position and second is count */
                 uint8_t pos;
                 uint8_t count;
-                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+
+                /* Compute start of message payload */
+                cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
                 if ((int) cons_s < 0)
                     cons_s += ARRAY_SIZE(buffer_rxa_lo);
                 pos   = buffer_rxa_lo[cons_s] >> 8;
@@ -1282,6 +1338,40 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             }
             break;
         }
+        case KS_CMD_CONS_OUTPUT: {
+            /* Output from Kicksmash */
+            uint8_t *buf;
+            uint16_t len;
+            uint     maxlen;
+
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            maxlen = buffer_rxa_lo[cons_s];
+            len = ami_get_output(&buf, maxlen);
+            ks_reply(0, KS_STATUS_OK, len, buf, 0, NULL);
+            break;
+        }
+        case KS_CMD_CONS_INPUT: {
+            /* Keystroke input to Kicksmash */
+            uint pos;
+
+            /* Compute start of message payload */
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            for (pos = 0; pos < cmd_len; pos++) {
+                uint16_t v = buffer_rxa_lo[cons_s];
+                ami_rb_put(v >> 8);
+                if (++pos < cmd_len) {
+                    ami_rb_put((uint8_t) v);
+                }
+                if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
+                    cons_s = 0;
+            }
+            ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            break;
+        }
         case KS_CMD_BANK_INFO:
             /* Get bank info */
             ks_reply(0, KS_STATUS_OK, sizeof (config.bi), &config.bi, 0, NULL);
@@ -1289,7 +1379,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
         case KS_CMD_BANK_SET: {
             /* Set ROM bank (options in high bits of command) */
             uint16_t bank;
-            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+
+            /* Compute start of message payload */
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
             if ((int) cons_s < 0)
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
             bank = buffer_rxa_lo[cons_s];
@@ -1330,7 +1422,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint8_t  bank_start;  // first bank number
             uint8_t  bank_end;    // last bank number
             uint     banks_add;   // additional banks past first
-            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+
+            /* Compute start of message payload */
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
             if ((int) cons_s < 0)
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
             bank = buffer_rxa_lo[cons_s];
@@ -1389,7 +1483,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint     slen;
             uint     pos = 0;
             uint8_t *ptr;
-            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+
+            /* Compute start of message payload */
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
             if ((int) cons_s < 0)
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
             bank = buffer_rxa_lo[cons_s];
@@ -1423,7 +1519,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint    bank;
             uint8_t banks[ROM_BANKS];
 
-            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+            /* Compute start of message payload */
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
             if ((int) cons_s < 0)
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
             if (cmd_len != sizeof (config.bi.bi_longreset_seq)) {
@@ -1467,7 +1564,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                     break;
                 }
-                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+
+                /* Compute start of message payload */
+                cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
                 if ((int) cons_s < 0)
                     cons_s += ARRAY_SIZE(buffer_rxa_lo);
                 mask = buffer_rxa_lo[cons_s];
@@ -1544,7 +1643,10 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint len1;
             uint len2;
             uint rc;
-            cons_s = rx_consumer - (raw_len - 1) / 2;
+            raw_len = (raw_len + 3) & ~3;  // round up
+
+            /* Compute start of raw message */
+            cons_s = rx_consumer - (raw_len - 2 + 1) / 2;
 
             if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(2))) ||
                 (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(3)))) {
@@ -1561,6 +1663,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 } else {
                     rc = utoa_add(len1, buf1);
                 }
+                len2 = 0;
             } else {
                 /* Send data from end of buffer + beginning of buffer */
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
@@ -1572,24 +1675,16 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 buf2 = (uint8_t *) buffer_rxa_lo;
 
                 if ((cmd & KS_MSG_ALTBUF) == 0) {
-                    if (raw_len > SPACE_AVAIL_ATOU) {
-                        rc = 1;
-                    } else {
-                        rc = atou_add(len1, buf1);
-                        if (rc == 0) {
-                            rc = atou_add(len2, buf2);
-                            messages_atou--;
-                        }
+                    rc = atou_add(len1, buf1);
+                    if (rc == 0) {
+                        rc = atou_add(len2, buf2);
+                        messages_atou--;
                     }
                 } else {
-                    if (raw_len > SPACE_AVAIL_UTOA) {
-                        rc = 1;
-                    } else {
-                        rc = utoa_add(len1, buf1);
-                        if (rc == 0) {
-                            rc = utoa_add(len2, buf2);
-                            messages_utoa--;
-                        }
+                    rc = utoa_add(len1, buf1);
+                    if (rc == 0) {
+                        rc = utoa_add(len2, buf2);
+                        messages_utoa--;
                     }
                 }
             }
@@ -1597,6 +1692,10 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
             } else {
 #if 0
+                /*
+                 * XXX: This code never worked because the size transferred
+                 *      is noly 2 bytes.
+                 */
                 uint16_t space_avail;
                 if ((cmd & KS_MSG_ALTBUF) == 0)
                     space_avail = SPACE_AVAIL_ATOU;
@@ -1608,6 +1707,11 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
 #endif
             }
+#ifdef UMSG_DEBUG
+            char sbuf[16];
+            sprintf(sbuf, " AS%u", len1 + len2);
+            uart_puts(sbuf);
+#endif
             break;
         }
         case KS_CMD_MSG_RECEIVE: {
@@ -1660,11 +1764,20 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 cons_utoa = (cons_utoa + len) & (sizeof (msg_utoa) - 1);
             else
                 cons_atou = (cons_atou + len) & (sizeof (msg_atou) - 1);
+#ifdef UMSG_DEBUG
+            char sbuf[16];
+            sprintf(sbuf, " AR%u", len1 + len2);
+            uart_puts(sbuf);
+            if (len2 != 0)
+                uart_putchar('*');
+#endif
             break;
         }
         case KS_CMD_MSG_LOCK: {
             uint lockbits;
-            cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+
+            /* Compute start of message payload */
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
             if ((int) cons_s < 0)
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
             lockbits = buffer_rxa_lo[cons_s];
@@ -1705,7 +1818,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     break;
                 }
 
-                cons_s = rx_consumer - (cmd_len + 1) / 2 - 1;
+                /* Compute start of message payload */
+                cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
                 if ((int) cons_s < 0)
                     cons_s += ARRAY_SIZE(buffer_rxa_lo);
                 for (pos = 0; pos < 4; pos++) {
@@ -1853,7 +1967,7 @@ new_cmd_post:
                     magic_pos = 0;  // Invalid length
                     break;
                 }
-                len = (cmd_len + 1) / 2;
+                len = (cmd_len + 3) / 4 * 2;  // Even number of 16-bit words
                 magic_pos++;
                 break;
             case ARRAY_SIZE(sm_magic) + 1:
@@ -1920,8 +2034,6 @@ new_cmd_post:
                     printf("\n");
 #endif  // CRC_DEBUG
                 } else {
-                    cmd_len = (cmd_len + 1) & ~1;  // round up
-
                     /* Execution phase */
                     execute_cmd(cmd, cmd_len);
                 }
@@ -2424,8 +2536,9 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
         }
         case KS_CMD_MSG_SEND: {
             uint64_t new_expire;
-            uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
             uint rc;
+            uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
+            raw_len = (raw_len + 3) & ~3;                 // round up
 
             if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(1))) ||
                 (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(0)))) {
@@ -2446,6 +2559,12 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             new_expire = timer_tick_plus_msec(1000);
             if (expire_update_usb_app < new_expire)
                 expire_update_usb_app = new_expire;
+#ifdef UMSG_DEBUG
+            char sbuf[16];
+//          sprintf(sbuf, " US%u,%u", raw_len, SPACE_INUSE_UTOA);
+            sprintf(sbuf, " US%u", raw_len);
+            uart_puts(sbuf);
+#endif
             break;
         }
         case KS_CMD_MSG_RECEIVE: {
@@ -2504,6 +2623,13 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             new_expire = timer_tick_plus_msec(1000);
             if (expire_update_usb_app < new_expire)
                 expire_update_usb_app = new_expire;
+#ifdef UMSG_DEBUG
+            char sbuf[16];
+            sprintf(sbuf, " UR%u", len1 + len2);
+            uart_puts(sbuf);
+            if (len2 != 0)
+                uart_putchar('*');
+#endif
             break;
         }
         case KS_CMD_MSG_LOCK: {
@@ -2626,7 +2752,7 @@ msg_usb_service(void)
                 break;
             case 9:  // Length phase 2
                 len |= (ch << 8);
-                len_rounded = (len + 1) & ~1;
+                len_rounded = (len + 3) & ~3;
                 if (len > sizeof (usb_msg_buffer) - 16) {
                     /* Bad length */
                     pos = 0;

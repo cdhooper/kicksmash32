@@ -911,7 +911,8 @@ skip_center_button:
     Text(rp, text, chars);
 }
 
-/* show_bank_table_column
+/*
+ * show_bank_table_column
  * ----------------------
  * Show a column of the ROM bank information table
  */
@@ -1637,8 +1638,8 @@ draw_page(void)
     static UBYTE undo_buffer[128];
     static struct StringExtend StringExt = {
             NULL,
-            { 2,3, },
-            { 3,2, },
+            { 2, 3, },
+            { 3, 2, },
             0,
             NULL,
             NULL,
@@ -1650,7 +1651,7 @@ draw_page(void)
             0,
             15,
             0,
-            0,0,0,0,0,
+            0, 0, 0, 0, 0,
             (APTR)&StringExt,
             0,
             NULL
@@ -1659,12 +1660,12 @@ draw_page(void)
     LastAdded->SpecialInfo = &sinfo;
 #endif
 
-   /*
-    * To read a string gadget's buffer, look at the Gadget's StringInfo Buffer:
-    * ((struct StringInfo *)gad->SpecialInfo)->Buffer
-    *
-    * ActivateGadget() to activate a specific gadget
-    */
+    /*
+     * To read a string gadget's buffer, look at the Gadget's StringInfo Buffer:
+     * ((struct StringInfo *)gad->SpecialInfo)->Buffer
+     *
+     * ActivateGadget() to activate a specific gadget
+     */
 
     /* PowerOn select radio */
     char *poweron_sel_labels[] = { "", "", "", "", "", "", "", "", NULL };

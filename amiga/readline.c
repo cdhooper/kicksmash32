@@ -495,12 +495,10 @@ redraw_prompt:
             /* ESC initiates an Escape sequence */
             input_mode = INPUT_MODE_ESC;
             break;
-#ifdef AMIGA
         case KEY_AMIGA_ESC:
             /* Amiga ESC initiates an Escape [ sequence */
             input_mode = INPUT_MODE_BRACKET;
             break;
-#endif
         case KEY_CLEAR_TO_START:
             /* Delete all text to the left of the cursor */
             putchars(KEY_BACKSPACE, input_pos);

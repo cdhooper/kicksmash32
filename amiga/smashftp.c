@@ -148,6 +148,25 @@ print_us_diff(uint64_t start, uint64_t end)
 }
 #endif
 
+char *
+ull_to_str(unsigned long long val, char *buf, int bufsize)
+{
+    char *ptr = buf + bufsize;
+
+    if (ptr == buf)
+        return (NULL);  // no space
+    *(--ptr) = '\0';
+
+    while (val != 0) {
+        if (ptr == buf)
+            return (NULL);  // overflow
+        *(--ptr) = (val % 10) + '0';
+        val /= 10;
+
+    }
+    return (ptr);
+}
+
 static uint
 calc_kb_sec(uint usecs, uint64_t bytes)
 {
@@ -1642,14 +1661,12 @@ show_dirent(hm_fdirent_t *dent, uint flags)
         noslash = 1;
     }
     if (flags & (LS_FLAG_LIST | LS_FLAG_LONG)) {
-        if (dent->hmd_size_hi != 0) {
-            /* Work around fact clib2 can't print 64-bit values */
-            uint gb = (((uint64_t) dent->hmd_size_hi << 32) |
-                       dent->hmd_size_lo) / 1000000000U;
-            sprintf(filesize, "%u%09u", gb, dent->hmd_size_lo % 1000000000U);
-        } else {
-            sprintf(filesize, "%8u", dent->hmd_size_lo);
-        }
+        /* Work around fact clib2 can't print 64-bit values */
+        char buf[32];
+        uint64_t val = ((uint64_t) dent->hmd_size_hi << 32) |
+                       dent->hmd_size_lo;
+        sprintf(filesize, "%10s", ull_to_str(val, buf, sizeof (buf)));
+
         if (flags & LS_FLAG_CTIME)
             sec = dent->hmd_ctime;
         else if (flags & LS_FLAG_ATIME)

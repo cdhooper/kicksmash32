@@ -426,7 +426,7 @@ sm_fdelete(handle_t handle, const char *name)
  * sm_frename
  * ----------
  * Rename or move a file on the USB Host. The old and new file name
- * path may be relative to the handle or specify an abolute path.
+ * path may be relative to the handle or specify an absolute path.
  * Absolute paths may cross volume boundaries, so long as the USB
  * Host permits the move. Unix hosts may reject moves across different
  * filesystems.

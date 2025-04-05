@@ -310,12 +310,15 @@ keyboard_irq(void)
     timer_delay_msec(2);
 #endif
 
+#ifdef KEYBOARD_DEBUG
+    printf("[%04x]", scan_conv);
+#endif
 //  printf("key down %02x %02x\n", scan_orig, scan_conv);
 
 finish:
 //  timer_delay_usec(75);
     *CIAA_CRA &= ~CIA_CRA_SPMOD;  // Clear handshake bit
-    DEBUG_COLOR(0x004);   // Blue (background)
+    DEBUG_COLOR(0x77c);   // Blue (background)
     running = 0;
     key_repeat_timer = 0;
 }

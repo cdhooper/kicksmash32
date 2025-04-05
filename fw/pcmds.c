@@ -247,7 +247,22 @@ cmd_time(int argc, char * const *argv)
     if (argc <= 1)
         return (RC_USER_HELP);
 
-    if (strncmp(argv[1], "cmd", 1) == 0) {
+    if (strncmp(argv[1], "amiga", 1) == 0) {
+        extern uint64_t amiga_time;
+
+        if (amiga_time == 0) {
+            printf("Amiga time not set. First use \"hostsmash -c set\""
+                   " or \"smash -c set\"\n");
+            return (RC_NO_DATA);
+        }
+        uint64_t now    = timer_tick_get();
+        uint64_t usec   = timer_tick_to_usec(now);
+        uint64_t both   = usec + amiga_time;
+        uint32_t t_usec = both % 1000000;
+        uint32_t t_sec  = both / 1000000;
+        printf("Amiga seconds %lu.%06lu\n", t_sec, t_usec);
+        rc = RC_SUCCESS;
+    } else if (strncmp(argv[1], "cmd", 1) == 0) {
         uint64_t time_start;
         uint64_t time_diff;
 
@@ -283,6 +298,34 @@ cmd_prom_temp(int argc, char * const *argv)
     return (RC_SUCCESS);
 }
 
+static void
+merge_args(char *buf, uint buflen, uint argc, char * const *argv)
+{
+    uint arg;
+    uint len;
+
+    buflen--;  // Save space for ending '\0'
+    for (arg = 0; arg < argc; arg++) {
+        if (buflen == 0)
+            break;
+        if (arg != 0) {
+            *(buf++) = ' ';
+            buflen--;
+            if (buflen == 0)
+                break;
+        }
+        len = strlen(argv[arg]);
+        if (len > buflen)
+            len = buflen;
+        memcpy(buf, argv[arg], len);
+        buf    += len;
+        buflen -= len;
+        if (buflen == 0)
+            break;
+    }
+    *buf = '\0';
+}
+
 static int
 cmd_prom_bank(int argc, char * const *argv)
 {
@@ -297,6 +340,7 @@ cmd_prom_bank(int argc, char * const *argv)
     uint     flag_set_bank_name    = 0;
     uint     bank;
     uint     rc;
+    char     name[32];
 
     if (argc < 2) {
         printf("prom bank requires an argument\n");
@@ -336,7 +380,7 @@ cmd_prom_bank(int argc, char * const *argv)
         return (1);
     }
     if (flag_set_bank_name) {
-        if (argc != 4) {
+        if (argc < 4) {
             printf("prom bank %s requires a <bank> number and "
                    "\"name text\" or - to delete\n", argv[1]);
             return (1);
@@ -347,10 +391,11 @@ cmd_prom_bank(int argc, char * const *argv)
                    bank, ROM_BANKS - 1);
             return (1);
         }
-        if ((argv[3][0] == '-') && (argv[3][1] == '\0'))
+        merge_args(name, sizeof (name), argc - 3, argv + 3);
+        if ((name[0] == '-') && (name[1] == '\0'))
             return (config_set_bank_name(bank, ""));
         else
-            return (config_set_bank_name(bank, argv[3]));
+            return (config_set_bank_name(bank, name));
     }
     if (flag_bank_longreset) {
         uint8_t     banks[ROM_BANKS];
@@ -526,10 +571,13 @@ cmd_prom(int argc, char * const *argv)
         }
         return (RC_SUCCESS);
     } else if (strcmp("name", arg) == 0) {
-        const char *name = argv[1];
-        if (argc < 1)
-            name = NULL;
-        config_name(name);
+        if (argc <= 1) {
+            config_name(NULL);
+        } else {
+            char name[32];
+            merge_args(name, sizeof (name), argc - 1, argv + 1);
+            config_name(name);
+        }
         return (RC_SUCCESS);
     } else if (strcmp("read", arg) == 0) {
         op_mode = OP_READ;
@@ -867,7 +915,13 @@ cmd_set(int argc, char * const *argv)
     } else if (strcmp(argv[1], "mode") == 0) {
         return (cmd_prom(argc - 1, argv + 1));
     } else if (strcmp(argv[1], "name") == 0) {
-        config_name((argc < 2) ? NULL : argv[2]);
+        if (argc <= 2) {
+            config_name(NULL);
+        } else {
+            char name[32];
+            merge_args(name, sizeof (name), argc - 2, argv + 2);
+            config_name(name);
+        }
         return (RC_SUCCESS);
     } else {
         printf("set \"%s\" unknown argument\n", argv[1]);

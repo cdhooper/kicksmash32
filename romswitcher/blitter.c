@@ -272,13 +272,13 @@ gray_rect(uint fgpen, uint x1, uint y1, uint x2, uint y2)
 
 #undef TAKEN_FROM_THE_INTERNET_UNTESTED
 #ifdef TAKEN_FROM_THE_INTERNET_UNTESTED
-//
-// The below code is from modsurfer:
-//
-// https://github.com/amigageek/modsurfer/blob/master/blit.c
-// I've only tried to get blit_fill() to work, but don't know how to
-// drive it properly to fill an irregular polygon: see test_blitfill()
-//
+/*
+ * The below code is from modsurfer:
+ *
+ * https://github.com/amigageek/modsurfer/blob/master/blit.c
+ * I've only tried to get blit_fill() to work, but don't know how to
+ * drive it properly to fill an irregular polygon: see test_blitfill()
+ */
 #ifndef BOOL
 #define BOOL int
 #endif

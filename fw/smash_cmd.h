@@ -22,6 +22,8 @@
 #define KS_CMD_LOOPBACK      0x06  // Reply with (exact) sent message
 #define KS_CMD_SET           0x07  // Set Kicksmash value (options in high bits)
 #define KS_CMD_GET           0x08  // Get Kicksmash value (options in high bits)
+#define KS_CMD_CONS_OUTPUT   0x09  // Receive Kicksmash console output
+#define KS_CMD_CONS_INPUT    0x0a  // Send Kicksmash console input keystrokes
 #define KS_CMD_FLASH_READ    0x10  // Generate flash read mode sequence
 #define KS_CMD_FLASH_CMD     0x11  // Generate low level command to EEPROM
 #define KS_CMD_FLASH_ID      0x12  // Generate flash ID sequence
@@ -88,7 +90,7 @@
  * which includes a 64-bit Magic sequence, Length, Command code, additional
  * data (optional), and final CRC.
  *     Magic (64 bits)
- *        0x0117, 0x0119, 0x1017, 0x0204
+ *        0x0204, 0x1017, 0x0119, 0x1117
  *     Length (16 bits)
  *        The length specifies the number of payload bytes (not including
  *        magic, length, command, or CRC bytes at end). This number may be
@@ -100,6 +102,10 @@
  *        CRC is over all content except magic (includes length and command).
  *        The CRC algorithm is a big endian version of the CRC hardware unit
  *        present in some STM32 processors.
+ * Sample message:
+ *     0204 1017 0119 0117 0004 0006 eda3 228c 4667 a121
+ *     ~~~~~~~MAGIC~~~~~~~  L=4  C=6 ~~DATA~~~ ~~~CRC~~~
+ *
  * -----------------------------------------------------------------------
  * All commands will generate a response message which is in a similar
  * format: Magic sequence, Length, Status code, additional data (optional),
