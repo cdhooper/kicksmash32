@@ -1967,7 +1967,7 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
     switch (swapmode) {
         case 0:
         case 0123:
-            return;  // Normal (no swap)
+            break;  // Normal (no swap)
         swap_1032:
         case 1032:
             /* Swap adjacent bytes in 16-bit words */
@@ -1976,7 +1976,7 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 buf[pos + 0] = buf[pos + 1];
                 buf[pos + 1] = temp;
             }
-            return;
+            break;
         swap_2301:
         case 2301:
             /* Swap adjacent (16-bit) words */
@@ -1988,7 +1988,7 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 buf[pos + 1] = buf[pos + 3];
                 buf[pos + 3] = temp;
             }
-            return;
+            break;
         swap_3210:
         case 3210:
             /* Swap bytes in 32-bit longs */
@@ -2000,23 +2000,23 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 buf[pos + 1] = buf[pos + 2];
                 buf[pos + 2] = temp;
             }
-            return;
+            break;
         case SWAPMODE_A500:
             if (dir == SWAP_TO_ROM) {
                 /* Need bytes in order: 14 11 f9 4e */
                 if (memcmp(buf, str_1411f94e, 4) == 0)
-                    return;  // Already in desired order
+                    break;  // Already in desired order
                 if (memcmp(buf, str_11144ef9, 4) == 0) {
-                    printf("Swapping 2301\n");
+                    printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
             }
             if (dir == SWAP_FROM_ROM) {
                 /* Need bytes in order: 11 14 4e f9 */
                 if (memcmp(buf, str_11144ef9, 4) == 0)
-                    return;  // Already in desired order
+                    break;  // Already in desired order
                 if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swapping 1032\n");
+                    printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
@@ -2026,19 +2026,19 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 /* Need bytes in order: 14 11 f9 4e */
                 if (memcmp(buf, str_1411f94e, 4) == 0) {
                     if (printed)
-                        printf("No swap\n");
-                    return;  // Already in desired order
+                        printf("No swap, ");
+                    break;  // Already in desired order
                 }
                 if (memcmp(buf, str_4ef91114, 4) == 0) {
-                    printf("Swapping 3210\n");
+                    printf("Swapping 3210, ");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
                 if (memcmp(buf, str_f94e1411, 4) == 0) {
-                    printf("Swapping 2301\n");
+                    printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
                 if (memcmp(buf, str_11144ef9, 4) == 0) {
-                    printf("Swapping 1032\n");
+                    printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
@@ -2046,19 +2046,19 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 /* Need bytes in order: 4e f9 11 14 */
                 if (memcmp(buf, str_4ef91114, 4) == 0) {
                     if (printed)
-                        printf("No swap\n");
-                    return;  // Already in desired order
+                        printf("No swap, ");
+                    break;  // Already in desired order
                 }
                 if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swapping 3210\n");
+                    printf("Swapping 3210, ");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
                 if (memcmp(buf, str_11144ef9, 4) == 0) {
-                    printf("Swapping 2301\n");
+                    printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
                 if (memcmp(buf, str_f94e1411, 4) == 0) {
-                    printf("Swapping 1032\n");
+                    printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
@@ -2068,19 +2068,19 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 /* Need bytes in order: f9 4e 14 11 */
                 if (memcmp(buf, str_f94e1411, 4) == 0) {
                     if (printed)
-                        printf("No swap\n");
-                    return;  // Already in desired order
+                        printf("No swap, ");
+                    break;  // Already in desired order
                 }
                 if (memcmp(buf, str_11144ef9, 4) == 0) {
-                    printf("Swapping 3210\n");
+                    printf("Swapping 3210, ");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
                 if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swapping 2301\n");
+                    printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
                 if (memcmp(buf, str_4ef91114, 4) == 0) {
-                    printf("Swapping 1032\n");
+                    printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
@@ -2088,19 +2088,19 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 /* Need bytes in order: 11 14 4e f9 */
                 if (memcmp(buf, str_11144ef9, 4) == 0) {
                     if (printed)
-                        printf("No swap\n");
-                    return;  // Already in desired order
+                        printf("No swap, ");
+                    break;  // Already in desired order
                 }
                 if (memcmp(buf, str_f94e1411, 4) == 0) {
-                    printf("Swapping 3210\n");
+                    printf("Swapping 3210, ");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
                 if (memcmp(buf, str_4ef91114, 4) == 0) {
-                    printf("Swapping 2301\n");
+                    printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
                 if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swapping 1032\n");
+                    printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
@@ -2111,6 +2111,7 @@ unrecognized:
                  "Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
                  buf[0], buf[1], buf[2], buf[3]);
     }
+    printf("Length 0x%x\n", len);
 }
 
 /*
@@ -2205,6 +2206,7 @@ eeprom_erase(uint bank, uint addr, uint len)
     return (0);
 }
 
+#if 0
 static int
 eeprom_not_erased(uint bank, uint addr, uint len)
 {
@@ -2282,6 +2284,7 @@ eeprom_not_erased(uint bank, uint addr, uint len)
     /* Completely erased */
     return (0);
 }
+#endif
 
 
 /*
@@ -6369,6 +6372,7 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
 {
     int amiga_was_put_in_reset = 0;
     int rc;
+    uint8_t *filebuf;
 
     if (mode == MODE_UNKNOWN) {
         warnx("You must specify one of: -e -i -r -t or -w");
@@ -6450,32 +6454,9 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
         eeprom_read(file1, bank, baseaddr, len);
         return (0);
     }
-    if (mode & MODE_ERASE) {
-        if (eeprom_erase(bank, baseaddr, len))
-            return (1);
-    } else if (mode & MODE_WRITE) {
-        uint temp;
-        switch (eeprom_not_erased(bank, baseaddr, len)) {
-            case -1:
-                errx(EXIT_FAILURE, "Failed to check EEPROM area erased");
-            case 0:
-                break;
-            default:
-                printf("EEPROM area has not been erased\n");
-                if (are_you_sure("Erase area before write?")) {
-                    temp = force_yes;
-                    force_yes = 1;
-                    if (eeprom_erase(bank, baseaddr, len))
-                        return (1);
-                    force_yes = temp;
-                }
-                break;
-        }
-    }
 
     rc = 0;
     if (mode & (MODE_WRITE | MODE_VERIFY)) {
-        uint8_t *filebuf;
         if (baseaddr == ADDR_NOT_SPECIFIED)
             baseaddr = 0x000000;  // Start of EEPROM
 
@@ -6494,7 +6475,8 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
                 errx(EXIT_FAILURE, "Could not allocate %u bytes", len);
 
             /* Merge files */
-            len *= 2;
+            if (len <= EEPROM_BANK_SIZE_DEFAULT / 2)
+                len *= 2;
             for (cur = 0; cur < len; cur += 4) {
                 *(dptr++) = *(sptr1++);
                 *(dptr++) = *(sptr2++);
@@ -6505,7 +6487,23 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
             filebuf = newbuf;
         }
         execute_swapmode(filebuf, len, SWAP_TO_ROM);
+    }
 
+    /* Length might have changed due to merged ROMs -- do erase now */
+    if (mode & MODE_ERASE) {
+        if (eeprom_erase(bank, baseaddr, len))
+            return (1);
+    } else if (mode & MODE_WRITE) {
+        if (are_you_sure("Erase area before write?")) {
+            uint temp = force_yes;
+            force_yes = 1;
+            if (eeprom_erase(bank, baseaddr, len))
+                return (1);
+            force_yes = temp;
+        }
+    }
+
+    if (mode & (MODE_WRITE | MODE_VERIFY)) {
         do {
             if ((mode & MODE_WRITE) &&
                 (eeprom_write(filebuf, baseaddr, len) != 0)) {
