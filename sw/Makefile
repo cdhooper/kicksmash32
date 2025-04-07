@@ -22,6 +22,7 @@ TIME := $(shell date -j -f %s $(NOW)  '+%H:%M:%S')
 else
 DATE := $(shell date -d "@$(NOW)" '+%Y-%m-%d')
 TIME := $(shell date -d "@$(NOW)" '+%H:%M:%S')
+USB_HDR := /usr/include/usb.h
 endif
 CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 

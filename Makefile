@@ -2,9 +2,14 @@
 # Makefile to build KickSmash firmware, host software, and Amiga software
 #
 
-VER ?= 1.5+
 MAKE ?= make
 MAKEFLAGS += --no-print-directory
+
+ifeq (,$(VER))
+VERSION := $(shell awk '/Version/{print $$2}' fw/version.c)
+else
+VERSION := $(VER)
+endif
 
 all: build-sw build-fw build-amiga build-romswitcher
 clean: clean-sw clean-fw clean-amiga clean-romswitcher
@@ -21,9 +26,9 @@ clean-sw clean-fw clean-amiga clean-romswitcher:
 
 # ---------------------------------------------------------------
 
-RELEASE_DIR := kicksmash_$(VER)
-RELEASE_LHA := kicksmash_$(VER).lha
-RELEASE_ZIP := kicksmash_$(VER).zip
+RELEASE_DIR := kicksmash_$(VERSION)
+RELEASE_LHA := kicksmash_$(VERSION).lha
+RELEASE_ZIP := kicksmash_$(VERSION).zip
 
 RELEASE_TARGETS :=
 RELEASE_DIRS :=
@@ -55,7 +60,7 @@ $(eval $(call RELEASE_IT,amiga/romswitch,amiga/romswitch))
 $(eval $(call RELEASE_IT,romswitcher/switcher.rom,amiga/switcher.rom))
 $(eval $(call RELEASE_IT,README.md,README.md))
 $(eval $(call RELEASE_IT,LICENSE.md,LICENSE.md))
-$(foreach DOC,$(wildcard doc/*),$(eval $(call RELEASE_IT,$(DOC),$(DOC))))
+$(foreach DOC,$(wildcard doc/*.txt doc/*.md),$(eval $(call RELEASE_IT,$(DOC),$(DOC))))
 
 RELEASE_DIRS := $(sort $(RELEASE_DIR) $(RELEASE_DIRS))
 
