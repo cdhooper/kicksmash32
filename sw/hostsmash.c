@@ -6457,12 +6457,6 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
 
     rc = 0;
     if (mode & (MODE_WRITE | MODE_VERIFY)) {
-        if (baseaddr == ADDR_NOT_SPECIFIED)
-            baseaddr = 0x000000;  // Start of EEPROM
-
-        if (bank != BANK_NOT_SPECIFIED)
-            baseaddr += bank * EEPROM_BANK_SIZE_DEFAULT;
-
         filebuf = file_read(file1, len);
         if (file2 != NULL) {
             uint8_t *filebuf2 = file_read(file2, len);
@@ -6504,6 +6498,12 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
     }
 
     if (mode & (MODE_WRITE | MODE_VERIFY)) {
+        if (baseaddr == ADDR_NOT_SPECIFIED)
+            baseaddr = 0x000000;  // Start of EEPROM
+
+        if (bank != BANK_NOT_SPECIFIED)
+            baseaddr += bank * EEPROM_BANK_SIZE_DEFAULT;
+
         do {
             if ((mode & MODE_WRITE) &&
                 (eeprom_write(filebuf, baseaddr, len) != 0)) {
