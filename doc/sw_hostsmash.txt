@@ -83,9 +83,13 @@ A minimal example to get started
     firmware CLI" section above, specifies the USB device that should
     be used to connect with KickSmash.
 
+    The -b flag specifies the bank number [0-8].
+
     The -r flag specifies that the operation should be a read from
     flash and write to a file. An argument is required, which is the
     filename to write.
+
+    The -l flag specifies length in bytes 0x80000, which is 524288 bytes.
 
     The -s flag specifies the byte swapping mode. The 0123 value means
     no swapping. If the flag is not specified, automatic swapping will
