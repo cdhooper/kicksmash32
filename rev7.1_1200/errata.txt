@@ -1,0 +1,2 @@
+Rev7 had a bug where the cutout for the USB-C connector is missing.
+    Fixed in Rev7.1
