@@ -1341,8 +1341,13 @@ ee_update_bank_at_longreset(void)
         /* Not in the reset sequence list. Just choose the first bank. */
         nextbank = 0;
     }
-    printf("longreset bank %u\n", config.bi.bi_longreset_seq[nextbank]);
-    ee_set_bank(config.bi.bi_longreset_seq[nextbank]);
+    bank = config.bi.bi_longreset_seq[nextbank];
+    if (bank >= ROM_BANKS)
+        bank = config.bi.bi_bank_poweron;
+    if (bank >= ROM_BANKS)
+        bank = 0;
+    printf("longreset bank %u\n", bank);
+    ee_set_bank(bank);
 }
 
 void

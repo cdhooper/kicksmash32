@@ -32,7 +32,7 @@ there were, but I certainly didn't expect this many.
 | Kicksmash 4KCR | [<IMG SRC="../photos/2025_03_20_kicksmash_4kcr_2d_top.jpg" HEIGHT=150>](../photos/2025_03_20_kicksmash_4kcr_2d_top.jpg) | ROMs are located at the front right of the motherboard. The KS USB connector emerge next to Ramsey. If your board has 40-pin ROM sockets, the A20/A21 KS holes should not be populated, or should overhang. | U141 pin 1. |
 | Kicksmash 3KT | [<IMG SRC="../photos/2025_03_15_kicksmash_3kt_2d_top.jpg" HEIGHT=150>](../photos/2025_03_15_kicksmash_3kt_2d_top.jpg?raw) | KS USB connector should emerge next to MB SCSI connector. | RP701 pin 6 or U713 pin 1 |
 | Kicksmash 4KT | [<IMG SRC="../photos/2025_01_22_kicksmash_4kt_2d_top.jpg" HEIGHT=150>](../photos/2025_01_22_kicksmash_4kt_2d_top.jpg) | KS USB connector should overlap Fat Gary | U141 pin 1 |
-| Kicksmash 1200 | [<IMG SRC="../photos/2025_03_13_kicksmash_1200_2d_top.jpg" HEIGHT=150>](../photos/2025_03_13_kicksmash_1200_2d_top.jpg) | KS USB connector should face Gayle. If KS A20 and A21 pins are not populated, the KS pins should not be installed in A1200 socket pins 1 and 42. | U13 pin 38 or U5 pin 63, or via near E121R silkscreen. |
+| Kicksmash 1200 | [<IMG SRC="../photos/2025_03_13_kicksmash_1200_2d_top.jpg" HEIGHT=150>](../photos/2025_03_13_kicksmash_1200_2d_top.jpg) | KS USB connector should face Gayle. If KS A20 and A21 pins are not populated, the KS pins should not be installed in A1200 socket pins 1 and 42. | TP1 pin 9, U13 pin 38, U5 pin 63, or via near E121R silkscreen. |
 
 Refer to the [Hardware Installation documentation](hw_install.txt) for additional installation details.
 

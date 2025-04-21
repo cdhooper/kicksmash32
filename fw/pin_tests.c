@@ -642,11 +642,15 @@ pin_tests(void)
                          */
                         continue;
                     }
-                    if (((checkport == SOCKET_D31_PORT) &&
-                          (checkpin == SOCKET_D31_PIN)) &&
-                        (gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN) == 0)) {
+                    if ((checkport == SOCKET_D31_PORT) &&
+                        (checkpin == SOCKET_D31_PIN) &&
+                        ((gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN) == 0) ||
+                         ((curport == SOCKET_OE_PORT) &&
+                          (curpin == SOCKET_OE_PIN)))) {
                         /*
                          * SOCKET_OE will cause buffers to drive SOCKET_D31
+                         * Transition of SOCKET_OE could also mean
+                         * indeterminate SOCKET_D31.
                          */
                         continue;
                     }

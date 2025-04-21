@@ -123,3 +123,28 @@ Program:
 From Windows:
     hostsmashe -d com4 -t
     hostsmashe -d com4 -w A3000.rom -b 7 -s 3210
+
+-------------------------------------------------------------------
+
+COM Ports
+
+If you are programming multiple Kicksmash boards, it may be annoying that
+each Kicksmash gets assigned a unique COM device. There is a solution for
+this:
+    REG ADD "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\COM Name Arbiter" /v ComDB /t REG_BINARY /d 0206 /f
+
+This removes all COM ports, so if you run the command between each Kicksmash
+board, you'll repeatably get the same COM port. Here's a batch file which
+might help you get started with automating programming:
+    @echo off
+    REG ADD "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\COM Name Arbiter" /v ComDB /t REG_BINARY /d 0206 /f
+    cd c:\firmware\kicksmash
+
+    sw\hostsmash_win64.exe -d com3 -w \\curry\share\Amiga\kickstarts\A1200\KickstartV3.1-V40.68-A1200.rom -b 0 -s 3210 -y
+    sw\hostsmash_win64.exe -d com3 -t "prom bank name 0 Kick3.1"
+
+    sw\hostsmash_win64.exe -d com3 -w \\curry\share\Amiga\kickstarts\A1200\A1200.47.115.rom -b 1 -s 3210 -y
+    sw\hostsmash_win64.exe -d com3 -t "prom bank name 1 Kick3.2.3"
+
+    sw\hostsmash_win64.exe -d com3 -w diagrom.rom -b 2 -s 3210 -y
+    sw\hostsmash_win64.exe -d com3 -t "prom bank name 2 DiagROMV2-Daily"
