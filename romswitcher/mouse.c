@@ -75,4 +75,8 @@ void
 mouse_init(void)
 {
     *POTGO = 0xff00;  // Make right mouse button readable
+    mouse_x = 0;
+    mouse_y = 0;
+    mouse_x_last = 0;
+    mouse_y_last = 0;
 }

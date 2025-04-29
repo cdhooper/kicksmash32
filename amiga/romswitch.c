@@ -1250,6 +1250,11 @@ bank_update_timeout(void)
         did_update = TRUE;
     }
     if (did_update) {
+#undef DEBUG_TIMEOUT
+#ifdef DEBUG_TIMEOUT
+        if (timeout_active)
+            update_status("Timeout disabled by gadget");
+#endif
         timeout_active = FALSE;
 // printf("[%x,%x %x,%x]", timeout_bank, timeout_bank_saved, timeout_seconds, timeout_seconds_saved);
         updated_bank_timeout = (timeout_bank != timeout_bank_saved) ||
@@ -1842,7 +1847,14 @@ event_loop(void)
                     update_status("vanilla %x %x\n", icode, msg->Qualifier);
                     break;
                 case IDCMP_RAWKEY:
-                    timeout_active = FALSE;
+                    if ((icode & 0x80) == 0) {
+                        /* Key down */
+#ifdef DEBUG_TIMEOUT
+                        if (timeout_active)
+                            update_status("Timeout disabled Key %x", icode);
+#endif
+                        timeout_active = FALSE;
+                    }
                     if ((esc_trigger) && (icode != RAWKEY_ESC) &&
                                          (icode != RAWKEY_ESC + 0x80)) {
                         update_status("");
@@ -1995,6 +2007,10 @@ event_loop(void)
                     if ((msg->MouseX > SCREEN_WIDTH / 3) |
                         (msg->MouseY > SCREEN_HEIGHT / 3)) {
                         /* Mouse movement disables automatic bank select */
+#ifdef DEBUG_TIMEOUT
+                        if (timeout_active)
+                            update_status("Timeout disabled by mouse");
+#endif
                         timeout_active = FALSE;
                     }
                     bank_update_names();

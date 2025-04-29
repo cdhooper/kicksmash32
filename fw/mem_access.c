@@ -37,7 +37,7 @@ mem_read(uint64_t addr, uint width, void *bufp)
     while (width > 0) {
         uint mode = width;
 
-        /* Handle unaligned source adddress */
+        /* Handle unaligned source address */
         if (addr & 1)
             mode = 1;
         else if ((mode > 2) && (addr & 2))
@@ -104,7 +104,7 @@ mem_write(uint64_t addr, uint width, void *bufp)
     while (width > 0) {
         uint mode = width;
 
-        /* Handle unaligned source adddress */
+        /* Handle unaligned source address */
         if (addr & 1)
             mode = 1;
         else if ((mode > 2) && (addr & 2))
