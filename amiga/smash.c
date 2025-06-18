@@ -1364,8 +1364,10 @@ smash_test_flash_id(void)
 
     show_test_state("Flash ID", -1);
     rc = flash_id(&dev1_first, &dev2_first, &mode);
-    if (rc != 0)
+    if (rc != 0) {
+        printf("%08x %08x\n", dev1_first, dev2_first);
         goto test_flash_id_fail;
+    }
 
     id1 = ee_id_string(dev1_first);
     id2 = ee_id_string(dev2_first);
@@ -1380,8 +1382,10 @@ smash_test_flash_id(void)
 
     for (count = 0; count < 100; count++) {
         rc = flash_id(&dev1, &dev2, &mode);
-        if (rc != 0)
+        if (rc != 0) {
+            printf("%08x %08x\n", dev1_first, dev2_first);
             break;
+        }
         if (dev1 != dev1_first) {
             printf("  Flash Dev1 ID %08x != first read %08x\n",
                    dev1, dev1_first);
@@ -1394,11 +1398,10 @@ smash_test_flash_id(void)
         }
     }
 
-    if (flag_quiet)
-        return (rc);
-
 test_flash_id_fail:
     if (rc == 0) {
+        if (flag_quiet)
+            return (rc);
         printf("PASS  %08x %08x %u-bit\n", dev1, dev2, mode);
     } else {
         show_test_state("Flash ID", rc);
@@ -1721,6 +1724,13 @@ smash_test(uint mask)
     return (0);
 }
 
+#undef DEBUG_FLASH_SEQUENCE
+#ifdef DEBUG_FLASH_SEQUENCE
+uint32_t flash_debugdata[8];
+uint32_t flash_debugaddr[8];
+uint8_t  flash_debugcount;
+#endif
+
 /*
  * flash_cmd_core
  * --------------
@@ -1734,10 +1744,6 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 {
     uint32_t addr;
     uint32_t addrs[64];
-#undef DEBUG_FLASH_SEQUENCE
-#ifdef DEBUG_FLASH_SEQUENCE
-    uint32_t data[64];
-#endif
 //  uint     retry = 0;
     uint     num_addr;
     uint     pos;
@@ -1774,10 +1780,12 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 #ifdef DEBUG_FLASH_SEQUENCE
         /* Debug this particular command sequence */
         if (cmd == KS_CMD_FLASH_ID) {
-            if (pos < ARRAY_SIZE(data)) {
+            if (pos < ARRAY_SIZE(flash_debugdata)) {
                 *ADDR32(0x77800 + pos * 4) = addr;
                 *ADDR32(0x77810 + pos * 4) = val;
-                data[pos] = val;
+                flash_debugdata[pos] = val;
+                flash_debugaddr[pos] = addr;
+                flash_debugcount = pos + 1;
             }
         }
 #endif
@@ -1786,20 +1794,15 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
 flash_cmd_cleanup:
     if (rc == 0) {
         cia_spin(2);
-#ifdef DEBUG_FLASH_SEQUENCE
-        if (flag_debug && !irq_disabled) {
-            printf("Flash sequence\n");
-            for (pos = 0; pos < num_addr; pos++)
-                printf("    %08x = %08x\n", addrs[pos], data[pos]);
-        }
-#endif
     } else {
         /* Attempt to drain data and wait for Kicksmash to enable flash */
         for (pos = 0; pos < 1000; pos++) {
             (void) *ADDR32(ROM_BASE);
             cia_spin(20);
         }
-        cia_spin(CIA_USEC(500));
+        /* Wait 10 ms longer */
+        for (pos = 0; pos < 10; pos++)
+            cia_spin(CIA_USEC(1000));
     }
     return (rc);
 }
@@ -1833,6 +1836,30 @@ flash_read(void)
 }
 #endif
 
+/*
+ * flash_read_mode() returns the flash to normal read mode.
+ */
+static int
+flash_read_mode(void)
+{
+    uint count;
+    int rc = flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
+    if (rc != 0) {
+        /* Try harder to restore flash to normal read mode */
+        for (count = 0; count < 20; count++) {
+            cia_spin(CIA_USEC(100));
+            for (count = 0; count < 10; count++)
+                (void) *ADDR32(ROM_BASE);
+            if (flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0) == 0)
+                break;
+        }
+    }
+    for (count = 0; count < 4; count++)
+        (void) *ADDR32(ROM_BASE);
+    cia_spin(CIA_USEC(2));
+    return (rc);
+}
+
 static int
 flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
 {
@@ -1863,12 +1890,18 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
 #else
     rc1 = flash_cmd_core(KS_CMD_FLASH_ID, NULL, 0);
 #endif
-    if (rc1 == 0) {
-        for (pos = 0; pos < ARRAY_SIZE(data); pos++) {
-            data[pos] = *ADDR32(ROM_BASE + pos * 4);
-        }
-    }
-    rc2 = flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
+    /* Workaround for cold STM32 not releasing OEWE in time */
+    (void) *ADDR32(ROM_BASE);
+    (void) *ADDR32(ROM_BASE);
+    (void) *ADDR32(ROM_BASE);
+    (void) *ADDR32(ROM_BASE);
+    cia_spin(CIA_USEC(5));
+
+    /* Get flash ID data */
+    for (pos = 0; pos < ARRAY_SIZE(data); pos++)
+        data[pos] = *ADDR32(ROM_BASE + pos * 4);
+
+    rc2 = flash_read_mode();
 
     CACHE_FLUSH();
     MMU_RESTORE();
@@ -1876,6 +1909,15 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
     INTERRUPTS_ENABLE();
     SUPERVISOR_STATE_EXIT();
 
+#ifdef DEBUG_FLASH_SEQUENCE
+    if (flag_debug > 1) {
+        printf("Debug flash sequence\n");
+        for (pos = 0; pos < flash_debugcount; pos++) {
+            printf("    %08x = %08x\n",
+                   flash_debugaddr[pos], flash_debugdata[pos]);
+        }
+    }
+#endif
     if (flag_debug || rc1 || rc2) {
         printf("rc1=(%s)  rc2=(%s)\n",
                smash_err(rc1), smash_err(rc2));
@@ -1900,6 +1942,13 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
                 (data[0x4] != data[0x0]) || (data[0x5] != data[0x1]) ||
                 (data[0x8] != data[0x0]) || (data[0x9] != data[0x1]) ||
                 (data[0xc] != data[0x0]) || (data[0xd] != data[0x1])) {
+                printf("Unexpected ID values from flash\n");
+                for (pos = 0; pos < 0xe; pos += 4) {
+                    if (pos != 0)
+                        printf(", ");
+                    printf("%08x %08x", data[pos], data[pos + 1]);
+                }
+                printf("\n");
                 rc1 = 1;
             }
         } else {
@@ -1912,6 +1961,10 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
                 (data[0x2] != data[0x0]) || (data[0x3] != data[0x1]) ||
                 (data[0x4] != data[0x0]) || (data[0x5] != data[0x1]) ||
                 (data[0x6] != data[0x0]) || (data[0x7] != data[0x1])) {
+                printf("Unexpected ID values from flash\n");
+                for (pos = 0; pos < 0xe; pos++)
+                    printf(" %08x", data[pos]);
+                printf("\n");
                 rc1 = 1;
             }
         }
@@ -1930,10 +1983,8 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
                 dump_memory(data, sizeof (data) / 2, DUMP_VALUE_UNASSIGNED);
         }
     }
-    if (rc1 == 0) {
-        *dev1 = (data[0] << 16) | ((uint16_t) data[1]);
-        *dev2 = (data[0] & 0xffff0000) | (data[1] >> 16);
-    }
+    *dev1 = (data[0] << 16) | ((uint16_t) data[1]);
+    *dev2 = (data[0] & 0xffff0000) | (data[1] >> 16);
 
     return (rc1 ? rc1 : rc2);
 }
@@ -2602,7 +2653,7 @@ write_to_flash(uint bank, uint addr, void *buf, uint len)
     cia_spin(CIA_USEC(10));
 
     /* Restore flash to read mode */
-    rc |= flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
+    rc |= flash_read_mode();
     cia_spin(CIA_USEC(10));
 
     /* Return to "current" flash bank */
@@ -2643,7 +2694,7 @@ erase_flash_block(uint bank, uint addr)
     }
 
     /* Restore flash to read mode */
-    rc1 = flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
+    rc1 = flash_read_mode();
     if (rc == 0)
         rc = rc1;
     cia_spin(CIA_USEC(10));

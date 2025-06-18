@@ -709,7 +709,7 @@ screen_init(void)
     *BLTDMOD  = 0;
     *BLTCON0  = 0;
     *BLTCON1  = 0;
-    *BLTSIZE  = 0;
+    *BLTSIZE  = (1 << 6) | 0x1;  // 1 pixel high, 1 pixel wide
 
     serial_puts("\bB");
 

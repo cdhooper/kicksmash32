@@ -90,8 +90,8 @@
 #define INTERRUPTS_ENABLE()  if (--irq_disabled == 0) \
                                  Enable()   /* Enable Interrupts */
 
-#define CIA_USEC(x)      (x * 715909 / 1000000)
-#define CIA_USEC_LONG(x) (x * 7159 / 10000)
+#define CIA_USEC(x)      (((x) * 715909 + 1000000 - 715909) / 1000000)
+#define CIA_USEC_LONG(x) (((x) * 7159   + 10000   - 7159)   / 10000)
 
 #ifndef ADDR8
 #define ADDR8(x)    ((volatile uint8_t *)  ((uintptr_t)(x)))

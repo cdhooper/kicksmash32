@@ -85,6 +85,7 @@ static const struct option long_opts[] = {
     { "all",      no_argument,       NULL, 'A' },
     { "addr",     required_argument, NULL, 'a' },
     { "bank",     required_argument, NULL, 'b' },
+    { "clock",    required_argument, NULL, 'c' },
     { "delay",    required_argument, NULL, 'D' },
     { "device",   required_argument, NULL, 'd' },
     { "debugfs",  no_argument,       NULL, 0x80 + 'f' },

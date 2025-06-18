@@ -1,2 +1,4 @@
 Rev7 had a bug where the cutout for the USB-C connector is missing.
     Fixed in Rev7.1
+
+Pin 11 (_CS) should not be tied to GND. This is bad in the A1200.
