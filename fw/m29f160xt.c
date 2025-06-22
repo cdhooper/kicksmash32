@@ -298,9 +298,7 @@ we_output(uint value)
 static void
 we_enable(uint value)
 {
-    gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN,
-                 (value != 0) ? GPIO_SETMODE_OUTPUT_PPULL_50 :
-                                GPIO_SETMODE_INPUT_PULLUPDOWN);
+    gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
 }
 
 /*
@@ -533,19 +531,20 @@ ee_write_word(uint32_t addr, uint32_t data)
 #ifdef DEBUG_SIGNALS
     printf(" WWord[%lx]=%08lx", addr, data);
 #endif
+//  we_output(1);
     address_output(addr);
+
     oe_output(1);
     oe_output_enable();
 
-    we_enable(1);
     we_output(0);
+    we_enable(1);
+
     data_output(data & ee_cmd_mask);
     data_output_enable();
 
     timer_delay_ticks(ticks_per_30_nsec);  // tWP=30ns tDS=20ns
     we_output(1);
-    data_output_disable();
-    oe_output_disable();
 }
 
 /*
@@ -577,23 +576,26 @@ ee_cmd(uint32_t addr, uint32_t cmd)
     if ((ccmd & 0xffff) == 0)
         ccmd >>= 16;
 
+    disable_irq();
+
     /* Check for a command which doesn't require an unlock sequence */
     switch (ccmd & 0xffff) {
         case 0x98:  // Read CFI Query
         case 0xf0:  // Read/Reset
         case 0xb0:  // Erase Suspend
         case 0x30:  // Erase Resume
-            ee_write_word(addr, cmd);
-            goto finish;
+            break;
+        default:
+            ee_write_word(0x00555, 0x00aa00aa);
+            ee_write_word(0x002aa, 0x00550055);
+            break;
     }
 
-    disable_irq();
-    ee_write_word(0x00555, 0x00aa00aa);
-    ee_write_word(0x002aa, 0x00550055);
     ee_write_word(addr, cmd);
+    data_output_disable();
+    oe_output_disable();
     enable_irq();
 
-finish:
     timer_delay_usec(2);   // Wait for command to complete
 }
 
@@ -726,6 +728,8 @@ ee_program_word(uint32_t addr, uint32_t word)
     ee_write_word(0x002aa, 0x00550055);
     ee_write_word(0x00555, 0x00a000a0);
     ee_write_word(addr, word);
+    if ((addr == 0x55) || (addr == 0x56))
+        ee_read_mode();  // Prevent bug where data gets interpreted as command
     enable_irq();
 
     return (ee_wait_for_done_status(360, 0, EE_MODE_PROGRAM));
@@ -793,7 +797,7 @@ try_again:
                 /* Can try again -- bits are not 0 which need to be 1 */
 #ifdef DEBUG_SIGNALS
                 printf("Program mismatch -- trying again at 0x%lx\n",
-    1                  addr << ee_addr_shift);
+                       addr << ee_addr_shift);
 #endif
                 goto try_again;
             }
@@ -1031,6 +1035,8 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
 #endif
             }
         }
+        data_output_disable();
+        oe_output_disable();
         usb_unmask_interrupts();
 
         timer_delay_usec(100);  // tBAL (Word Access Load Time)

@@ -136,23 +136,26 @@ const char cmd_patt_help[] =
 "   o = oct (16 bytes)\n"
 "   h = hex (32 bytes)\n"
 "   S = swap bytes (endian)\n"
-"   <pattern> may be one, zero, blip, rand, strobe, walk0, walk1, or a "
-"specific value\n";
+"   <len> is the length of the area in bytes\n"
+"   <pattern> may be one, zero, blip, rand, strobe, walk0, walk1, addr, or a "
+"             specific value\n";
 const char cmd_patt_patterns[] =
-    "<pattern> may be one, zero, blip, rand, strobe, walk0, walk1, or a "
-"specific value\n";
+    "<pattern> may be one, zero, blip, rand, strobe, walk0, walk1, addr, or a "
+"value\n";
 
 const char cmd_test_help[] =
-"test[bwlqoh] <addr> <len> <mode>\n"
+"test[bwlqoh] <addr> <len> <mode> [<p>]\n"
 "   b = 1 byte\n"
 "   w = word (2 bytes)\n"
 "   l = long (4 bytes)\n"
 "   q = quad (8 bytes)\n"
 "   o = oct (16 bytes)\n"
 "   h = hex (32 bytes)\n"
-"   <mode> may be one, zero, rand, walk0, walk1, or read\n";
+"   <len> is the length to test in bytes\n"
+"   <mode> may be one, zero, rand, walk0, walk1, read, or <value>\n"
+"   <p> is the number of test passes (default: 1)";
 const char cmd_test_patterns[] =
-    "<mode> may be one, zero, rand, walk0, walk1, or read\n";
+    "<mode> may be one, zero, rand, walk0, walk1, read, or <value>\n";
 
 const char cmd_time_help[] =
 "time amiga     - tracked Amiga time\n"
@@ -1301,6 +1304,7 @@ cmd_patt(int argc, char * const *argv)
         PATT_STROBE,
         PATT_WALK0,
         PATT_WALK1,
+        PATT_ADDR,
         PATT_VALUE,
     } pattmode = PATT_ONE;
 
@@ -1359,7 +1363,7 @@ show_patterns:
     } else if (strcmp(argv[0], "blip") == 0) {
         pattmode = PATT_BLIP;
         memset(buf, 0x00, width);
-    } else if (strcmp(argv[0], "rand") == 0) {
+    } else if (strncmp(argv[0], "random", 4) == 0) {
         pattmode = PATT_RAND;
         srand32(time(NULL));
     } else if (strcmp(argv[0], "strobe") == 0) {
@@ -1371,16 +1375,61 @@ show_patterns:
     } else if (strcmp(argv[0], "walk1") == 0) {
         pattmode = PATT_WALK1;
         memset(buf, 0x00, width);
+    } else if (strncmp(argv[0], "address", 4) == 0) {
+        pattmode = PATT_ADDR;
+        memset(buf, 0x00, width);
     } else {
         if ((rc = parse_value(argv[0], buf, width)) != RC_SUCCESS) {
             printf("Invalid pattern %s\n", argv[0]);
             goto show_patterns;
+        }
+        if (flag_S) {
+            uint pos;
+            for (pos = 0; pos < width / 2; pos++) {
+                uint8_t temp = buf[pos];
+                buf[pos] = buf[width - pos - 1];
+                buf[width - 1 - pos] = temp;
+            }
         }
         pattmode = PATT_VALUE;
     }
 
     for (offset = 0; offset < len; offset += width) {
         switch (pattmode) {
+            case PATT_ADDR: {
+                uint32_t value = addr + offset;
+                uint     pos;
+                switch (width) {
+                    case 1:
+                    case 3:
+                        for (pos = 0; pos < width; pos++)
+                            buf[pos] = (uint8_t) value;
+                        break;
+                    case 2:
+                        *(uint16_t *)buf = (uint16_t) value;
+                        break;
+                    default:
+                    case 4:
+#ifdef IS_BIG_ENDIAN
+                        *(uint32_t *)(buf + width - 4) = (uint32_t) value;
+                        if (width > 4)
+                            memset(buf, 0, width - 4);
+#else
+                        *(uint32_t *)buf = (uint32_t) value;
+                        if (width > 4)
+                            memset(buf + 4, 0, width - 4);
+#endif
+                        break;
+                }
+                if (flag_S) {
+                    for (pos = 0; pos < width / 2; pos++) {
+                        uint8_t temp = buf[pos];
+                        buf[pos] = buf[width - pos - 1];
+                        buf[width - pos - 1] = temp;
+                    }
+                }
+                break;
+            }
             case PATT_WALK0: {
                 int pos  = (step >> 3) & (width - 1);
                 int opos = ((step - 1) >> 3) & (width - 1);
@@ -1462,16 +1511,23 @@ cmd_test(int argc, char * const *argv)
 {
     rc_t        rc;
     uint        width;
-    uint        count = 0;
+    uint        opos = 0;
+    uint        step = 0;
+    uint        mismatch_count = 0;
     uint64_t    addr;
     uint64_t    space;
     uint        len;
     uint        offset;
+    uint        pass;
+    uint        passes = 1;
     char        other[32];
     uint8_t     buf[MAX_TRANSFER];
     uint8_t     rbuf[MAX_TRANSFER];
+    uint8_t     rrbuf[MAX_TRANSFER];
     uint32_t    srand_seed;
+    bool_t      flag_N  = FALSE;  /* Don't print */
     const char *cmd;
+    char       *ptr;
     static enum {
         TEST_VALUE,
         TEST_ZERO,
@@ -1487,126 +1543,171 @@ cmd_test(int argc, char * const *argv)
     bool_t      flag_S = FALSE;
 
     if (argc < 4) {
-        printf("%d: test requires three arguments: <addr> <len> <mode>\n",
-               argc);
+        printf("test requires three arguments: <addr> <len> <mode> "
+               "[<passes>]\n");
         return (RC_USER_HELP);
     }
     cmd = skip(argv[0], "test");
     rc = parse_width(cmd, &width, other, sizeof (other));
     if (rc != RC_SUCCESS)
         return (RC_USER_HELP);
+    for (ptr = other; *ptr != '\0'; ptr++) {
+        switch (*ptr) {
+            case 'n':
+            case 'N':
+                flag_N = TRUE;
+                break;
+            default:
+                printf("Unknown flag \"%s\"\n", ptr);
+                return (RC_USER_HELP);
+        }
+    }
     argc--;
     argv++;
     if ((rc = parse_addr(&argv, &argc, &space, &addr)) != RC_SUCCESS)
         return (RC_USER_HELP);
     if (argc < 2) {
-        printf("%d: test requires three arguments: <addr> <len> <mode>\n",
-               argc + 1);
+        printf("test requires three arguments: <addr> <len> <mode> "
+               "[<passes>]\n");
         return (RC_USER_HELP);
     }
     if ((rc = parse_uint(argv[0], &len)) != RC_SUCCESS)
         return (RC_USER_HELP);
     argc--;
     argv++;
-    if (argc > 1) {
-        printf("%d: test requires three arguments: <addr> <len> <mode>\n",
-               argc + 2);
+
+    if ((argc < 1) || (argc > 2)) {
+        printf("test requires three arguments: <addr> <len> <mode> "
+               "[<passes>]\n");
 show_patterns:
         printf(cmd_test_patterns);
         return (RC_USER_HELP);
     }
-    if (argc == 1) {
-        rwmode = RWMODE_WRITE;
-        if (strcmp(argv[0], "?") == 0) {
-            printf(cmd_test_patterns);
-        } else if (strcmp(argv[0], "one") == 0) {
-            testmode = TEST_ONE;
-            memset(buf, 0xff, width);
-        } else if (strcmp(argv[0], "read") == 0) {
-            rwmode = RWMODE_READ;
-        } else if (strcmp(argv[0], "rand") == 0) {
-            testmode = TEST_RAND;
-            srand_seed = time(NULL);
-            srand32(srand_seed);
-        } else if (strcmp(argv[0], "walk0") == 0) {
-            testmode = TEST_WALK0;
-            memset(buf, 0x00, width);
-        } else if (strcmp(argv[0], "walk1") == 0) {
-            testmode = TEST_WALK1;
-            memset(buf, 0xff, width);
-        } else if (strcmp(argv[0], "zero") == 0) {
-            testmode = TEST_ZERO;
-            memset(buf, 0x00, width);
-        } else {
-            testmode = TEST_VALUE;
-            if ((rc = parse_value(argv[0], buf, width)) != RC_SUCCESS) {
-                printf("Invalid mode %s\n", argv[0]);
-                goto show_patterns;
-            }
-        }
-    } else {
+    rwmode = RWMODE_WRITE;
+    if (strcmp(argv[0], "?") == 0) {
+        printf(cmd_test_patterns);
+    } else if (strcmp(argv[0], "one") == 0) {
+        testmode = TEST_ONE;
+        memset(buf, 0xff, width);
+    } else if (strcmp(argv[0], "read") == 0) {
         rwmode = RWMODE_READ;
+    } else if (strncmp(argv[0], "rand", 4) == 0) {
+        testmode = TEST_RAND;
+        srand_seed = time(NULL);
+        srand32(srand_seed);
+    } else if (strcmp(argv[0], "walk0") == 0) {
+        testmode = TEST_WALK0;
+        memset(buf, 0xff, width);
+    } else if (strcmp(argv[0], "walk1") == 0) {
+        testmode = TEST_WALK1;
+        memset(buf, 0x00, width);
+    } else if (strcmp(argv[0], "zero") == 0) {
+        testmode = TEST_ZERO;
+        memset(buf, 0x00, width);
+    } else {
+        testmode = TEST_VALUE;
+        if ((rc = parse_value(argv[0], buf, width)) != RC_SUCCESS) {
+            printf("Invalid mode %s\n", argv[0]);
+            goto show_patterns;
+        }
+    }
+    if (argc > 1) {
+        if ((rc = parse_uint(argv[1], &passes)) != RC_SUCCESS)
+            return (RC_USER_HELP);
+        if (passes == 0) {
+            printf("Invalid number of passes %s\n", argv[1]);
+            return (RC_USER_HELP);
+        }
     }
 
-    for (offset = 0; offset < len; offset += width) {
-        count++;
-        if (rwmode == RWMODE_WRITE) {
-            uint step = 0;
-            switch (testmode) {
-                case TEST_RAND: {
-                    uint swidth;
-                    for (swidth = 0; swidth < width; swidth += 4)
-                        *(uint32_t *) (buf + swidth) = rand32();
-                    break;
-                }
-                case TEST_WALK0: {
-                    int pos  = (step >> 3) & (width - 1);
-                    int opos = ((step - 1) >> 3) & (width - 1);
-                    if (flag_S) {
-                        pos  = width - 1 - pos;
-                        opos = width - 1 - opos;
+    for (pass = 0; pass < passes; pass++) {
+        for (offset = 0; offset < len; offset += width) {
+            if (rwmode == RWMODE_WRITE) {
+                switch (testmode) {
+                    case TEST_RAND: {
+                        uint swidth;
+                        for (swidth = 0; swidth < width; swidth += 4)
+                            *(uint32_t *) (buf + swidth) = rand32();
+                        break;
                     }
-                    buf[pos] = ~(1 << (step & 7));
-                    if (pos != opos)
-                        buf[opos] = 0xff;
-                    break;
-                }
-                case TEST_WALK1: {
-                    int pos  = (step >> 3) & (width - 1);
-                    int opos = ((step - 1) >> 3) & (width - 1);
-                    if (flag_S) {
-                        pos  = width - 1 - pos;
-                        opos = width - 1 - opos;
+                    case TEST_WALK0: {
+                        uint pos = (step >> 3) & (width - 1);
+                        if (flag_S) {
+                            pos  = width - 1 - pos;
+                        }
+                        buf[pos] = ~(1 << (step & 7));
+                        if (pos != opos)
+                            buf[opos] = 0xff;
+                        opos = pos;
+                        break;
                     }
-                    buf[pos] = (1 << (step & 7));
-                    if (pos != opos)
-                        buf[opos] = 0x00;
-                    break;
+                    case TEST_WALK1: {
+                        uint pos = (step >> 3) & (width - 1);
+                        if (flag_S) {
+                            pos  = width - 1 - pos;
+                        }
+                        buf[pos] = (1 << (step & 7));
+                        if (pos != opos)
+                            buf[opos] = 0x00;
+                        opos = pos;
+                        break;
+                    }
+                    default:
+                        break;
                 }
-                default:
-                    break;
+                rc = data_write(space, addr + offset, width, buf);
+                if (rc != RC_SUCCESS) {
+                    printf("Error writing %d bytes at ", width);
+                    print_addr(space, addr + offset);
+                    printf("\n");
+                    return (rc);
+                }
             }
-            count++;
-            rc = data_write(space, addr + offset, width, buf);
+            rc = data_read(space, addr + offset, width, rbuf);
             if (rc != RC_SUCCESS) {
-                printf("Error writing %d bytes at ", width);
+                printf("Error reading %d bytes at ", width);
                 print_addr(space, addr + offset);
                 printf("\n");
                 return (rc);
             }
+            if (memcmp(buf, rbuf, width) != 0) {
+                uint temp;
+                if (mismatch_count == 5) {
+                    printf("...\n");
+                } else if (mismatch_count < 5) {
+                    printf("Miscompare at ");
+                    print_addr(space, addr + offset);
+                    printf(": W=");
+                    for (temp = 0; temp < width; temp++)
+                        printf("%02x", buf[width - temp - 1]);
+                    printf(" R=");
+                    for (temp = 0; temp < width; temp++)
+                        printf("%02x", rbuf[width - temp - 1]);
+                    rc = data_read(space, addr + offset, width, rrbuf);
+                    if ((rc == RC_SUCCESS) &&
+                        (memcmp(rbuf, rrbuf, width) != 0)) {
+                        printf(" RR=");
+                        for (temp = 0; temp < width; temp++)
+                            printf("%02x", rrbuf[width - temp - 1]);
+                    }
+                    printf("\n");
+                }
+                mismatch_count++;
+            }
+            if (input_break_pending()) {
+                printf("^C\n");
+                return (RC_USR_ABORT);
+            }
+            step++;
         }
-        rc = data_read(space, addr + offset, width, rbuf);
-        if (rc != RC_SUCCESS) {
-            printf("Error reading %d bytes at ", width);
-            print_addr(space, addr + offset);
-            printf("\n");
-            return (rc);
-        }
-        if (input_break_pending()) {
-            printf("^C\n");
-            return (RC_USR_ABORT);
-        }
+
+        /* Increment walking zero/one step when wrapping */
+        if ((((pass + 1) * len / width) % (8 * width)) == 0)
+            step++;
     }
+    if ((mismatch_count > 0) || (flag_N == FALSE))
+        printf("%u mismatches\n", mismatch_count);
+
     return (RC_SUCCESS);
 }
 

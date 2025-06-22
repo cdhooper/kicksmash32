@@ -81,7 +81,7 @@ static const cmd_t cmd_list[] = {
     { cmd_patt,    "patt",    2, cmd_patt_help,
                         "[bwlqoh] <addr> <len> <pattern>", "pattern memory" },
     { cmd_test,    "test",    2, cmd_test_help,
-                        "[bwlqoh] <addr> <len> <testtype>", "test memory" },
+                        "[bwlqoh] <addr> <l> <mode> [<p>]", "test memory" },
 #ifdef EMBEDDED_CMD
 #ifdef HAVE_SPACE_PROM
     { cmd_prom,    "prom",    1, cmd_prom_help, " [erase|id|read|write|...]",
