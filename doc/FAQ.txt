@@ -1,3 +1,13 @@
+The following topics are below
+
+* What problem does KickSmash32 solve?
+* Which Amiga models are supported by KickSmash?
+* How do I install KickSmash?
+* Can I use Windows as a host?
+* Why does the ROM Switcher gives me errors such as "FAIL Get NV 512"?
+
+========================================================================
+
 * What problem does KickSmash32 solve?
 
 If you need to occasionally change ROMs in your Amiga, this can be a
@@ -16,7 +26,7 @@ Amiga is not able to boot. The Amiga must be held in reset in this case.
 
 ========================================================================
 
-* Which Amiga models are supported by KickSmash32?
+* Which Amiga models are supported by KickSmash?
 
 KickSmash32 is currently only tested in Amiga 3000 rev 9 and
 Amiga 4000 rev B motherboards. KickSmash32 will not work in Amiga 3000
@@ -34,7 +44,7 @@ support the Amiga 500 and 2000.
 
 ========================================================================
 
-* How do I install KickSmash32?
+* How do I install KickSmash?
 
 It's recommended to connect KickSmash by USB to your PC first before
 installing it in the Amiga. This will allow you to update KickSmash
@@ -60,5 +70,29 @@ utility is used to program firmware images on KickSmash over USB.
 Although Windows is not well supported compared to Linux, you should
 be able to program and use KickSmash from the Windows command prompt.
 See doc/windows_notes.txt for useful information.
+
+========================================================================
+
+* Why does the ROM Switcher gives me errors such as "FAIL Get NV 512"?
+
+Errors such as "FAIL Get NV 512" or "FAIL set reboot -8" in the
+ROM Switcher could be due to a version mismatch, motherboard jumper
+settings, or due to a hardware build issue.
+
+The software interface changed between 1.5 and 1.6 releases. If you are
+using some software which is before 1.6 and some which is at or after 1.6,
+this failure is expected. Upgrade your ROM switcher.
+
+Your motherboard should be set to the slowest speed setting for the
+Amiga CPU to to reliably communicate with the STM32 CPU on the Kicksmash.
+A3000: J151 and J152 should be set to 1-2 (25 MHz operation)
+A3000T: J151 and J152 should be set to 1-2 (25 MHz operation)
+A4000: J151 should be set to 1-2 (ROMSPEED 200ns)
+A4000T: J151 should be removed (200ns)
+
+It could also be due to a hardware build issue. If your Amiga is booting
+from Kicksmash, and if it's a hardware build issue, then it's probably
+contained to the STM32 CPU itself. Check the SOCKET_OE and FLASH_OE pins
+on the STM32.
 
 ========================================================================

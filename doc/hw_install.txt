@@ -1,11 +1,10 @@
 KickSmash hardware install
 --------------------------
 
-KickSmash has so far only been tested in Amiga 3000 desktop systems.
-I do not anticipate any problems with Amiga 3000T, 4000 desktop, and
-4000T systems, and will be testing with some of these very soon.
-KickSmash might also work with the Amiga 1200, but I've not investigated
-that system enough to confirm.
+KickSmash has so far only been tested in Amiga 3000, 4000, and 4000T systems.
+There are known issues with KickSmash in the Amiga 1200, specifically with
+the TF1260. This combination is not recommended. The issue is Gayle, which will
+glitch ROM enables to KickSmash while code is running on the TF.
 
 1. Turn off your computer
     It had to be said.
@@ -24,8 +23,15 @@ that system enough to confirm.
     Amiga 4000T:  use U141 pin 1.
 
 3. Remove your old Kickstart ROMs
-    It's best to use a chip extractor to remove the ROM chips. If you must use a flat head
-    screwdriver, be very careful to not damage traces on your motherboard.
+    It's best to use a chip extractor to remove the ROM chips. If you must use
+    a flat head screwdriver, be very careful to not damage traces on your
+    motherboard. Pry against the socket, not the motherboard.
+
+4. Set your ROM speed jumper to the slowest setting
+    A3000: J151 and J152 should be set to 1-2 (25 MHz operation)
+    A3000T: J151 and J152 should be set to 1-2 (25 MHz operation)
+    A4000: J151 should be set to 1-2 (ROMSPEED 200ns)
+    A4000T: J151 should be removed (200ns)
 
 4. Install KickSmash in place of the ROMs
     The USB connector of KickSmash should face the same side of the ROM
@@ -49,11 +55,7 @@ that system enough to confirm.
 
 5. Attach your KBRST wire to the KBRST pin on KickSmash
 
-6. Optionally attach your ST-Link
-    It's not necessary unless you plan to do firmware programming. Ensure
-    the cable is oriented correctly.
-
-7. Optionally attach a USB-C cable to your KickSmash
+6. Optionally attach a USB-C cable to your KickSmash
     This cable would be routed out the back of your Amiga and then
     connected to your host. Leaving the USB-C connected provides for
     the possibility of a couple features which will be explained in
@@ -62,6 +64,10 @@ that system enough to confirm.
     just needs to be put in reset during this operation. Another
     feature is that software on the Amiga can communicate with the
     hostsmash application for host file access.
+
+7. Optionally attach your ST-Link and serial console
+    It's not necessary unless you plan to do firmware programming. Ensure
+    the cable is oriented correctly.
 
 8. Power on your computer
     If you previously attached your USB-C cable to your host computer,

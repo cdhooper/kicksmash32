@@ -57,7 +57,7 @@ static const cmd_t cmd_list[] = {
     { cmd_patt,    "patt",    2, cmd_patt_help,
                         "[bwlqoh] <addr> <len> <pattern>", "pattern memory" },
     { cmd_test,    "test",    2, cmd_test_help,
-                        "[bwlqoh] <addr> <len> <testtype>", "test memory" },
+                        "[bwlqoh] <addr> <l> <mode> [<p>]", "test memory" },
     { cmd_time,    "time",    2, cmd_time_help, " cmd <cmd>",
                         "measure command execution time" },
     { cmd_reset,   "reset",   0, cmd_reset_help, " [amiga]",

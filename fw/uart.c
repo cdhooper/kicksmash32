@@ -48,7 +48,7 @@ static volatile uint cons_in_rb_producer; // Console input current writer pos
 static uint          cons_in_rb_consumer; // Console input current reader pos
 static uint8_t       cons_in_rb[4096];    // Console input ring buffer (FIFO)
 static uint8_t       usb_out_buf[4096];   // USB output buffer
-static uint8_t       ami_out_buf[1024];   // Amiga output buffer
+static uint8_t       ami_out_buf[2048];   // Amiga output buffer
 static uint16_t      usb_out_bufpos = 0;  // USB output buffer position
 static uint16_t      ami_out_prod = 0;    // Amiga output buffer producer
 static uint16_t      ami_out_cons = 0;    // Amiga output buffer consumer

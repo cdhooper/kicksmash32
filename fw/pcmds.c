@@ -84,6 +84,7 @@ const char cmd_reset_help[] =
 
 const char cmd_set_help[] =
 "set bank [show|name|?]     - do various prom bank settings\n"
+"set flags <flags> [save]   - set config flags\n"
 "set led <pct>              - set the Power LED brightness level\n"
 "set mode <num>             - set prom mode (0=32, 1=16, 2=16hi, 3=auto)\n"
 "set name <name>            - set Kicksmash board name";
@@ -568,6 +569,7 @@ cmd_prom(int argc, char * const *argv)
             prom_mode(mode);
         } else {
             prom_show_mode();
+            printf("\n");
         }
         return (RC_SUCCESS);
     } else if (strcmp("name", arg) == 0) {
@@ -875,24 +877,200 @@ cmd_gpio(int argc, char * const *argv)
     return (RC_SUCCESS);
 }
 
+
+static const char *const config_flag_bits[] = {
+    "OEWE_PIN_SHOW", "", "", "",
+        "", "", "", "",
+    "", "", "", "",
+        "", "", "", "",
+    "", "", "", "",
+        "", "", "", "",
+    "", "", "", "",
+        "", "", "", "",
+};
+
+static void
+decode_bits(const char *const *bits, uint32_t flags)
+{
+    uint bit;
+    uint printed = 0;
+
+    for (bit = 0; bit < 32; bit++) {
+        if (flags & BIT(bit)) {
+            if (printed++)
+                printf(", ");
+            if (bits[bit][0] == '\0') {
+                printf("bit%u", bit);
+            } else {
+                printf("%s", bits[bit]);
+            }
+        }
+    }
+}
+
+static uint
+match_bits(const char *const *bits, const char *name)
+{
+    uint bit;
+    for (bit = 0; bit < 32; bit++) {
+        if (strcasecmp(name, bits[bit]) == 0)
+            return (bit);
+    }
+    return (bit);
+}
+
+#define CFOFF(x) offsetof(config_t, x), sizeof (config.x)
+
+#define MODE_DEC          0       // Show value in decimal
+#define MODE_HEX          BIT(0)  // Show value in hexadecimal
+#define MODE_STRING       BIT(1)  // Show string
+#define MODE_BIT_FLAGS    BIT(2)  // Decode debug flags
+#define MODE_FAN_AUTO     BIT(3)  // Interpret BIT(7) as "auto"; 0 = decimal
+#define MODE_SIGNED       BIT(4)  // Decimal value is signed
+typedef struct {
+    const char *cs_name;
+    const char *cs_desc;
+    uint16_t    cs_offset;  // Offset into config structure
+    uint8_t     cs_size;    // Size of config value in bytes
+    uint8_t     cs_mode;    // Mode bits for display (1=hex)
+} config_set_t;
+static const config_set_t config_set[] = {
+    { "flags",          "",
+      CFOFF(flags), MODE_HEX | MODE_BIT_FLAGS },
+    { "led",            "LED",
+      CFOFF(led_level), MODE_DEC },
+    { "mode",           "Prom mode ",
+      CFOFF(led_level), MODE_DEC },
+    { "name",          "Board name",
+      CFOFF(name), MODE_STRING },
+};
+
 rc_t
 cmd_set(int argc, char * const *argv)
 {
     if (argc <= 1) {
-        printf("led %-3u   Power LED   %u%%%s\n",
-               config.led_level, config.led_level,
-               led_alert_state ? " ALERT" : "");
-        printf("name      Board name  ");
-        config_name(NULL);
-        printf("mode %-2u   PROM mode   ", config.ee_mode);
-        prom_show_mode();
+        uint pos;
+        for (pos = 0; pos < ARRAY_SIZE(config_set); pos++) {
+            char buf[32];
+            const config_set_t *c = &config_set[pos];
+            uint cs_mode = c->cs_mode;
+            uint value = 0;
+            void *src = (void *) ((uintptr_t) &config + c->cs_offset);
+            if (cs_mode & MODE_STRING) {
+                /* String */
+                sprintf(buf, "%s \"%.*s\"",
+                        c->cs_name, c->cs_size, (char *)src);
+            } else if (cs_mode & MODE_HEX) {
+                /* Hexadecimal */
+                memcpy(&value, src, c->cs_size);
+                sprintf(buf, "%s %0*x", c->cs_name, c->cs_size * 2, value);
+            } else {
+                /* Decimal : MODE_DEC */
+                memcpy(&value, src, c->cs_size);
+                if ((cs_mode & MODE_FAN_AUTO) && (value & BIT(7))) {
+                    sprintf(buf, "%s %s", c->cs_name, "auto");
+                } else if (cs_mode & MODE_SIGNED) {
+                    if (c->cs_size == 1)
+                        value = (int8_t) value;
+                    else if (c->cs_size == 2)
+                        value = (int16_t) value;
+                    sprintf(buf, "%s %d", c->cs_name, value);
+                } else {
+                    sprintf(buf, "%s %u", c->cs_name, value);
+                }
+            }
+            printf("%s%*s%s", buf, 24 - strlen(buf), "", c->cs_desc);
+            if (cs_mode & MODE_BIT_FLAGS) {
+                if (strncmp(c->cs_name, "flags", 4) == 0) {
+                    /* Decode config flags */
+                    if (value == 0)
+                        printf("Config flags");
+                    decode_bits(config_flag_bits, value);
+                }
+            }
+            if (strcmp(c->cs_name, "led") == 0) {
+                printf(" %u%%%s",
+                       config.led_level, led_alert_state ? " ALERT" : "");
+            } else if (strcmp(c->cs_name, "mode") == 0) {
+                prom_show_mode();
+            }
+            printf("\n");
+        }
         return (RC_SUCCESS);
     }
+
     if (strcmp(argv[1], "bank") == 0) {
         return (cmd_prom(argc - 1, argv + 1));
     } else if ((strcmp(argv[1], "help") == 0) ||
                (strcmp(argv[1], "?") == 0)) {
         return (RC_USER_HELP);
+    } else if (strncmp(argv[1], "flags", 4) == 0) {
+        int      arg;
+        int      pos = 0;
+        int      add_sub = 0;
+        uint     bit;
+        uint     do_save = 0;
+        uint     did_set = 0;
+        uint32_t value;
+        uint32_t nvalue = 0;
+        if (argc <= 2) {
+            printf("Config flags are a combination of bits: "
+                   "specify all bit numbers or names\n");
+            for (bit = 0; bit < 32; bit++)
+                if (config_flag_bits[bit][0] != '\0')
+                    printf(" %c %2u  %s\n",
+                           config.flags & BIT(bit) ? '*' : ' ',
+                           bit, config_flag_bits[bit]);
+            printf("Current config %08lx  ", config.flags);
+            decode_bits(config_flag_bits, config.flags);
+            printf("\n");
+            return (RC_SUCCESS);
+        }
+        for (arg = 2; arg < argc; arg++) {
+            char *flagname = argv[arg];
+            if (*flagname == '+') {
+                flagname++;
+                add_sub = 1;
+            } else if (*flagname == '-') {
+                flagname++;
+                add_sub = -1;
+            }
+            if (*flagname == '\0')
+                continue;
+            if (strcasecmp(flagname, "save") == 0) {
+                do_save = 1;
+                continue;
+            } else if ((bit = match_bits(config_flag_bits, flagname)) < 32) {
+                if (did_set == 0)
+                    nvalue = 0;
+                nvalue |= BIT(bit);
+                did_set = 1;
+            } else {
+                if ((sscanf(flagname, "%x%n", &value, &pos) != 1) ||
+                    (flagname[pos] != '\0')) {
+                    printf("Invalid argument: %s\n", flagname);
+                    return (RC_USER_HELP);
+                }
+                if ((pos >= 4) || (value >= 32))
+                    nvalue = value;
+                else
+                    nvalue |= BIT(value);
+                did_set = 1;
+            }
+        }
+        if (add_sub > 0)
+            nvalue = config.flags | nvalue;
+        else if (add_sub < 0)
+            nvalue = config.flags & ~nvalue;
+
+        if (config.flags != nvalue) {
+            config.flags = nvalue;
+            printf("Config flags %08lx ", nvalue);
+            decode_bits(config_flag_bits, nvalue);
+            printf("\n");
+        }
+        if (do_save)
+            config_updated();
     } else if (strcmp(argv[1], "led") == 0) {
         if (argc != 3) {
             printf("set led requires a percentage\n");

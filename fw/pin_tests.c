@@ -23,6 +23,9 @@
 #include "cmdline.h"
 #include "prom_access.h"
 #include "led.h"
+#include "irq.h"
+
+#include <libopencm3/stm32/timer.h>
 
 uint8_t  board_is_standalone = 0;
 uint8_t  kbrst_in_amiga = 0;
@@ -399,6 +402,207 @@ in_amiga:
         led_alert(1);
 }
 
+
+/*
+ * Fast routines for benchmarking pin state change
+ */
+static uint
+gpio_get_fast(uint32_t port, uint16_t pin)
+{
+    return (GPIO_IDR(port) & pin);
+}
+
+static void
+gpio_set_1_fast(uint32_t GPIOx, uint16_t GPIO_Pins)
+{
+    GPIO_BSRR(GPIOx) = GPIO_Pins;
+}
+
+static void
+gpio_set_0_fast(uint32_t GPIOx, uint16_t GPIO_Pins)
+{
+    GPIO_BSRR(GPIOx) = GPIO_Pins << 16;
+}
+
+#define timer_tick_get_fast() TIM_CNT(TIM1)
+
+
+/*
+ * pin_test_oewe
+ * -------------
+ * Verify interaction between OE, WE, and OEWE pins.
+ */
+static uint
+pin_test_oewe(void)
+{
+    uint count;
+    uint32_t ticks_to_1_total = 0;
+    uint32_t ticks_to_0_total = 0;
+    uint32_t ticks_overhead = 0;
+    uint16_t start;
+    uint64_t nsec_0;
+    uint64_t nsec_1;
+
+    /* Set default state for OE, WE, and OEWE */
+    gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
+    gpio_setmode(FLASH_OEWE_PORT, FLASH_OEWE_PIN,
+                 GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    gpio_setv(FLASH_WE_PORT, FLASH_WE_PIN, 1);
+    gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    /* Allow rise time */
+    timer_delay_msec(10);
+
+    /* Socket OE should be high */
+    if (gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN) == 0) {
+        printf("FAIL SOCKET_OE is low -- check for short\n");
+        return (1);
+    }
+
+    /* Flash OEWE has external pull-down */
+    if (gpio_get(FLASH_OEWE_PORT, FLASH_OEWE_PIN) != 0) {
+        printf("FAIL FLASH_OEWE is high -- check R10 and R13 pull-down\n");
+        return (1);
+    }
+
+    /* Flash WE should be high */
+    if (gpio_get(FLASH_WE_PORT, FLASH_WE_PIN) == 0) {
+        printf("FAIL FLASH_WE is low -- check Q2/Q3\n");
+        return (1);
+    }
+
+    /* Even when pulled down by STM32, WE should be high */
+    gpio_setv(FLASH_WE_PORT, FLASH_WE_PIN, 0);
+    if (gpio_get(FLASH_WE_PORT, FLASH_WE_PIN) == 0) {
+        printf("FAIL FLASH_WE is low -- check R11 pull-up\n");
+        return (1);
+    }
+
+    /* Drive SOCKET_OE low */
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
+    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+
+    /* FLASH_OE should be low because SOCKET_OE is driving it */
+    if (gpio_get(FLASH_OE_PORT, FLASH_OE_PIN) != 0) {
+        printf("FAIL FLASH_OE is high -- check R7\n");
+        return (1);
+    }
+
+    /* Strongly drive FLASH_OE and SOCKET_OE high */
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+
+    /* Enable OEWE (flash write LED turns on) */
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
+    gpio_setmode(FLASH_OEWE_PORT, FLASH_OEWE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+
+    /* FLASH_WE should still be high because SOCKET_OE is high */
+    if (gpio_get(FLASH_WE_PORT, FLASH_WE_PIN) == 0) {
+        printf("FAIL FLASH_WE is low -- check Q3\n");
+        return (1);
+    }
+
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
+    timer_delay_usec(2);
+
+    /* FLASH_WE should be low because SOCKET_OE is low */
+    if (gpio_get(FLASH_WE_PORT, FLASH_WE_PIN) != 0) {
+        printf("FAIL FLASH_WE is high -- check Q2/Q3\n");
+        return (1);
+    }
+
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    timer_delay_msec(10);
+
+    /* FLASH_WE should be high because SOCKET_OE is high */
+    if (gpio_get(FLASH_WE_PORT, FLASH_WE_PIN) == 0) {
+        printf("FAIL FLASH_WE is low -- check Q2/Q3\n");
+        return (1);
+    }
+
+    /* Measure time it takes for loop to execute */
+    disable_irq();
+    (void) timer_tick_get_fast();
+    for (count = 0; count < 1000; count++) {
+        start = timer_tick_get_fast();
+        gpio_set_1_fast(SOCKET_OE_PORT, SOCKET_OE_PIN);
+        (void) gpio_get_fast(FLASH_WE_PORT, FLASH_WE_PIN);
+        __asm("nop");  // operation: "!= 0"
+        ticks_overhead += (uint16_t) (timer_tick_get_fast() - start);
+    }
+    enable_irq();
+
+    /* Measure time it takes for Q2 and Q3 to react */
+    disable_irq();
+    for (count = 0; count < 1000; count++) {
+        /* Time to low */
+        start = timer_tick_get_fast();
+        gpio_set_0_fast(SOCKET_OE_PORT, SOCKET_OE_PIN);
+        while (gpio_get_fast(FLASH_WE_PORT, FLASH_WE_PIN) != 0)
+            ;
+        ticks_to_0_total += (uint16_t) (timer_tick_get_fast() - start);
+
+        /* Time to high */
+        start = timer_tick_get_fast();
+        gpio_set_1_fast(SOCKET_OE_PORT, SOCKET_OE_PIN);
+        while (gpio_get_fast(FLASH_WE_PORT, FLASH_WE_PIN) == 0)
+            ;
+        ticks_to_1_total += (uint16_t) (timer_tick_get_fast() - start);
+    }
+    enable_irq();
+
+    ticks_to_0_total -= ticks_overhead;
+    ticks_to_1_total -= ticks_overhead;
+    nsec_0 = timer_tick_to_usec(ticks_to_0_total * 1000 / count);
+    nsec_1 = timer_tick_to_usec(ticks_to_1_total * 1000 / count);
+
+#undef DEBUG_PIN_SPEED_TEST
+#ifdef DEBUG_PIN_SPEED_TEST
+    printf("FLASH_WE overhead ticks=%lu  usec=%llu\n",
+           ticks_overhead, timer_tick_to_usec(ticks_overhead));
+#endif
+
+#define NSEC_0_FAIL 400
+#define NSEC_1_FAIL 250
+    if ((nsec_0 > NSEC_0_FAIL) || (nsec_1 > NSEC_1_FAIL)) {
+        printf("Pin test failure\n");
+        printf("%4s SOCKET_OE -> FLASH_WE time to 0 = %llu nsec\n",
+               (nsec_0 > NSEC_0_FAIL) ? "FAIL" : "", nsec_0);
+        printf("%4s SOCKET_OE -> FLASH_WE time to 1 = %llu nsec\n",
+               (nsec_1 > NSEC_1_FAIL) ? "FAIL" : "", nsec_1);
+        return (1);
+    }
+
+    if (config.flags & CF_OEWE_PIN_SHOW) {
+        printf("FLASH_WE time to 0 = %llu nsec\n", nsec_0);
+        printf("FLASH_WE time to 1 = %llu nsec\n", nsec_1);
+    }
+
+    /* Set default state for OE, WE, and OEWE */
+    gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
+    gpio_setmode(FLASH_OEWE_PORT, FLASH_OEWE_PIN,
+                 GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    gpio_setv(FLASH_WE_PORT, FLASH_WE_PIN, 1);
+    gpio_setmode(FLASH_WE_PORT, FLASH_WE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    return (0);
+}
+
 /*
  * pin_tests
  * ---------
@@ -435,16 +639,6 @@ pin_tests(void)
     /* If board is standalone, can test data and address pins */
     /* Set all data pins PU and test */
     /* Set all data pins PD and test */
-
-#if 0
-    /* Test OE, WE, and OEWE interaction */
-    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
-    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-    gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
-    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-    gpio_setv(FLASH_WE_PORT, FLASH_WE_PIN, 1);
-    gpio_setmode(FLASH_WE, FLASH_WE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-#endif
 
     /*
      * Set one pin at a time drive high or drive low and verify that no
@@ -683,6 +877,12 @@ pin_tests(void)
     }
 
     usb_poll();
+
+    /* Test OE, WE, and OEWE interaction */
+    fail += pin_test_oewe();
+
+    if (fail)
+        return (RC_FAILURE);
 
     /* Restore all pins to input pull-up/pull-down and final state */
     for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {

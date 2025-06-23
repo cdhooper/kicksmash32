@@ -569,7 +569,6 @@ prom_show_mode(void)
         }
         printf(" (%s)", mode);
     }
-    printf("\n");
 }
 
 void

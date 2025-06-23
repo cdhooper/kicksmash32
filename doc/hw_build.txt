@@ -1,8 +1,12 @@
 KickSmash Hardware Build
 ------------------------
 
-Use files in the rev5 directory to have a fab house build a PCB.
+Use files in the desired rev* directory to have a fab house build a PCB.
 HASL is fine. I use JLCPCB for most of my builds.
+
+** NOTE ** Although it's listed in the BOM, do not use AO3400A for Q2 / Q3.
+           Use 2N7002 MOSFETs instead. The AO3400A are too slow for reliable
+           flashing from AmigaOS.
 
 My general order for building these boards is:
     1. Top side STM32
