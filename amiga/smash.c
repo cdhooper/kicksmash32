@@ -121,7 +121,7 @@ static const char cmd_clock_options[] =
     "   show         show current KS clock (-S)\n";
 
 static const char cmd_read_options[] =
-    "smash -r options\n"
+    "smash read options\n"
     "   addr <hex>   starting address (-a)\n"
     "   bank <num>   flash bank on which to operate (-b)\n"
     "   dump         save hex/ASCII instead of binary (-d)\n"
@@ -131,7 +131,7 @@ static const char cmd_read_options[] =
     "   yes          skip prompt (-y)\n";
 
 static const char cmd_write_options[] =
-    "smash -w options\n"
+    "smash write options\n"
     "   addr <hex>   starting address (-a)\n"
     "   bank <num>   flash bank on which to operate (-b)\n"
 //  "   dump         save hex/ASCII instead of binary (-d)\n"
@@ -141,7 +141,7 @@ static const char cmd_write_options[] =
     "   yes          skip prompt (-y)\n";
 
 static const char cmd_verify_options[] =
-    "smash -v options\n"
+    "smash verify options\n"
     "   addr <hex>   starting address (-a)\n"
     "   bank <num>   flash bank on which to operate (-b)\n"
 //  "   dump         save hex/ASCII instead of binary (-d)\n"
@@ -151,7 +151,7 @@ static const char cmd_verify_options[] =
     "   yes          skip prompt (-y)\n";
 
 static const char cmd_erase_options[] =
-    "smash -e options\n"
+    "smash erase options\n"
     "   addr <hex>   starting address (-a)\n"
     "   bank <num>   flash bank on which to operate (-b)\n"
     "   len <hex>    length to erase in bytes (-l)\n"
