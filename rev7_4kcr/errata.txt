@@ -1,0 +1,4 @@
+PCB is too long; Pin 1 and Pin 42 are too close to 4000CR LED connectors.
+    Pin 1 and Pin 42 on ReAmiga 4000CR don't actually connect to bus signals
+    anyway, so it should be fine to relocate these pins to other locations.
+    Maybe move them to the immediate left and right of pin 2 / pin 41.

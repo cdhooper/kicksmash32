@@ -1,0 +1,3 @@
+ROM left-right order is wrong for 3000T (need -s 1032), but correct for AA3K+
+
+For 3000T, move ROM sockets together by ~0.5mm

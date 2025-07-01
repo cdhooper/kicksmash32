@@ -504,11 +504,11 @@ fail:
             rc = RC_FAILURE;
             goto fail;
         }
-        rc = RC_SUCCESS;
-        if (puts_binary(&rc, 1)) {
-            rc = RC_TIMEOUT;
-            goto fail;
-        }
+    }
+    rc = RC_SUCCESS;
+    if (puts_binary(&rc, 1)) {
+        rc = RC_TIMEOUT;
+        goto fail;
     }
     return (RC_SUCCESS);
 }
