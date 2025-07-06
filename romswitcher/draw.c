@@ -213,7 +213,10 @@ AreaDraw(struct RastPort *rp, int x, int y)
     areainfo->VctrPtr    = &areainfo->VctrPtr[2];
     areainfo->FlagPtr++;
 
+#undef DRAW_POINTS
+#ifdef DRAW_POINTS
     Draw(rp, x, y);
+#endif
     return (0);
 }
 
@@ -225,6 +228,14 @@ AreaEnd(struct RastPort *rp)
     if ((areainfo->Count == 0) || (rp->TmpRas == NULL))
         return (0);  // Nothing to do
 
+    fill_polygon_cpu(GetAPen(rp), areainfo->Count, areainfo->VctrTbl);
+
+    areainfo->VctrPtr = areainfo->VctrTbl;
+    areainfo->FlagPtr = areainfo->FlagTbl;
+    areainfo->Count = 0;
+    return (0);
+
+#if 0
     WORD first_idx = 0;
     WORD last_idx  = -1;
     ULONG BytesPerRow;
@@ -479,6 +490,7 @@ AreaEnd(struct RastPort *rp)
     rp->cp_y = Rem_cp_y;
 
     return (0);
+#endif
 }
 
 uint16_t

@@ -676,3 +676,348 @@ draw_line(uint fgpen, int x1, int y1, int x2, int y2)
         *BLTSIZE = ((dmax + 1) << 6) + 2;
     }
 }
+
+typedef struct poly_bounding_box {
+    int16_t min_x;
+    int16_t min_y;
+    int16_t max_x;
+    int16_t max_y;
+} poly_bounding_box;
+
+#if 0
+
+/**
+ * poly_is_convex
+ * Returns 1 if the polygon described by points is convex, returns 0 otherwise
+ * Convexness of a polygon - having only interior angles measuring less than
+ * 180 degrees.
+ * This function treats polygons with three colinear adjacent points as convex
+ *
+ * points - the list of points, ordered {x, y, x, y, x, y, ...}
+ * npoints - the number of points
+ */
+static int
+poly_is_convex(int16_t *points, int npoints)
+{
+    // triangles are always convex
+    if (npoints <= 3) {
+        return (1);
+    }
+
+    // we can do cross products from directed side to directed side to see
+    // if all points curl in the same direction
+    // we will first need to find a winding direction
+    // we will do this with a loop, since we have no guarantees that 3 points
+    // will never be colinear
+    // each loop will take 2 adjacent sides, consisting of 3 points
+    int i = 0;
+    int winding = 0;
+    for (; winding == 0 && i < npoints - 2; i++) {
+        int side0x = points[i * 2 + 2] - points[i * 2]; // x1 - x0
+        int side0y = points[i * 2 + 3] - points[i * 2 + 1]; // y1 - y0
+        int side1x = points[i * 2 + 4] - points[i * 2 + 2]; // x2 - x1
+        int side1y = points[i * 2 + 5] - points[i * 2 + 3]; // y2 - y1
+
+        // winding = side0 cross side1
+        winding = side0x * side1y - side0y * side1x;
+    }
+
+    // this is the part where we check to make sure
+    for (; i < npoints - 2; i++) {
+        int side0x = points[i * 2 + 2] - points[i * 2]; // x1 - x0
+        int side0y = points[i * 2 + 3] - points[i * 2 + 1]; // y1 - y0
+        int side1x = points[i * 2 + 4] - points[i * 2 + 2]; // x2 - x1
+        int side1y = points[i * 2 + 5] - points[i * 2 + 3]; // y2 - y1
+
+        // winding = side0 cross side1
+        int this_winding = side0x * side1y - side0y * side1x;
+        if (this_winding * winding < 0) {
+            // if this winding and winding are of different sign,
+            // shape is concave
+            return (0);
+        }
+    }
+
+    return (1);
+}
+
+#endif
+
+/**
+ * poly_winding_direction
+ * Determines the winding direction of a set of points.
+ *
+ * If the points are wound clockwise, returns 1.
+ * If the points are wound counter-clockwise, returns 0.
+ */
+static int
+poly_winding_direction(int16_t *points, int npoints)
+{
+    // Use the Shoelace formula or whatever it's called
+
+    int32_t area = points[2 * npoints - 2] * points[1] -
+                   points[2 * npoints - 1] * points[0];
+    for (int i = 0; i < npoints - 1; i++) {
+        area += points[2 * i] * points[2 * i + 3] -
+                points[2 * i + 1] * points[2 * i + 2];
+    }
+
+    // area is now > 0 if wound clockwise, and < 0 if wound counter-clockwise
+    // you may note that this apparently should be the other way around,
+    // but the fact that computer pixel coordinates are a left-handed system
+    // (+y is to the right of +x) causes the sign to be inverted here
+
+    return (area > 0);
+}
+
+/**
+ * poly_get_bounding_box
+ * Finds the bounding box of the polygon described by points.
+ * Outputs the result to out.
+ * Returns the index of the point with minimum y.
+ * - If there are several points with this, then it returns the left-most.
+ *
+ * points - the list of points, ordered {x, y, x, y, x, y, ...}
+ * npoints - the number of points
+ * out - a pointer to the structure to output to
+ */
+static int
+poly_get_bounding_box(int16_t *points, int npoints, poly_bounding_box *out)
+{
+    // easy initialization
+    out->max_x = 0x8000;
+    out->max_y = 0x8000;
+    out->min_x = 0x7FFF;
+    out->min_y = 0x7FFF;
+
+    int ret_i = -1;
+
+    for (int i = 0; i < npoints; i++) {
+        if (points[i * 2] > out->max_x) {
+            out->max_x = points[i * 2];
+        }
+
+        if (points[i * 2] < out->min_x) {
+            out->min_x = points[i * 2];
+        }
+
+        if (points[i * 2 + 1] > out->max_y) {
+            out->max_y = points[i * 2 + 1];
+        }
+
+        if (points[i * 2 + 1] <= out->min_y) {
+            out->min_y = points[i * 2 + 1];
+
+            if (ret_i == -1 || points[i * 2 + 1] < points[ret_i * 2 + 1] ||
+                               points[i * 2] < points[ret_i * 2]) {
+                ret_i = i;
+            }
+        }
+    }
+
+    return (ret_i);
+}
+
+#define abs(x) __builtin_abs(x)
+
+/**
+ * Following static functions are modifications of the basic Bresenham algorithm
+ * https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm
+ */
+
+/**
+ * Function for plotLineLow & plotLineHigh (refer to wikipedia article)
+ * flag = 0 -> plotLineLow, on left side of polygon
+ * flag = 1 -> plotLineLow, on right side of polygon
+ * flag = 2 -> plotLineHigh, flip x & y arguments as well, e.g.
+ * p_pl_s(bounds, y0, x0, y1, x1, 2)
+ *
+ * This function does the actual placing of points of the line
+ *
+ * The reason why we need to differentiate between the left and right side
+ * of the polygon is because we want to start drawing from the lowest x
+ * value on the left side and to the highest x-value on the right side
+ */
+static void
+poly_plot_line_helper(int16_t *bounds, int16_t x0, int16_t y0, int16_t x1,
+                      int16_t y1, int flag)
+{
+    int16_t dx = x1 - x0;
+    int16_t dy = y1 - y0; // this is never 0
+
+    int yi = 1;
+    if (dy < 0) {
+        yi = -1;
+        dy = -dy;
+    }
+    int D = 2 * dy - dx;
+
+    switch (flag) {
+    break; case 0:
+        bounds[y0] = x0;
+
+        for (; x0 < x1; x0++) {
+            if (D > 0) {
+                y0 += yi;
+                bounds[y0] = x0 + 1;
+                D -= 2 * dx;
+            }
+            D += 2 * dy;
+        }
+    break; default:
+        for (; x0 <= x1; x0++) {
+            // this simplifies to (bounds[y0] = x0) if flag = 1 and
+            // (bounds[x0] = y0) if flag = 2
+            bounds[y0 * (2 - flag) + x0 * (flag - 1)] = x0 * (2 - flag) +
+                                                        y0 * (flag - 1);
+            if (D > 0) {
+                y0 += yi;
+                D -= 2 * dx;
+            }
+            D += 2 * dy;
+        }
+    }
+}
+
+/**
+ * Wrapper function for poly_plot_line_helper
+ * Does the handling of how points of the line should be placed and whatnot
+ *
+ * flag = 0 -> plotLine for left side of polygon
+ * flag = 1 -> plotLine for right side of polygon
+ */
+static void
+poly_plot_line(int16_t *bounds, int16_t x0, int16_t y0, int16_t x1,
+               int16_t y1, int flag)
+{
+    int16_t dx = x1 - x0;
+    int16_t dy = y1 - y0; // this is never 0
+
+    if (dx == 0) { // optimization
+        for (int y = y0; y <= y1; y++) {
+            bounds[y] = x0;
+        }
+        return;
+    }
+
+    // guarantees: y is always increasing from y0 to y1
+    if (dy < abs(dx)) {
+        if (dx < 0) {
+            poly_plot_line_helper(bounds, x1, y1, x0, y0, flag);
+        } else {
+            poly_plot_line_helper(bounds, x0, y0, x1, y1, flag);
+        }
+    } else {
+        // here, we need a plotLineHigh
+        poly_plot_line_helper(bounds, y0, x0, y1, x1, 2);
+    }
+}
+
+/**
+ * fill_polygon_cpu
+ * Fills in the polygon described by points with the fill_rect_cpu function.
+ *
+ * Requirements:
+ * The polygon described by points is wound clockwise.
+ * The polygon described by points does not contain duplicate points.
+ *
+ * Note:
+ * Currently does not support concave polygons all that well.
+ *
+ * vect - the list of points, ordered {x, y, x, y, x, y, ...}
+ * count - the number of points
+ */
+void
+fill_polygon_cpu(uint fgpen, uint count, int16_t *vect)
+{
+    // deduplicating vertices
+    for (; count > 1 &&
+           vect[count * 2 - 2] == vect[0] &&
+           vect[count * 2 - 1] == vect[1]; count--) {
+           ; // remove duplicates from end
+    }
+    for (; count > 1 &&
+           vect[0] == vect[2] &&
+           vect[1] == vect[3]; count--) {
+           // remove duplicates from beginning
+           vect += 2;
+    }
+
+    // this will now be 1 when clockwise, and -1 when counter clockwise
+    int direction = poly_winding_direction(vect, count) * 2 - 1;
+
+    poly_bounding_box bounding_box = { 0, 0, 0, 0 };
+    int top_i = poly_get_bounding_box(vect, count, &bounding_box);
+
+    // init memory to store x-positions of each line
+    // inclusive of top and bottom
+    int bounds_size = bounding_box.max_y - bounding_box.min_y + 1;
+    int16_t *bounds = (int16_t *)malloc(sizeof (int16_t) * bounds_size * 2);
+    int16_t *left_bounds = bounds;
+    int16_t *right_bounds = bounds + bounds_size;
+
+    // find the top points
+    int left_i = top_i; // left point i
+    int right_i = top_i; // (tentative) right point i
+
+    // push right_i out
+    for (int nright_i = right_i + direction; ; nright_i += direction) {
+        if (nright_i == count) {
+            nright_i = 0;
+        }
+        if (nright_i < 0) {
+            nright_i = count - 1;
+        }
+
+        if (vect[nright_i * 2 + 1] > bounding_box.min_y) {
+            break;
+        }
+
+        // nright_i is at min_y along with right_i
+        // since this convex polygon is wound in the direction of the
+        // direction variable, this implies that nright_i is to the right
+        // of right_i
+        right_i = nright_i;
+    }
+
+    // add left bounds to buffer
+    for (int i = left_i; bounding_box.max_y > vect[i * 2 + 1]; ) {
+        int ni = i - direction; // go counter-clockwise
+        if (ni == count) {
+            ni = 0;
+        }
+        if (ni < 0) {
+            ni = count - 1;
+        }
+
+        poly_plot_line(left_bounds, vect[i * 2], vect[i * 2 + 1] -
+                       bounding_box.min_y, vect[ni * 2], vect[ni * 2 + 1] -
+                       bounding_box.min_y, 0);
+
+        i = ni;
+    }
+
+    // add right bounds to buffer
+    for (int i = right_i; bounding_box.max_y > vect[i * 2 + 1]; ) {
+        int ni = i + direction; // go clockwise
+        if (ni == count) {
+            ni = 0;
+        }
+        if (ni < 0) {
+            ni = count - 1;
+        }
+
+        poly_plot_line(right_bounds, vect[i * 2], vect[i * 2 + 1] -
+                       bounding_box.min_y, vect[ni * 2], vect[ni * 2 + 1] -
+                       bounding_box.min_y, 1);
+
+        i = ni;
+    }
+
+    for (int i = 0; i < bounds_size; i++) {
+        int y = i + bounding_box.min_y;
+        fill_rect_cpu(fgpen, left_bounds[i], y, right_bounds[i], y);
+    }
+
+    free(bounds);
+}
