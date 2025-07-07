@@ -76,12 +76,12 @@ do_release: populating $(RELEASE_TARGETS) $(RELEASE_LHA) $(RELEASE_ZIP)
 $(RELEASE_LHA): all populating $(RELEASE_TARGETS)
 	@echo "* Building $@"
 	@rm -f $@
-	@lha -aq2 $@ $(RELEASE_DIR)
+	lha -aq2 $@ $(RELEASE_DIR)
 
 $(RELEASE_ZIP): all populating $(RELEASE_TARGETS)
 	@echo "* Building $@"
 	@rm -f $@
-	@zip -rq $@ $(RELEASE_DIR)
+	zip -rq $@ $(RELEASE_DIR)
 
 populating:
 	@echo "* Populating $(RELEASE_DIR)"

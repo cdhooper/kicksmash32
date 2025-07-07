@@ -531,7 +531,6 @@ ee_write_word(uint32_t addr, uint32_t data)
 #ifdef DEBUG_SIGNALS
     printf(" WWord[%lx]=%08lx", addr, data);
 #endif
-//  we_output(1);
     address_output(addr);
 
     oe_output(1);
@@ -728,7 +727,7 @@ ee_program_word(uint32_t addr, uint32_t word)
     ee_write_word(0x002aa, 0x00550055);
     ee_write_word(0x00555, 0x00a000a0);
     ee_write_word(addr, word);
-    if ((addr == 0x55) || (addr == 0x56))
+    if (((addr & 0xff) == 0x55) || ((addr & 0xff) == 0x56))
         ee_read_mode();  // Prevent bug where data gets interpreted as command
     enable_irq();
 
