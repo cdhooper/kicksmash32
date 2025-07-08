@@ -544,6 +544,8 @@ ee_write_word(uint32_t addr, uint32_t data)
 
     timer_delay_ticks(ticks_per_30_nsec);  // tWP=30ns tDS=20ns
     we_output(1);
+    data_output_disable();
+    oe_output_disable();
 }
 
 /*
@@ -575,25 +577,22 @@ ee_cmd(uint32_t addr, uint32_t cmd)
     if ((ccmd & 0xffff) == 0)
         ccmd >>= 16;
 
-    disable_irq();
-
     /* Check for a command which doesn't require an unlock sequence */
     switch (ccmd & 0xffff) {
         case 0x98:  // Read CFI Query
         case 0xf0:  // Read/Reset
         case 0xb0:  // Erase Suspend
         case 0x30:  // Erase Resume
+            ee_write_word(addr, cmd);
             break;
         default:
+            disable_irq();
             ee_write_word(0x00555, 0x00aa00aa);
             ee_write_word(0x002aa, 0x00550055);
+            ee_write_word(addr, cmd);
+            enable_irq();
             break;
     }
-
-    ee_write_word(addr, cmd);
-    data_output_disable();
-    oe_output_disable();
-    enable_irq();
 
     timer_delay_usec(2);   // Wait for command to complete
 }
@@ -1034,8 +1033,6 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
 #endif
             }
         }
-        data_output_disable();
-        oe_output_disable();
         usb_unmask_interrupts();
 
         timer_delay_usec(100);  // tBAL (Word Access Load Time)
@@ -1201,7 +1198,7 @@ ee_test(void)
      * populated or pins are not making contact.
      */
     ee_cmd(0x00555, 0x00900090);
-    data_output_disable();
+    data_output_disable();    // set pull-up or pull-down
     data_output(0xffffffff);  // pull high
     ee_read_word(0x3, &val);
     ee_read_mode();

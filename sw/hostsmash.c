@@ -718,6 +718,28 @@ rx_rb_get(void)
 }
 
 /*
+ * rx_rb_peek() retrieves the most recent received text, without
+ *              disturbing the read position.
+ */
+static int
+rx_rb_peek(char *buf, uint bufsize)
+{
+    int rx_rb_pos;
+    uint bufcur;
+    if (bufsize > sizeof (rx_rb) - 1)
+        bufsize = sizeof (rx_rb) - 1;
+    rx_rb_pos = rx_rb_producer - bufsize;
+    if (rx_rb_pos < 0)
+        rx_rb_pos += sizeof (rx_rb);
+    for (bufcur = 0; bufcur < bufsize - 1; bufcur++) {
+        *(buf++) = rx_rb[rx_rb_pos];
+        rx_rb_pos = (rx_rb_pos + 1) % sizeof (rx_rb);
+    }
+    *buf = '\0';
+    return (bufsize);
+}
+
+/*
  * tx_rb_put() stores next character to be sent to the remote device.
  *
  * @param [in]  ch - The character to store in the tty input ring buffer.
@@ -2421,6 +2443,49 @@ file_read(const char *filename, uint len)
 }
 
 /*
+ * show_rx_peek() displays as ASCII text the most recent output received
+ *                from Kicksmash. This is done as an aid in debugging failures.
+ */
+static void
+show_rx_peek(void)
+{
+    char buf[256];
+    uint len = rx_rb_peek(buf, sizeof (buf));
+    uint pos;
+    uint last_printed = 0;
+    uint print_count = 0;
+    uint last_was_space = 1;
+    printf("Kicksmash FW: ");
+    for (pos = 0; pos < len; pos++) {
+        char ch = buf[pos];
+        if (print_count == 72) {
+            print_count = 0;
+            printf("\n              ");
+        }
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\0') {
+            if (last_was_space == 0) {
+                last_was_space = 1;
+                putchar(' ');
+                print_count++;
+                last_printed = 1;
+            }
+        } else if (ch > ' ' && ch <= '~') {
+            putchar(ch);
+            print_count++;
+            last_printed = 1;
+            last_was_space = 0;
+        } else if (last_printed) {
+            putchar('.');
+            print_count++;
+            last_printed = 0;
+            last_was_space = 1;
+        }
+    }
+    if (print_count > 0)
+        printf("\n");
+}
+
+/*
  * eeprom_write() uses the programmer to writes all or part of an EEPROM image.
  *                Content to write is sourced from a local file.
  *
@@ -2447,6 +2512,7 @@ eeprom_write(const uint8_t *filebuf, uint addr, uint len)
         return (-1); // "timeout" was reported in this case
 
     if (send_ll_crc(filebuf, len)) {
+        show_rx_peek();
         errx(EXIT_FAILURE, "Send failure");
     }
 
