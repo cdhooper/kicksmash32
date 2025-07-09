@@ -125,6 +125,7 @@
 #define BPLCON1   VADDR16(0x00dff102)  // Bitplane Control Register 1
 #define BPLCON2   VADDR16(0x00dff104)  // Bitplane Control Register 2
 #define BPLCON3   VADDR16(0x00dff106)  // Bitplane Control Register 3
+#define BPLCON4   VADDR16(0x00dff10c)  // Bitplane Control Register 4
 #define BPL1DAT   VADDR16(0x00dff110)  // Bitplane 1 data
 #define BPL2DAT   VADDR16(0x00dff112)  // Bitplane 2 data
 #define BPL3DAT   VADDR16(0x00dff114)  // Bitplane 3 data
@@ -221,20 +222,35 @@
 #define COLOR29   VADDR16(0x00dff1ba)  // Pallette color 29 & Sprite 6+7 color 1
 #define COLOR30   VADDR16(0x00dff1bc)  // Pallette color 30 & Sprite 6+7 color 2
 #define COLOR31   VADDR16(0x00dff1be)  // Pallette color 31 & Sprite 6+7 color 3
-
+#define HTOTAL    VADDR16(0x00dff1c0)  // Horizontal count (VARBEAMEN=1)
+#define HSSTOP    VADDR16(0x00dff1c2)  // Horizontal line post for HSYNC stop
+#define HBSTRT    VADDR16(0x00dff1c4)  // Horizontal line pos for HBLANK start
+#define HBSTOP    VADDR16(0x00dff1c6)  // Horizontal line pos for HBLANK stop
+#define VTOTAL    VADDR16(0x00dff1c8)  // Highest vertical line (VARBEAMEN=1)
+#define VSSTOP    VADDR16(0x00dff1ca)  // Vertical line pos for VSYNC stop
+#define VBSTRT    VADDR16(0x00dff1cc)  // Vertical line for VBLANK start
+#define VBSTOP    VADDR16(0x00dff1ce)  // Vertical line for VBLANK stop
+#define BEAMCON0  VADDR16(0x00dff1dc)  // Beam counter control bits
+#define HSSTRT    VADDR16(0x00dff1de)  // Horizontal sync start (VARHSY)
+#define VSSTRT    VADDR16(0x00dff1e0)  // Vertical sync start (VARVSY)
+#define FMODE     VADDR16(0x00dff1fc)  // Memory Fetch Mode
 
 #define BPLCON0_ECS       BIT(0)   // Enable ECS + bits in BPLCON3
 #define BPLCON0_ERSY      BIT(1)   // External synchronization (genlock)
 #define BPLCON0_LACE      BIT(2)   // Interlace mode enable
 #define BPLCON0_LPEN      BIT(3)   // Light pen enable
+#define BPLCON0_BPU3      BIT(4)   // Bit3 of # of bitplanes
+#define BPLCON0_BYPASS    BIT(5)   // Bypass color table and data are on R(7:0)
+#define BPLCON0_SHRES     BIT(6)   // Super hi-res mode (35ns pixel width)
+#define BPLCON0_UHRES     BIT(7)   // Ultra hi-res mode
 #define BPLCON0_GAUD      BIT(8)   // Genlock audio enable
 #define BPLCON0_COLORON   BIT(9)   // Composite mode color-burst enabled
 #define BPLCON0_DBLPF     BIT(10)  // Double playfields
 #define BPLCON0_HOMOD     BIT(11)  // Hold-and-modify mode
 #define BPLCON0_BPU       BIT(12)  // Bits 12-14 set the number of bitplanes
-#define BPLCON0_BPU0      BIT(12)  // Low bit of # of bitplanes
-#define BPLCON0_BPU1      BIT(13)  // Middle bit of # of bitplanes
-#define BPLCON0_BPU2      BIT(14)  // High bit of # of bitplanes
+#define BPLCON0_BPU0      BIT(12)  // Bit0 of # of bitplanes
+#define BPLCON0_BPU1      BIT(13)  // Bit1 of # of bitplanes
+#define BPLCON0_BPU2      BIT(14)  // Bit2 of # of bitplanes
 #define BPLCON0_HIGHRES   BIT(15)  // High resolution mode
 
 #define BPLCON3_EXTBLKEN  BIT(0)   // BLANK output is programmable (ECS)
@@ -279,6 +295,23 @@
 #define BLTCON1_LINE_OVF  BIT(5)   // Line mode OVF
 #define BLTCON1_LINE_SIGN BIT(6)   // Line mode SIGN
 #define BLTCON1_LINE_DPFF BIT(7)   // Line mode DPFF
+
+#define BEAMCON0_HSYTRUE   BIT(0)   // Polarity of HSync
+#define BEAMCON0_VSYTRUE   BIT(1)   // Polarity of VSync
+#define BEAMCON0_CSYTRUE   BIT(2)   // Polarity of CSync
+#define BEAMCON0_BLANKEN   BIT(3)   // No longer used
+#define BEAMCON0_VARCSYEN  BIT(4)   // Enable CSY from the variable decoders
+#define BEAMCON0_PAL       BIT(5)   // Set decoders for PAL
+#define BEAMCON0_DUAL      BIT(6)   // UHRES pointer appears multiple times
+#define BEAMCON0_VARBEAMEN BIT(7)   // Enable beam counter comparators
+#define BEAMCON0_VARHSYEN  BIT(8)   // Comparator HSY -> HSY pin
+#define BEAMCON0_VARVSYEN  BIT(9)   // Comparator VSY -> VSY pin
+#define BEAMCON0_CSCBEN    BIT(10)  // Composite sync emitted on HSY pin
+#define BEAMCON0_LOLDIS    BIT(10)  // Disable long line/short toggle
+#define BEAMCON0_VARVBEN   BIT(10)  // Comparator generated vertical blank
+#define BEAMCON0_LPENDIS   BIT(10)  // Disable light pen latching
+#define BEAMCON0_HARDDIS   BIT(10)  // Disable vertical/horizontal window limits
+#define BEAMCON0_RSVD      BIT(15)  // Unused
 
 #define DMACON_AUD0EN     BIT(0)   // Audio channel 0 DMA enable
 #define DMACON_AUD1EN     BIT(1)   // Audio channel 1 DMA enable

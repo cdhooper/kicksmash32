@@ -16,7 +16,10 @@
 #ifndef _KBD_H
 #define _KBD_H
 
+#define RAWKEY_SPACE     0x40
 #define RAWKEY_TAB       0x42
+#define RAWKEY_ENTER     0x43  // Numeric keypad
+#define RAWKEY_RETURN    0x44
 #define RAWKEY_ESC       0x45
 #define RAWKEY_CRSRUP    0x4C
 #define RAWKEY_CRSRDOWN  0x4D

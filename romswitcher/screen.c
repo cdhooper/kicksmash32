@@ -650,7 +650,8 @@ void
 screen_init(void)
 {
     *BPLCON0  = BPLCON0_HIGHRES |
-                (3 * BPLCON0_BPU); // 3 bitplanes (8 colors)
+                (3 * BPLCON0_BPU) | // 3 bitplanes (8 colors)
+                BPLCON0_ECS;        // Enable ECS
     *BPLCON1  = 0;       // Horizontal scroll = 0
 //  *BPLCON2  = 1;       // Sprite (cursor) lower priority than foreground
     *BPLCON2  = 0x0008;  // Mouse Pointer Sprite > foreground > Cursor Sprite
@@ -710,6 +711,70 @@ screen_init(void)
     *BLTCON0  = 0;
     *BLTCON1  = 0;
     *BLTSIZE  = (1 << 6) | 0x1;  // 1 pixel high, 1 pixel wide
+
+#if 0
+    /* Implementation of multiscan 31.56 kHz doesn't seem to work */
+    *HSSTRT   = 0x0005; // Horizontal centering
+    *DDFSTRT  = 0x0018; // Bit plane DMA start
+    *DDFSTOP  = 0x0058; // Bit plane DMA stop
+    *FMODE    = 0xc00f; // BLP32 BPAGEM SPR32 SPAGEM  BSCAN2 SSCAN2
+    *HBSTRT   = 0x0009;
+    *HBSTOP   = 0x0017;
+    *HTOTAL   = 0x0071;
+    *VBSTRT   = 0x0000;
+    *VSSTRT   = 0x0003;
+    *VSSTOP   = 0x0005;
+    *VBSTOP   = 0x001d;
+    *VTOTAL   = 0x020e;
+    *BEAMCON0 = 0x0B88;
+    *BPLCON2  = 0x027f;
+    *BPLCON3  = 0x00a3;
+    *BPLCON4  = 0x0011;
+#endif
+#if 0
+    /* Implementation of dblPAL 50Hz 31.00 kHz doesn't seem to work */
+//  *BPLCON0  = 0xb201;
+//  *HSSTRT   = 0x0005; // Horizontal centering
+    *DDFSTRT  = 0x0028; // Bit plane DMA start
+    *DDFSTOP  = 0x0068; // Bit plane DMA stop
+    *FMODE    = 0xc00f; // BLP32 BPAGEM SPR32 SPAGEM  BSCAN2 SSCAN2
+    *HBSTRT   = 0x0009;
+    *HSSTOP   = 0x0025;
+    *HBSTOP   = 0x0031;
+    *HTOTAL   = 0x0077;
+    *VBSTRT   = 0x0000;
+    *VSSTRT   = 0x0003;
+    *VSSTOP   = 0x0005;
+    *VBSTOP   = 0x001d;
+    *VTOTAL   = 0x0258;
+    *BEAMCON0 = 0x0B88;
+    *BPLCON1  = 0x0000;
+    *BPLCON2  = 0x027f;
+    *BPLCON3  = 0x00a3;
+    *BPLCON4  = 0x0011;
+#endif
+#if 0
+    /* Implementation of dblNTSC 60Hz 31.00 kHz doesn't seem to work */
+//  *BPLCON0  = 0xb201;
+//  *HSSTRT   = 0x0005; // Horizontal centering
+    *DDFSTRT  = 0x0028; // Bit plane DMA start
+    *DDFSTOP  = 0x0068; // Bit plane DMA stop
+    *FMODE    = 0xc00f; // BLP32 BPAGEM SPR32 SPAGEM  BSCAN2 SSCAN2
+    *HBSTRT   = 0x0009;
+    *HSSTOP   = 0x0025;
+    *HBSTOP   = 0x0031;
+    *HTOTAL   = 0x0077;
+    *VBSTRT   = 0x0000;
+    *VSSTRT   = 0x0003;
+    *VSSTOP   = 0x0005;
+    *VBSTOP   = 0x001d;
+    *VTOTAL   = 0x01f4;
+    *BEAMCON0 = 0x0b88;
+    *BPLCON1  = 0x0000;
+    *BPLCON2  = 0x027f;
+    *BPLCON3  = 0x00a3;
+    *BPLCON4  = 0x0011;
+#endif
 
     serial_puts("\bB");
 

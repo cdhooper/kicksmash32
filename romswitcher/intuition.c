@@ -23,6 +23,7 @@
 #include "intuition.h"
 #include "draw.h"
 #include "reset.h"
+#include "timer.h"
 
 struct Screen sscreen;
 struct Window swindow;
@@ -34,6 +35,20 @@ init_screen_struct(void)
     sscreen.Height = SCREEN_HEIGHT;
     sscreen.DetailPen = 1;
     sscreen.BlockPen = 2;
+}
+
+static struct GfxBase local_gfxbase;
+
+void
+init_intuition(void)
+{
+    extern struct GfxBase *GfxBase;
+    GfxBase = &local_gfxbase;
+    if (vid_type == VID_NTSC) {
+        local_gfxbase.DisplayFlags |= NTSC;
+    } else {
+        local_gfxbase.DisplayFlags |= PAL;
+    }
 }
 
 Screen *

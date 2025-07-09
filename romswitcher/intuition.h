@@ -540,5 +540,6 @@ void    CloseWindow(struct Window *window);
 void   *GetVisualInfoA(struct Screen *screen, const struct TagItem *taglist);
 void    FreeVisualInfo(void *vi);
 void    ColdReboot(void);
+void    init_intuition(void);
 
 #endif /* _INTUITION_H */

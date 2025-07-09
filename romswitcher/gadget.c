@@ -768,10 +768,9 @@ gadget_notify(Gadget *gad, uint class, uint code, uint qual)
 }
 
 static void
-gadget_deactivate(Gadget *gad, uint code, uint qual)
+gadget_deactivate(Gadget *gad)
 {
     gad->Activation &= ~GACT_ACTIVEGADGET;
-//  gadget_notify(gad, IDCMP_GADGETUP, code, qual);
     switch (gad->GadgetType) {
         case STRING_KIND:
         case INTEGER_KIND:
@@ -785,7 +784,7 @@ static void
 gadget_activate(Gadget *gad)
 {
     if ((active_gadget != NULL) && (active_gadget != gad))
-        gadget_deactivate(active_gadget, 0, 0);
+        gadget_deactivate(active_gadget);
 
     if (gad != NULL) {
         switch (gad->GadgetType) {
@@ -1065,7 +1064,7 @@ gadget_tabcycle_next(Gadget *gad, int direction)
                     break;
             }
             if (cgad->Flags & GFLG_TABCYCLE) {
-                gadget_deactivate(gad, KEY_TAB, 0x8000);  // Tab
+                gadget_deactivate(gad);  // Tab  KEY_TAB 0x8000
                 gadget_activate(cgad);
                 return;
             }
@@ -1091,7 +1090,7 @@ gadget_tabcycle_next(Gadget *gad, int direction)
             }
         }
         if (prevgad != NULL) {
-            gadget_deactivate(gad, KEY_TAB, 0x8001);  // Shift-Tab
+            gadget_deactivate(gad);  // Shift-Tab  KEY_TAB 0x8001
             gadget_activate(prevgad);
         }
     }
@@ -1266,7 +1265,7 @@ redraw_prompt:
              * CR ends string gadget input and deactivates clicked gadget
              * I think it also notifies the application.
              */
-            gadget_deactivate(gad, 0, 0);
+            gadget_deactivate(gad);
             break;
         case KEY_BACKSPACE:
 //      case KEY_BACKSPACE2:
@@ -1500,7 +1499,7 @@ gadget_handle_click_hover(Gadget *gad, Gadget *oldgad, uint hover_type)
 #if 0
     /* XXX: I don't know if this is necessary anymore */
     if ((oldgad != NULL) && (oldgad != gad) && (activegadget == oldgad))
-        gadget_deactivate(oldgad, 0, 0);  // Deactivate previous gadget
+        gadget_deactivate(oldgad);  // Deactivate previous gadget
 #endif
 
     switch (hover_type) {

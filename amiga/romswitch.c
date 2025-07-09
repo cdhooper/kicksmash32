@@ -22,6 +22,7 @@
 #include "intuition.h"
 #include "gadget.h"
 #include "keyboard.h"
+#include "amiga_chipset.h"
 #else
 #include <inttypes.h>
 #include <exec/types.h>
@@ -182,6 +183,7 @@ static uint bank_switchto;
 static void *globals_base;
 #endif
 
+static uint video_ntsc      = 0;
 static uint bank_box_top    = 0;
 static uint bank_box_bottom = 0;
 static uint bank_box_left   = 0;
@@ -261,10 +263,13 @@ init_screen(void)
 
 //  SetDefaultMonitor(ntsc ? (NTSC_MONITOR_ID >> 16) : (PAL_MONITOR_ID >> 16));
 
-    if (GfxBase->DisplayFlags & NTSC)
+    if (GfxBase->DisplayFlags & NTSC) {
         monitor_id = NTSC_MONITOR_ID | HIRES_KEY;
-    else
+        video_ntsc = 1;
+    } else {
         monitor_id = PAL_MONITOR_ID | HIRES_KEY;
+        video_ntsc = 0;
+    }
 
     taglist[0].ti_Tag  = VTAG_BORDERSPRITE_SET;
     taglist[0].ti_Data = TRUE;
@@ -1972,6 +1977,13 @@ event_loop(void)
                                 ActivateGadget(gadget_board_name, window, NULL);
                             }
                             break;
+                        case RAWKEY_SPACE:   // key down Space
+                            video_ntsc = !video_ntsc;
+                            if (video_ntsc)
+                                *BEAMCON0 = 0;
+                            else
+                                *BEAMCON0 = BEAMCON0_PAL;
+                            break;
                     }
                     break;
 #if 0
@@ -2201,6 +2213,8 @@ main_func(void)
     void __ctor_stdlib_memory_init(void *);
     void __dtor_stdlib_memory_exit(void *);
     __ctor_stdlib_memory_init(SysBase);
+#else
+    init_intuition();
 #endif
 
     cpu_control_init();
