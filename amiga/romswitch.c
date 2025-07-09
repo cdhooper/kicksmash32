@@ -52,10 +52,11 @@
 
 #define ROM_VERSION 1
 
+#undef DEBUG_LONGRESET_BUTTONS
 #ifdef DEBUG_LONGRESET_BUTTONS
-#define LPRINTF(fmt, ...) printf(fmt, ...)
+#define LPRINTF(...) printf(__VA_ARGS__)
 #else
-#define LPRINTF(fmt, ...)
+#define LPRINTF(...)
 #endif
 
 
@@ -1766,7 +1767,6 @@ bank_longreset_change(uint bank, int addsub)
             info.bi_longreset_seq[0] = bank;
         }
         goto end;
-        return;
     }
 
     /* Currently in the list */

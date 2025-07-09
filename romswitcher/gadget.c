@@ -771,7 +771,7 @@ static void
 gadget_deactivate(Gadget *gad, uint code, uint qual)
 {
     gad->Activation &= ~GACT_ACTIVEGADGET;
-    gadget_notify(gad, IDCMP_GADGETUP, code, qual);
+//  gadget_notify(gad, IDCMP_GADGETUP, code, qual);
     switch (gad->GadgetType) {
         case STRING_KIND:
         case INTEGER_KIND:
