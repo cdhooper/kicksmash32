@@ -87,21 +87,21 @@ static struct    timerequest TimeRequest;
 
 static const char cmd_options[] =
     "usage: smash <options>\n"
-    "   bank <opt>   ROM bank operations (-b ?, show, ...)\n"
-    "   clock <opt>  save / restore Amiga clock with KS (-c)\n"
-    "   debug        show debug output (-d)\n"
-    "   erase <opt>  erase flash (-e ?, bank, ...)\n"
-    "   identify     identify Kicksmash and Flash parts (-i[ii])\n"
-    "   read <opt>   read from flash (-r ?, bank, file, ...)\n"
-    "   verify <opt> verify flash matches file (-v ?, bank, file, ...)\n"
-    "   write <opt>  write to flash (-w ?, bank, file, ...)\n"
-    "   loop <num>   repeat the command a specified number of times (-l)\n"
-    "   quiet        minimize test output\n"
-    "   set <n> <v>  set KickSmash value <n>=\"name\" and <v> is string (-s)\n"
-    "   sr <addr>    spin loop reading address (-x)\n"
-    "   srr <addr>   spin loop reading address with ROM OVL set (-y)\n"
-    "   term         open Kicksmash firmware terminal [-T]\n"
-    "   test[01234]  do interface test (-t)\n";
+    "   bank <opt>    ROM bank operations (-b ?, show, ...)\n"
+    "   clock <opt>   save / restore Amiga clock with KS (-c)\n"
+    "   debug         show debug output (-d)\n"
+    "   erase <opt>   erase flash (-e ?, bank, ...)\n"
+    "   identify      identify Kicksmash and Flash parts (-i[ii])\n"
+    "   read <opt>    read from flash (-r ?, bank, file, ...)\n"
+    "   verify <opt>  verify flash matches file (-v ?, bank, file, ...)\n"
+    "   write <opt>   write to flash (-w ?, bank, file, ...)\n"
+    "   loop <num>    repeat the command a specified number of times (-l)\n"
+    "   quiet         minimize test output\n"
+    "   set <n> <v>   set KickSmash value <n>=\"name\" and <v> is string (-s)\n"
+    "   sr <addr>     spin loop reading address (-x)\n"
+    "   srr <addr>    spin loop reading address with ROM OVL set (-y)\n"
+    "   term          open Kicksmash firmware terminal [-T]\n"
+    "   test[0123456] do interface test (-t)\n";
 
 static const char cmd_bank_options[] =
     "  show                       Display all ROM bank information (-s)\n"
@@ -3236,7 +3236,9 @@ cmd_set(int argc, char *argv[])
 cmd_set_usage:
         printf("set name <string>    - up to 15 characters for board name\n"
                "set nv<n> <value...> - set non-volatile data\n"
-               "    nv0 is switcher timeout and nv1 is ROM bank to use\n");
+               "    nv0 is switcher timeout and nv1 is ROM bank to use\n"
+               "set sw_bank <num>    - set ROM switcher timeout bank\n"
+               "set sw_timeout <num> - set ROM switcher timeout in seconds\n");
         return (1);
     }
     if (strcmp(argv[1], "name") == 0) {
@@ -3312,6 +3314,81 @@ cmd_set_usage:
         if (rc != 0)
             printf("Failed to set NV data: (%s)\n", smash_err(rc));
         return (rc);
+    } else if (strncmp(argv[1], "sw_bank", 4) == 0) {
+        uint value;
+        if (argc <= 2) {
+            uint8_t nvdata[32];
+            uint16_t what = 0x0010;  // Get 16 bytes of NV data
+            uint     rlen;
+            rc = send_cmd(KS_CMD_GET | KS_GET_NV, &what, sizeof (what),
+                   nvdata, sizeof (nvdata), &rlen);
+            if (rc != 0) {
+                printf("Failed to get NV data: (%s)\n", smash_err(rc));
+                return (rc);
+            } else {
+                value = nvdata[1];
+                printf("%s %u\n", argv[1], value);
+            }
+        } else {
+            uint8_t buf[4];
+            uint bank = atoi(argv[2]);
+            if (bank > 7) {
+                printf("FAIL: Bank range is 0 to 7\n");
+                return (1);
+            }
+            buf[0] = 1;
+            buf[1] = 1;
+            buf[2] = bank;
+            buf[3] = 0;
+            rc = send_cmd(KS_CMD_SET | KS_SET_NV, buf, sizeof (buf),
+                          NULL, 0, NULL);
+            if (rc != 0)
+                printf("Failed to set NV data: (%s)\n", smash_err(rc));
+            return (rc);
+        }
+    } else if (strncmp(argv[1], "sw_timeout", 4) == 0) {
+        uint value;
+        if (argc <= 2) {
+            uint8_t nvdata[32];
+            uint16_t what = 0x0010;  // Get 16 bytes of NV data
+            uint     rlen;
+            rc = send_cmd(KS_CMD_GET | KS_GET_NV, &what, sizeof (what),
+                   nvdata, sizeof (nvdata), &rlen);
+            if (rc != 0) {
+                printf("Failed to get NV data: (%s)\n", smash_err(rc));
+                return (rc);
+            } else {
+                value = nvdata[0];
+                if (value & BIT(7))
+                    value = (value & 0x7f) * 60;  // minutes
+                printf("%s %u\n", argv[1], value);
+            }
+        } else {
+            uint svalue = atoi(argv[2]);
+            uint8_t buf[4];
+            value = svalue;
+            if (value > 127) {
+                value /= 60;
+                if (value > 127)
+                    value = 127;
+                value |= BIT(7);
+            }
+            if (value & BIT(7))
+                value = (value & 0x7f) * 60;  // minutes
+            if (value != svalue) {
+                printf("sw_timeout %u rounded to %u seconds\n",
+                       svalue, value);
+            }
+            buf[0] = 0;
+            buf[1] = 1;
+            buf[2] = value;
+            buf[3] = 0;
+            rc = send_cmd(KS_CMD_SET | KS_SET_NV, buf, sizeof (buf),
+                          NULL, 0, NULL);
+            if (rc != 0)
+                printf("Failed to set NV data: (%s)\n", smash_err(rc));
+            return (rc);
+        }
     } else {
         printf("Unknown set %s\n", argv[1]);
         goto cmd_set_usage;

@@ -1,5 +1,6 @@
 smashfsrom - ROMable Amiga Filesystem for host-exported volumes
 ---------------------------------------------------------------
+
 See the documentation on smashfs for an overview of what smashfs is.
 
 smashfsrom is a version of smashfs which can be included in the

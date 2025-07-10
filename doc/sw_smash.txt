@@ -1,5 +1,6 @@
-smash utility under AmigaOS
----------------------------
+The Smash Utility Under AmigaOS
+-------------------------------
+
 The smash utility is useful for interacting with the KickSmash firmware,
 including updating Kickstart ROM images, showing and changing Kickstart
 bank information, and testing the message interface.
@@ -12,20 +13,24 @@ utility, you will see:
     smash 0.1 (May  2 2024) � Chris Hooper
 
     usage: smash <options>
-       bank <opt>   ROM bank operations (-b ?, show, ...)
-       clock <opt>  save / restore Amiga clock with KS (-c)
-       debug        show debug output (-d)
-       erase <opt>  erase flash (-e ?, bank, ...)
-       identify     identify Kicksmash and Flash parts (-i[ii])
-       read <opt>   read from flash (-r ?, bank, file, ...)
-       verify <opt> verify flash matches file (-v ?, bank, file, ...)
-       write <opt>  write to flash (-w ?, bank, file, ...)
-       loop <num>   repeat the command a specified number of times (-l)
-       quiet        minimize test output
-       sr <addr>    spin loop reading address (-x)
-       srr <addr>   spin loop reading address with ROM OVL set (-y)
-       test[0123]   do interface test (-t)
+       bank <opt>    ROM bank operations (-b ?, show, ...)
+       clock <opt>   save / restore Amiga clock with KS (-c)
+       debug         show debug output (-d)
+       erase <opt>   erase flash (-e ?, bank, ...)
+       identify      identify Kicksmash and Flash parts (-i[ii])
+       read <opt>    read from flash (-r ?, bank, file, ...)
+       verify <opt>  verify flash matches file (-v ?, bank, file, ...)
+       write <opt>   write to flash (-w ?, bank, file, ...)
+       loop <num>    repeat the command a specified number of times (-l)
+       quiet         minimize test output
+       set <n> <v>   set KickSmash value <n>="name" and <v> is string (-s)
+       sr <addr>     spin loop reading address (-x)
+       srr <addr>    spin loop reading address with ROM OVL set (-y)
+       term          open Kicksmash firmware terminal [-T]
+       test[0123456] do interface test (-t)
 
+       term          open Kicksmash firmware terminal [-T]
+       set <n> <v>   set KickSmash value <n>="name" and <v> is string (-s)
 
 Testing the interface
 ---------------------
@@ -45,6 +50,9 @@ command may be used for this:
       Loopback perf   PASS  306 KB/sec
       Message buffer  PASS  70-200 KB/sec (W)  11-53 KB/sec (R)
       Remote message  Unavailable
+      Flash ID        PASS  000122d2 000122d2 32-bit
+      Commands        PASS
+
 If you've not yet started the hostsmash utility on your USB connected
 host, this is the output you should expect. Tests are numbered 0-4,
 which allows you to select an individual test. You can also iterate on
@@ -81,10 +89,9 @@ You should see output similar to the following (subject to revision):
     add volume cur: = .
     message mode
     ID
-      Kicksmash 0.1 built 2024-05-03 09:12:34
-      USB 12091610  Serial "0db05GK90@T18C"  Name "amiga2"
+      Kicksmash 1.7 built 2025-07-08 13:07:21
+      USB 12091610  Serial "1d60509C0F6406C"  Name "4000T"
       Mode: 32-bit
-    got 4 bytes: len=0004 status=0000 0000 0300
 
 The host program will remain running in the foreground until you press ^C.
 You can now run smash -t4 to verify the host message interface is working:
@@ -146,10 +153,12 @@ You can verify your KickSmash is running the latest firmware with the
 smash utility. It will query KickSmash and report version information.
     9.OS322:> smash identify
     ID
-      Kicksmash 0.1 built 2024-05-03 09:12:34
-      USB 12091610  Serial "1d905GK73B6519C"  Name "amiga1"
+      Kicksmash 1.7 built 2025-07-06 22:24:49
+      USB 12091610  Serial "6db052S86UP11C"  Name "Amiga2"
       Mode: 32-bit
-      Uptime: 25172.975650 sec
+      Uptime: 235848.078787 sec
+      NV Data: 3c 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+               00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 
 All smash commands may be shortened to a single command flag.
 "smash -i" is identical to "smash identify"
@@ -573,3 +582,47 @@ the current time to KickSmash, you can use "smash -c load" followed by
     8.OS322:> SetClock save
     8.OS322:> date
     Friday 15-Nov-24 12:14:30
+
+
+Set Command
+-----------
+KickSmash firmware provides a small amount of NVRAM which may be used
+by the Amiga to store persistent data, similar to the Ricoh RP5C01 clock
+present in the Amiga 3000 and Amiga 4000 computers. The ROM switcher
+uses the first byte of NVRAM as a timeout seconds value and the second
+byte as the ROM bank to use on timeout.
+
+In addition to the NVRAM, the board name may also be set using this
+command. The board name is reported by the "smash id" command as well
+as from the ROM Switcher. Example:
+    7.SDH0:> smash set name "My Amiga"
+    7.SDH0:> smash id
+    ID
+      Kicksmash 1.7 built 2025-07-06 22:24:49
+      USB 12091610  Serial "6db052S86UP11C"  Name "My Amiga"
+      Mode: 32-bit
+      Uptime: 236510.934703 sec
+      NV Data: 3c 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+               00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+The smash set command also allows one to set the ROM Switcher timeout
+and bank number. Example:
+    7.SDH0:> smash set sw_bank 0
+    7.SDH0:> smash set sw_timeout 60
+
+
+Terminal
+--------
+From your USB Host, the `hostsmash -t` command gives you the ability to
+access the KickSmash firmware CLI. You can also access the KickSmash
+firmware CLI from AmigaOS. Use the `smash term` command for this.
+Example:
+    7.SDH0:> smash term
+    Press ^X to exit
+
+    CMD> ver
+    Version 1.7+ built 2025-07-06 22:24:49
+    CMD> set led 20
+    CMD> config write at 3f300
+
+    7.SDH0:>

@@ -1,4 +1,4 @@
-KickSmash hardware install
+KickSmash Hardware Install
 --------------------------
 
 KickSmash has so far only been tested in Amiga 3000, 4000, and 4000T systems.

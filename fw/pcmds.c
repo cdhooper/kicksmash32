@@ -87,7 +87,9 @@ const char cmd_set_help[] =
 "set flags <flags> [save]   - set config flags\n"
 "set led <pct>              - set the Power LED brightness level\n"
 "set mode <num>             - set prom mode (0=32, 1=16, 2=16hi, 3=auto)\n"
-"set name <name>            - set Kicksmash board name";
+"set name <name>            - set Kicksmash board name\n"
+"set sw_bank <num>          - set ROM switcher timeout bank\n"
+"set sw_timeout <num>       - set ROM switcher timeout in seconds";
 
 const char cmd_snoop_help[] =
 "snoop        - capture and report ROM transactions\n"
@@ -927,6 +929,7 @@ match_bits(const char *const *bits, const char *name)
 #define MODE_BIT_FLAGS    BIT(2)  // Decode debug flags
 #define MODE_FAN_AUTO     BIT(3)  // Interpret BIT(7) as "auto"; 0 = decimal
 #define MODE_SIGNED       BIT(4)  // Decimal value is signed
+#define MODE_SW_TIME      BIT(5)  // Special encoded seconds / minutes
 typedef struct {
     const char *cs_name;
     const char *cs_desc;
@@ -943,6 +946,10 @@ static const config_set_t config_set[] = {
       CFOFF(led_level), MODE_DEC },
     { "name",          "Board name",
       CFOFF(name), MODE_STRING },
+    { "sw_bank",       "ROM Switcher bank",
+      offsetof(config_t, nv_mem[1]), 1, MODE_DEC },
+    { "sw_timeout",    "ROM Switcher timeout",
+      offsetof(config_t, nv_mem[0]), 1, MODE_SW_TIME },
 };
 
 rc_t
@@ -969,6 +976,10 @@ cmd_set(int argc, char * const *argv)
                 memcpy(&value, src, c->cs_size);
                 if ((cs_mode & MODE_FAN_AUTO) && (value & BIT(7))) {
                     sprintf(buf, "%s %s", c->cs_name, "auto");
+                } else if (cs_mode & MODE_SW_TIME) {
+                    if (value & BIT(7))
+                        value = (value & 0x7f) * 60;  // minutes
+                    sprintf(buf, "%s %u", c->cs_name, value);
                 } else if (cs_mode & MODE_SIGNED) {
                     if (c->cs_size == 1)
                         value = (int8_t) value;
@@ -1072,6 +1083,13 @@ cmd_set(int argc, char * const *argv)
         if (do_save)
             config_updated();
     } else if (strcmp(argv[1], "led") == 0) {
+        if (argc <= 2) {
+            printf("led %u %%", config.led_level);
+            if (led_alert_state)
+                printf(" alert");
+            printf("\n");
+            return (RC_SUCCESS);
+        }
         if (argc != 3) {
             printf("set led requires a percentage\n");
             return (RC_FAILURE);
@@ -1099,6 +1117,49 @@ cmd_set(int argc, char * const *argv)
             char name[32];
             merge_args(name, sizeof (name), argc - 2, argv + 2);
             config_name(name);
+        }
+        return (RC_SUCCESS);
+    } else if (strncmp(argv[1], "sw_bank", 4) == 0) {
+        if (argc <= 2) {
+            printf("%s %u\n", argv[1], config.nv_mem[1]);
+        } else {
+            uint bank = atoi(argv[2]);
+            if (bank > 7) {
+                printf("FAIL: Bank range is 0 to 7\n");
+                return (RC_FAILURE);
+            }
+            if (config.nv_mem[1] != bank) {
+                config.nv_mem[1] = bank;
+                config_updated();
+            }
+        }
+        return (RC_SUCCESS);
+    } else if (strncmp(argv[1], "sw_timeout", 4) == 0) {
+        uint value;
+        if (argc <= 2) {
+            value = config.nv_mem[0];
+            if (value & BIT(7))
+                value = (value & 0x7f) * 60;  // minutes
+            printf("%s %u\n", argv[1], value);
+        } else {
+            uint svalue = atoi(argv[2]);
+            value = svalue;
+            if (value > 127) {
+                value /= 60;
+                if (value > 127)
+                    value = 127;
+                value |= BIT(7);
+            }
+            if (config.nv_mem[0] != value) {
+                config.nv_mem[0] = value;
+                config_updated();
+                if (value & BIT(7))
+                    value = (value & 0x7f) * 60;  // minutes
+                if (value != svalue) {
+                    printf("sw_timeout %u rounded to %u seconds\n",
+                           svalue, value);
+                }
+            }
         }
         return (RC_SUCCESS);
     } else {

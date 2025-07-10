@@ -1,10 +1,10 @@
-The following topics are below
+The following topics are covered in this document.
 
 * What problem does KickSmash32 solve?
 * Which Amiga models are supported by KickSmash?
 * How do I install KickSmash?
 * Can I use Windows as a host?
-* Why does the ROM Switcher gives me errors such as "FAIL Get NV 512"?
+* Why does the ROM Switcher give me errors such as "FAIL Get NV 512"?
 * A new Kickstart ROM just came out. How do I program and switch to it?
 
 ========================================================================
@@ -16,8 +16,11 @@ installed in their Amiga. One might be that a new version of AmigaOS
 has been released, and to use less RAM and shorten the boot time, it
 is good to also install the ROM. Another reason might be that different
 software (notably games) might require a certain Kickstart version.
-Finally, if you need to diagnose problems with your Amiga, you might
-need to use DiagROM or one of the other Amiga diagnostic ROMs
+Some people choose to modify the Kickstart ROM to add features, and
+having the ability to test those changes, and easily switch back to
+a standard ROM is very useful. Finally, if you need to diagnose problems
+with your Amiga, you might need to use DiagROM or one of the other
+Amiga diagnostic ROMs.
 
 If you find the need to change ROMs in your Amiga becomes frequent,
 this can be a tedious process with most Amiga systems. It usually
@@ -28,7 +31,7 @@ becoming more difficult, and you still need to erase and program the
 parts if you are doing it yourself. If you are doing it yourself, you
 may need to also acquire an EPROM eraser and an EPROM programmer.
 
-Kicksmash32 solves some of these problems by using modern electronics.
+KickSmash32 solves some of these problems by using modern electronics.
 It includes a programmer on the board, and the flash memory can be
 erased in-system.
 
@@ -38,8 +41,17 @@ switched between using either an Amiga command or by performing a long
 (Control-Amiga-Amiga) reset.
 
 In addition, the USB port on KickSmash32 may be connected to an external
-host so that ROM images can be programmed even when the Amiga is not able
-to boot. The Amiga must be powered on and held in reset in this case.
+external computer (host) so that ROM images can be programmed even when
+the Amiga is not able to boot. The Amiga must be powered on and held in
+reset in this case.
+
+Regarding creating your own Kickstart ROM images, the scope is beyond
+this FAQ. I would suggest reading up on Capitoline, the latest Amiga
+kickstart editor. There are other utilities available to do the same,
+such as amitools, or Remus / ROMsplit.
+    http://capitoline.twocatsblack.com/
+    https://amitools.readthedocs.io/en/latest/tools/romtool.html
+    http://www.doobreynet.co.uk/beta/index.html
 
 ========================================================================
 
@@ -49,7 +61,7 @@ KickSmash32 has been tested in several different Amiga 3000 and
 Amiga 4000 rev B motherboards. KickSmash32 will not work in Amiga 3000
 rev 7 and below motherboards without a specific adapter, as those
 machines require a ROM Tower. An Amiga 3000 ROM tower replacement with
-spacing compatible with Kicksmash32 is available here:
+spacing compatible with KickSmash32 is available here:
     https://github.com/cdhooper/amiga_rombankswitcher_a3000_romtower
 KickSmash4KT is for the Amiga 4000T, and has been tested.
 KickSmash3KT is for the Amiga 3000T. It has not yet been tested. You need
@@ -73,31 +85,32 @@ It's recommended to connect KickSmash by USB to your PC for testing
 before installing it in the Amiga. KickSmash firmware does a pin test
 when connected outside an Amiga. This will also allow you to update
 KickSmash firmware and program an initial Kickstart ROM image.
-See doc/sw_install.txt for instructions. Read doc/sw_hostsmash.txt for
+See `doc/sw_install.txt` for instructions. Read `doc/sw_hostsmash.txt` for
 further information on programming Kickstart images.
 
 KickSmash requires a connection to the Amiga's KBRST signal. You will
 need to attach a jumper from a spot on the board to the KBRST pin on
-KickSmash. See doc/hw_install.txt for details on this.
+KickSmash. See `doc/hw_install.txt` for details on this.
 
 Download the latest software release from the KickSmash github repository:
     https://github.com/cdhooper/kicksmash32
 
-Install files in the amiga directory on your Amiga. The sw directory
-contains hostsmash executables for Linux, Windows, and MacOS. This
+Install files from the `amiga` directory on your Amiga. The `sw` directory
+contains `hostsmash` executables for Linux, Windows, and MacOS. This
 utility is used to program firmware images on KickSmash over USB.
+Files in the `fw` directory are the STM32 firmware of the KickSmash board.
 
 ========================================================================
 
 * Can I use Windows as a host?
 
-Although Windows is not well supported compared to Linux, you should
-be able to program and use KickSmash from the Windows command prompt.
-See doc/windows_notes.txt for useful information.
+Although use under Windows is not well supported compared to Linux,
+you should be able to program and use KickSmash from the Windows
+command prompt. See `doc/windows_notes.txt` for useful information.
 
 ========================================================================
 
-* Why does the ROM Switcher gives me errors such as "FAIL Get NV 512"?
+* Why does the ROM Switcher give me errors such as "FAIL Get NV 512"?
 
 Errors such as "FAIL Get NV 512" or "FAIL set reboot -8" in the
 ROM Switcher could be due to a version mismatch, motherboard jumper
@@ -108,14 +121,14 @@ using some software which is before 1.6 and some which is at or after 1.6,
 this failure is expected. Upgrade your ROM switcher or Amiga software.
 
 Your motherboard should be set to the slowest speed setting for the
-Amiga CPU to to reliably communicate with the STM32 CPU on the Kicksmash.
+Amiga CPU to reliably communicate with the STM32 CPU on the KickSmash.
 A3000: J151 and J152 should be set to 1-2 (25 MHz operation)
 A3000T: J151 and J152 should be set to 1-2 (25 MHz operation)
 A4000: J151 should be set to 1-2 (ROMSPEED 200ns)
 A4000T: J151 should be removed (200ns)
 
 It could also be due to a hardware build issue. If your Amiga is booting
-from Kicksmash, and if it's a hardware build issue, then it's probably
+from KickSmash, and if it's a hardware build issue, then it's probably
 localized to the STM32 CPU itself. Check the SOCKET_OE and FLASH_OE pins
 on the STM32.
 
@@ -123,7 +136,7 @@ on the STM32.
 
 * A new Kickstart ROM just came out. How do I program and switch to it?
 
-Let's assume you've been running your Amiga with Kicksmash for the past
+Let's assume you've been running your Amiga with KickSmash for the past
 few months and just purchased and downloaded the latest Kickstart 3.2.3.
 Now you'd like to program that version and switch to it as the default.
 

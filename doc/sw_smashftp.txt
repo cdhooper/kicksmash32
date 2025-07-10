@@ -1,14 +1,15 @@
-smashftp - host file transfer utility
--------------------------------------
+smashftp - Amiga and host file transfer utility
+-----------------------------------------------
+
 The smashftp utility may be used to transfer files between AmigaOS
 and the USB Host. It requires the hostsmash utility running and
-connected to KickSmash. See the sw_hostsmash.txt document for details
-on this program. Just basic information on hostsmash will be provided
-here.
+USB connected to KickSmash. See the sw_hostsmash.txt document for
+details on this program. Just basic information on hostsmash will be
+provided here.
 
-The smashftp utility can either take commands as arguments, or similar
-to ftp and sftp, it can also provide a command line interface. Commands
-similar to those provided by ftp and sftp are provided.
+The smashftp utility can take commands as arguments, or, similar to
+ftp and sftp, it can also provide a command line interface. Commands
+familiar to those who have used ftp or sftp are provided.
 
 
 Getting started
@@ -333,9 +334,10 @@ lrmdir
 ----------------------------------------------------------
 
 cd
-    Change the local directory.
-    There are no command options. If a directory is not specified, the
-    current directory will be set to the remote Volume Directory.
+    Change the remote directory. There are no command options. If a
+    directory is not specified, the current directory will be set to
+    the remote Volume Directory, unless a default volume was specified
+    to hostsmash (-M).
     Example
         smashftp> cd
         cwd=

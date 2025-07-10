@@ -1,5 +1,6 @@
-The KickSmash firmware CLI
+The KickSmash Firmware CLI
 --------------------------
+
 The KickSmash firmware runs on an STM32 CPU (STM32F107) and in addition
 to managing the active flash bank and allowing flash writes and other
 flash operations, it also provides other services including a message
@@ -30,6 +31,7 @@ All commands provided by the KickSmash firmware:
     test[bwlqoh] <addr> <len> <testtype>  - test memory
     prom [erase|id|read|write|...]        - perform EEPROM operation
     reset [dfu|amiga|prom]                - reset CPU
+    set                                   - [bank|led|mode|name|?]
     snoop                                 - snoop ROM
     time cmd|now|watch>                   - measure or show time
     usb disable|regs|reset                - show or change USB status
@@ -114,34 +116,55 @@ prom
         prom bank
             The prom bank command offers several options related to the
             non-volatile Kickstart ROM bank configuration.
-            show
-                Show the configuration of the eight flash banks available
-                for Kickstart ROM storage. Format is similar to that of the
-                Amiga "smash bank show" command. See the example below.
-            name <bank> <name>
-                Change the name of the specified bank.
-            current <bank>
-                Immediately change the current Amiga Kickstart ROM bank.
-                This will likely crash your Amiga, so you'll probably need
-                to follow up with "reset amiga" afterward.
-            longreset <bank...>
-                Specifies the list of banks to sequence each time an Amiga
-                long reset is detected. Hold Control-Amiga-Amiga longer than
-                three seconds.
-            nextreset <bank>
-                At the next Amiga reset, change the Amiga Kickstart ROM bank.
-            poweron <bank>
-                Save in NVRAM the Kickstart ROM bank to use when the Amiga
-                does a cold power-on.
-            merge <first-bank> <last-bank>
-                Merge multiple banks into a single larger bank. Only certain
-                banks may be merged. These are:
-                    1 MB  Banks 0-1, 2-3, 4-5, 6-7
-                    2 MB  Banks 0-3, 4-7
-                    4 MB  Banks 0-7
-                See sw_smash.txt for more information.
-            unmerge <first-bank> <last-bank>
-                Separate previously merged Kickstart ROM banks.
+        prom bank show
+            Show the configuration of the eight flash banks available
+            for Kickstart ROM storage. Format is similar to that of the
+            Amiga "smash bank show" command. A newly programmed Kicksmash,
+            without a Kickstart bank might report the following:
+
+            Bank  Name            Merge LongReset  PowerOn  Current  NextReset
+            0
+            1
+            2
+            3
+            4
+            5
+            6     DiagROM
+            7     ROM Switcher          0          *        *
+
+            See a further example below.
+        prom bank name <bank> <name>
+            Sets the display name of a bank, which will appear in
+            "set bank show" as well as in the ROM switcher and in the
+            Amiga smash "bank show" output.
+        prom bank current <bank>
+            Immediately change the current Amiga Kickstart ROM bank.
+            This will likely crash your Amiga, so you'll probably need
+            to follow up with "reset amiga" afterward.
+        prom bank longreset <bank...>
+            Specifies the list of banks to sequence each time an Amiga
+            long reset is detected. Hold Control-Amiga-Amiga longer than
+            three seconds. Each time Control-Amiga-Amiga is help, the
+            next bank in the longreset sequence will be selected.
+        prom bank nextreset <bank>
+            At the next Amiga reset, change the Amiga Kickstart ROM bank.
+            This is the preferred way to set the current bank. You would
+            set nextreset and follow that with a "reset amiga" command.
+        prom bank poweron <bank>
+            Set the Kickstart ROM bank to use when the Amiga does a
+            cold power-on.
+        prom bank merge <first-bank> <last-bank>
+            Will merge the ROM banks in the specified range. This is useful
+            for creating Kickstart ROM images which are 1 MB or larger. Your
+            Amiga hardware must support larger bank sizes for this to work,
+            and you will need to connect the upper address lines to the
+            Kicksmash as well. Only certain banks may be merged. These are:
+                1 MB  Banks 0-1, 2-3, 4-5, 6-7
+                2 MB  Banks 0-3, 4-7
+                4 MB  Banks 0-7
+            See sw_smash.txt for more information.
+        prom bank unmerge <first-bank> <last-bank>
+            Separate previously merged Kickstart ROM banks.
         prom cmd [<addr>]
             This is a low-level interface to send commands directly to the
             Kickstart ROM flash. The command will be prefixed by the flash
@@ -279,6 +302,50 @@ prom
         Vrefint=05e2 scale=7976  1.21 V
           Vtemp=06d7 13965976    28.1 C
              5V=0c10 24629888    4.92 V
+set
+    Kicksmash maintains some persistent configuration in internal flash.
+    This command is used to set that configuration.
+    Options
+        set                        - display current settings
+        set bank [show|name|?]     - do various prom bank settings
+        set flags <flags> [save]   - set config flags
+        set led <pct>              - set the Power LED brightness level
+        set mode <num>             - set prom mode (0=32, 1=16, 2=16hi, 3=auto)
+        set name <name>            - set Kicksmash board name
+        set sw_bank <num>          - set ROM switcher timeout bank
+        set sw_timeout <num>       - set ROM switcher timeout in seconds
+
+    set bank [show|name|?]
+        The set bank command is used to manage the flash ROM banks which
+        may be provided to the Amiga. These commands are identical to
+        those of the "prom bank" command. See information on that command
+        for additional details.
+
+    set flags <flags> [save]
+        Set configuration flags. Only one flag is currently supported:
+            set flags OEWE_PIN_SHOW
+                This flag is used to show debug time measurements of the
+                Q2 and Q3 transistors. This is only done if the board is
+                standalone (not installed in an Amiga).
+    set led <pct>
+        Set the power LED brightness (0-100). Depending on the LED
+        and current limit resistor installed on your board, the power
+        LED may appear too bright. This command can be used to adjust
+        the brightness of that LED.
+    set mode <num>
+        This command adjusts Kicksmash mode for access to flash. In most
+        cases, the mode should be left at auto (3).
+    set name <name>
+        Sets the name of the board. This name is reported in the ROM
+        switcher and is useful if you have multiple Amigas connected to
+        the same display.
+    set sw_bank <num>
+        Sets the bank to use when the ROM switcher reaches a user timeout.
+    set sw_timeout <num>
+        Sets the number of seconds until the ROM switcher times out.
+        The ROM switcher will disable its timeout if mouse or keyboard
+        activity is detected.
+
 snoop
     This command can capture and display Amiga ROM fetches in realtime.
     Options
@@ -287,8 +354,8 @@ snoop
         snoop lo     - hardware capture A0-A15 D0-D15
         snoop hi     - hardware capture A0-A15 D16-D31
 
-    Running "snoop" with no options does rapidly polls address and data
-    pins and can report both the ROM address (not shifted) and data fetched.
+    Running "snoop" with no options rapidly polls address and data pins
+    and can report both the ROM address (not shifted) and data fetched.
     The Amiga can fetch much faster than the STM32 can capture and print
     data, so it's very likely that data can be missed.
 

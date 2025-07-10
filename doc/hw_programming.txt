@@ -1,27 +1,30 @@
-KickSmash hardware programming
+KickSmash Hardware Programming
 ------------------------------
 
 There are two ways to program firmware on your KickSmash.
     1. ST-Link (requires the hardware programmer)
     2. USB DFU mode
 
-I prefer using the ST-Link for rapid programming cycles because it's
+I prefer using the ST-Link for rapid programming cycles because it is
 fast and requires less manual intervention to get new firmware loaded.
 An advantage of using USB DFU mode is that it does not require any
-programmer hardware. You just need a computer which has a DFU updater.
-On Linux, dfu-util is the recommended DFU updater. Depending on your
+programmer hardware. You just need a computer that has a DFU updater.
+On Linux, `dfu-util` is the recommended DFU updater. Depending on your
 Linux distribution, you might use one of the following commands to
 install it:
     dnf install dfu-util
     yum install dfu-util
     apt-get install dfu-util
-On MacOS, you can install dfu-util using brew:
+On macOS, you can install dfu-util using Homebrew:
     brew install dfu-util
+There is also a port of dfu-util for Windows.
+    https://dfu-util.sourceforge.net/
 
-In either case, you will need a computer that you can connect by
-USB-C to your KickSmash. You will also need to build firmware for
-KickSmash. I recommend Linux (Fedora), but have used MacOS in the past.
-Get all the source code from here:
+In all cases, you will need a computer that you can connect by
+USB-C to your KickSmash. If you are not using a release binary, you
+will also need to build firmware for KickSmash. I recommend Linux
+(Fedora), but I have used macOS in the past. Get all the source code
+from here:
     https://github.com/cdhooper/kicksmash32
 
 1. Go to the fw directory and type make.
@@ -30,35 +33,35 @@ Get all the source code from here:
     or the gcc cross-compiler for ARM (gcc-arm-linux-gnu).
 
     You might also need to build in the libopencm3 or stutils directories
-    immediately under fw. These are third party software which are
-    configured as git submodules, and required to build and install
-    the KickSmash firmware.
+    immediately under fw. These are third party software packages which
+    are normally cloned and built by the Makefile, but if something goes
+    wrong with that step, you may need to take manual actions.
         https://github.com/libopencm3/libopencm3
         https://github.com/texane/stlink.git
 
 2. Connect KickSmash
-    If you plan to use ST-Link, connect this first, then attach your
-    ST-Link to your computer, and finally attach your KickSmash USB-C
-    port to your computer. Note that many low-cost ST-Micro Discovery
+    If you plan to use ST-Link, connect this first to KickSmash, then
+    attach your ST-Link to your computer, and finally attach your KickSmash
+    USB-C port to your computer. Note that many low-cost ST-Micro Discovery
     boards have a built-in ST-Link that you can use to program external
     devices. You just need to disconnect a couple jumpers in that case.
-    I usually use an STM32F4-Discovery board and a 6-pin Dupont cable.
-    The KickSmash SWD header pin order is identical to that of the
-    STM32F4-Discovery board.
+    I usually use an STM32F4-Discovery board and a 6-pin straight-through
+    Dupont cable. The KickSmash SWD header pin order is identical to that
+    of the STM32F4-Discovery board.
 
     If you plan to use DFU mode, first short the DFU pin with the V3P3
     pin right next to it, then attach your USB-C cable to your computer.
-    You can then release the short of the DFU pin. After several seconds
-    (10 or so), the STM32F105 or STM32F107 should appear in your USB
-    device list (lsusb). Example:
-        lsusb|grep DFU
+    You can then release the short of the DFU pin. After about 10 seconds,
+    the STM32F105 or STM32F107 should appear in your USB device list
+    (lsusb). Example:
+        lsusb | grep DFU
         Bus 001 Device 101: ID 0483:df11 STMicroelectronics STM Device in DFU Mode
 
-    You might see the READ LED is illuminated and the POWER LED is off.
-    This is normal for an unprogrammed board. If no LED lights up, then
-    unplug USB and inspect your board for shorts or missing components.
-    A common cause of missing voltage is the diode next to the AM1117
-    is installed backwards.
+    You might see that the READ LED is illuminated and the POWER LED is
+    off. This is normal for an unprogrammed board. If no LED lights up,
+    then unplug the USB cable and inspect your board for shorts or
+    missing components. A common cause of missing voltage is the diode next
+    to the AM1117 has been installed backwards.
 
 3. Program the firmware
     Assuming you are on Linux and have the necessary packages installed,
@@ -72,7 +75,7 @@ Get all the source code from here:
     shows up on your computer, type:
         make dfu
 
-    if you are on MacOS, you might need to first build the firmware and
+    If you are on macOS, you might need to first build the firmware and
     then type:
         make just-dfu
 
@@ -109,21 +112,23 @@ Get all the source code from here:
         lsusb | grep -i KickSmash
         Bus 001 Device 090: ID 1209:1610 Generic KickSmash Prg
 
-    Your computer should have a new ACM device installed, and to which
-    you can use any terminal program to connect (bps rate doesn't matter).
-    What I use and recommend is the host utility which is part of the
-    KickSmash software. Go to the sw directory and type make.
-    It should build a utility called hostsmash. Run it as follows:
+    Your computer should have a new ACM device installed, which you can
+    connect to using any terminal program (bps rate doesn't matter).
+    I recommend using the hostsmash utility which is part of the
+    KickSmash software. Go to the sw directory and type make. It should
+    build a utility called `hostsmash`. Run it as follows:
         ./hostsmash -d /dev/ttyACM0 -t
-    Press return and you should see output similar to:
+    Note that on macOS or Windows, the specified device name will be
+    different. Press return and you should see output similar to:
 
-        Kicksmash 32 Version 0.1 built 2024-05-03 09:12:34
+        Kicksmash 32 Version 1.7+ built 2025-07-09 12:31:28
             CPUID=411fc231 Dev=0418 Rev=1001 (compile: STM32F107xC BOARD=4)
             Hardware: STM32F1    Connectivity revision Z
             HCLK=72 MHz  APB1=36 MHz  APB2=72 MHz
-            Power-on reset
+            Software reset
         New config
-        Connected: !A17 A18 A19 D31 !KBRST Flash0 Flash1
+        Connected: !A17 !A18 !A19 !D31 !KBRST Flash0 Flash1
+        Prom 000122d2 000122d2 M29F160FT M29F160FT
         Standalone
         CMD> config write at 3e000
         CMD>
@@ -131,7 +136,7 @@ Get all the source code from here:
     If you see other output, especially errors such as pin shorts
     detected, you should check your soldering before proceeding.
     Pin shorts or floating signals must be resolved before installing
-    in your computer.
+    the board in your computer.
 
     Assuming you don't see any errors, your next step should be to
     verify that the STM32 can talk with both flash chips. The
@@ -143,18 +148,22 @@ Get all the source code from here:
 
 5. Load an initial Kickstart image
     You must own rights to the image you are about to install. I do not
-    condone piracy, even of 30+ year old software. I recommend using
-    the latest AmigaOS 3.2.2 ROM from Hyperion. The following command
-    will install the Amiga 3000 version of the 3.2.2 Kickstart ROM:
-        ./hostsmash -wv -path-to-OS-/Update3.2.2/ROMs/A3000.47.111.rom -s 3210 -d /dev/ttyACM0 -b 0
+    condone piracy, even of software that is more than 30 years old.
+    I recommend using the latest AmigaOS 3.2.3 ROM from Hyperion. The
+    following command will install the Amiga 3000 version of the 3.2.3
+    Kickstart ROM:
+        ./hostsmash -wv -path-to-OS-/Update3.2.3/ROMs/A3000.47.115.rom -d /dev/ttyACM0 -b 0
 
     Later guides will explain hostsmash command options in detail.
     The options used above are:
         -w               Write an image to flash
         -v               Verify the write was successful.
-        -s 3210          Byte swap the image suitable for the A3000.
-        -d /dev/ttyACM0  ACM device on your computer. If you're using
-                         MacOS, you might use "/dev/cu.usbmodem*" instead.
+        -d /dev/ttyACM0  ACM device on your computer. If you are using
+                         macOS, you might use "/dev/cu.usbmodem*" instead.
+                         For Windows, it will be a comXX device. You can
+                         use Windows Device Manager to determine the COM
+                         port associated with KickSmash.
         -b 0             Write to flash bank 0 (banks are numbered 0-7).
 
-After you've completed hardware programming, follow the hw_install.txt guide.
+After you have completed hardware programming, follow the hw_install.txt
+guide.

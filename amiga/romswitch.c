@@ -116,6 +116,11 @@
 
 typedef unsigned int uint;
 
+#ifndef BEAMCON0
+#define BEAMCON0  VADDR16(0x00dff1dc)  // Beam counter control bits
+#define BEAMCON0_PAL       BIT(5)   // Set decoders for PAL
+#endif
+
 #ifndef STANDALONE
 extern struct DosLibrary *DOSBase;
 extern struct ExecBase *SysBase;

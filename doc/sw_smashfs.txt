@@ -1,5 +1,6 @@
 smashfs - Amiga Filesystem for host-exported volumes
 ----------------------------------------------------
+
 The smashfs filesystem is started like a regular Amiga program. Once started,
 it will automatically detect and mount exported volumes from the remote host.
 Most standard Amiga programs such as Workbench, Info, List, and Textedit may

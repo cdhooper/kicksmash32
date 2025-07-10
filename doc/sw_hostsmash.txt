@@ -1,5 +1,6 @@
-The hostsmash utility
+The Hostsmash Utility
 ---------------------
+
 The hostsmash utility runs on your USB Host. The supported platform
 is Linux, but MacOS may also work. It might also be possible to compile
 hostsmash under the Windows WSL.
