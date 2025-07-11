@@ -252,16 +252,16 @@ timespec_to_timeval(struct timeval *tv, struct timespec *ts)
 #define EXIT_USAGE 2
 #endif
 
-#define KICKSMASH_MODE_A3000    0  // Swap mode 3210 (Amiga 3000/4000)
-#define KICKSMASH_MODE_A500     1  // Swap mode 1032 (Amiga 500/2000)
-#define KICKSMASH_MODE_A500_HI  2  // Swap mode 1032 (Amiga 500/2000)
-#define KICKSMASH_MODE_AUTO     3  // Swap mode 3210 (Amiga 3000/4000)
-#define KICKSMASH_MODE_A1200    4  // Swap mode 1032 (Amiga 1200)
+#define KICKSMASH_MODE_32     0  // Swap mode 3210 (Amiga 3000/4000)
+#define KICKSMASH_MODE_16     1  // Swap mode 1032 (Amiga 500/2000)
+#define KICKSMASH_MODE_16HI   2  // Swap mode 1032 (Amiga 500/2000)
+#define KICKSMASH_MODE_AUTO   3  // Swap mode 3210 (Amiga 3000/4000)
+#define KICKSMASH_MODE_32SWAP 4  // Swap mode 1032 (Amiga 3000T)
 
-#define SWAPMODE_AUTO  0xa040   // Automatic mode
-#define SWAPMODE_A500  0xA500   // Amiga 16-bit ROM format
-#define SWAPMODE_A1200 0xA1200  // Amiga 32-bit ROM format hi-lo swapped
-#define SWAPMODE_A3000 0xA3000  // Amiga 32-bit ROM format
+#define SWAPMODE_AUTO   0xa040   // Automatic mode
+#define SWAPMODE_16     0x0010   // Amiga 16-bit ROM format
+#define SWAPMODE_32SWAP 0x1032   // Amiga 32-bit ROM format hi-lo swapped
+#define SWAPMODE_32     0x3210   // Amiga 32-bit ROM format
 
 #define SWAP_TO_ROM    0  // Bytes originated in a file (to be written in ROM)
 #define SWAP_FROM_ROM  1  // Bytes originated in ROM (to be written to a file)
@@ -1945,6 +1945,58 @@ ask_again:
     return (FALSE);
 }
 
+/* Byte order swap functions */
+#define SWAP_3210(x) (((x) << 24) | ((x) >> 24) | \
+                      (((x) & 0xff00) << 8) | (((x) >> 8) & 0xff00))
+#define SWAP_2301(x) (((x) << 16) | ((x) >> 16))
+#define SWAP_1032(x) ((((x) & 0x00ff00ff) << 8) | (((x) >> 8) & 0x00ff00ff))
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define BESWAP(x) SWAP32(x)
+#else
+#define BESWAP(x) (x)
+#endif
+
+/*
+ * detect_byte_order() reports the byte order of the specified buffer
+ *                     relative to an unswapped Kickstart ROM image.
+ *
+ * @param  [in]  bufp  - The buffer to check
+ *
+ * @return       0123  - Normal unswapped order [0] [1] [2] [3]
+ * @return       3210  - Swapped byte order     [3] [2] [1] [0]
+ * @return       1032  - Swapped byte order     [1] [0] [3] [2]
+ * @return       2301  - Swapped byte order     [2] [3] [0] [1]
+ */
+static uint
+detect_byte_order(uint8_t *bufp)
+{
+    /* BESWAP() is used because numbers are specified in big endian format */
+    static const uint32_t comp[][2] = {
+        { BESWAP(0x11144ef9), BESWAP(0x00f800d2) },  // 2.04+
+        { BESWAP(0x11114ef9), BESWAP(0x00fc00d2) },  // 1.3
+        { BESWAP(0x612e4447), BESWAP(0x00f80190) },  // DiagROM 2.x
+        { BESWAP(0x11144ef9), BESWAP(0x00f80010) },  // ROM Switcher
+        { BESWAP(0x11114ef9), BESWAP(0x00f8048c) },  // Logica-Dialoga
+        { BESWAP(0x11114ef9), BESWAP(0x00f800f8) },  // AROS
+    };
+    uint32_t *buf32 = (uint32_t *) bufp;
+    uint cur;
+
+    for (cur = 0; cur < ARRAY_SIZE(comp); cur++) {
+        if (comp[cur][0] == buf32[0])
+            return (0123);
+        if (SWAP_1032(comp[cur][0]) == buf32[0])
+            return (1032);
+        if (SWAP_2301(comp[cur][0]) == buf32[0])
+            return (2301);
+        if (SWAP_3210(comp[cur][0]) == buf32[0])
+            return (3210);
+    }
+    return (0xffff);
+}
+
+
 /*
  * execute_swapmode() swaps bytes in the specified buffer according to the
  *                    currently active swap mode.
@@ -1960,28 +2012,28 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
     bool_t  printed    = FALSE;
     uint    pos;
     uint8_t temp;
-    static const uint8_t str_f94e1411[] = { 0xf9, 0x4e, 0x14, 0x11 };
-    static const uint8_t str_11144ef9[] = { 0x11, 0x14, 0x4e, 0xf9 };
-    static const uint8_t str_1411f94e[] = { 0x14, 0x11, 0xf9, 0x4e };
-    static const uint8_t str_4ef91114[] = { 0x4e, 0xf9, 0x11, 0x14 };
+    uint    byteorder = detect_byte_order(buf);
 
     if (swapmode == SWAPMODE_AUTO) {
         printf("Auto swap mode: ");
         switch (kicksmash_mode) {
             default:
             case KICKSMASH_MODE_AUTO:
-            case KICKSMASH_MODE_A3000:
-                swapmode = SWAPMODE_A3000;
-                printf("A3000, ");
+            case KICKSMASH_MODE_32:
+                swapmode = SWAPMODE_32;
+                printf("32, ");
                 break;
-            case KICKSMASH_MODE_A500:
-            case KICKSMASH_MODE_A500_HI:
-                swapmode = SWAPMODE_A500;
-                printf("A500, ");
+            case KICKSMASH_MODE_16:
+                swapmode = SWAPMODE_16;
+                printf("16, ");
                 break;
-            case KICKSMASH_MODE_A1200:
-                swapmode = SWAPMODE_A1200;
-                printf("A1200, ");
+            case KICKSMASH_MODE_16HI:
+                swapmode = SWAPMODE_16;
+                printf("16hi, ");
+                break;
+            case KICKSMASH_MODE_32SWAP:
+                swapmode = SWAPMODE_32SWAP;
+                printf("32hi, ");
                 break;
         }
         printed = TRUE;
@@ -2024,105 +2076,105 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
                 buf[pos + 2] = temp;
             }
             break;
-        case SWAPMODE_A500:
+        case SWAPMODE_16:
             if (dir == SWAP_TO_ROM) {
-                /* Need bytes in order: 14 11 f9 4e */
-                if (memcmp(buf, str_1411f94e, 4) == 0)
+                /* Need bytes in order: 14 11 f9 4e == 1032 */
+                if (byteorder == 1032)
                     break;  // Already in desired order
-                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                if (byteorder == 0123) {
                     printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
             }
             if (dir == SWAP_FROM_ROM) {
-                /* Need bytes in order: 11 14 4e f9 */
-                if (memcmp(buf, str_11144ef9, 4) == 0)
+                /* Need bytes in order: 11 14 4e f9 == 3210 */
+                if (byteorder == 0123)
                     break;  // Already in desired order
-                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                if (byteorder == 2301) {
                     printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
             goto unrecognized;
-        case SWAPMODE_A1200:
+        case SWAPMODE_32SWAP:
             if (dir == SWAP_TO_ROM) {
-                /* Need bytes in order: 14 11 f9 4e */
-                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                /* Need bytes in order: 14 11 f9 4e == 1032 */
+                if (byteorder == 1032) {
                     if (printed)
                         printf("No swap, ");
                     break;  // Already in desired order
                 }
-                if (memcmp(buf, str_4ef91114, 4) == 0) {
+                if (byteorder == 2301) {
                     printf("Swapping 3210, ");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
-                if (memcmp(buf, str_f94e1411, 4) == 0) {
+                if (byteorder == 3210) {
                     printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
-                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                if (byteorder == 0123) {
                     printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
             if (dir == SWAP_FROM_ROM) {
-                /* Need bytes in order: 4e f9 11 14 */
-                if (memcmp(buf, str_4ef91114, 4) == 0) {
+                /* Need bytes in order: 4e f9 11 14 == 2301 */
+                if (byteorder == 2301) {
                     if (printed)
                         printf("No swap, ");
                     break;  // Already in desired order
                 }
-                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                if (byteorder == 1032) {
                     printf("Swapping 3210, ");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
-                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                if (byteorder == 0123) {
                     printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
-                if (memcmp(buf, str_f94e1411, 4) == 0) {
+                if (byteorder == 3210) {
                     printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
             goto unrecognized;
-        case SWAPMODE_A3000:
+        case SWAPMODE_32:
             if (dir == SWAP_TO_ROM) {
-                /* Need bytes in order: f9 4e 14 11 */
-                if (memcmp(buf, str_f94e1411, 4) == 0) {
+                /* Need bytes in order: f9 4e 14 11 == 3210 */
+                if (byteorder == 3210) {
                     if (printed)
                         printf("No swap, ");
                     break;  // Already in desired order
                 }
-                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                if (byteorder == 0123) {
                     printf("Swapping 3210, ");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
-                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                if (byteorder == 1032) {
                     printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
-                if (memcmp(buf, str_4ef91114, 4) == 0) {
+                if (byteorder == 2301) {
                     printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
             }
             if (dir == SWAP_FROM_ROM) {
-                /* Need bytes in order: 11 14 4e f9 */
-                if (memcmp(buf, str_11144ef9, 4) == 0) {
+                /* Need bytes in order: 11 14 4e f9 == 0123 */
+                if (byteorder == 0123) {
                     if (printed)
                         printf("No swap, ");
                     break;  // Already in desired order
                 }
-                if (memcmp(buf, str_f94e1411, 4) == 0) {
+                if (byteorder == 3210) {
                     printf("Swapping 3210, ");
                     goto swap_3210;  // Swap bytes in 32-bit longs
                 }
-                if (memcmp(buf, str_4ef91114, 4) == 0) {
+                if (byteorder == 1032) {
                     printf("Swapping 2301, ");
                     goto swap_2301;  // Swap adjacent 16-bit words
                 }
-                if (memcmp(buf, str_1411f94e, 4) == 0) {
+                if (byteorder == 2301) {
                     printf("Swapping 1032, ");
                     goto swap_1032;  // Swap odd/even bytes
                 }
@@ -2134,6 +2186,13 @@ unrecognized:
                  "Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
                  buf[0], buf[1], buf[2], buf[3]);
     }
+#undef DEBUG_SWAPMODE
+#ifdef DEBUG_SWAPMODE
+    printf("Swapped:");
+    for (pos = 0; pos < 4; pos++)
+        printf(" %02x", buf[pos]);
+    printf(", ");
+#endif
     printf("Length 0x%x\n", len);
 }
 
@@ -6754,14 +6813,13 @@ errx(EXIT_FAILURE, "how did we get here?");
             case 's':
                 if ((strcasecmp(optarg, "a3000") == 0) ||
                     (strcasecmp(optarg, "a4000") == 0) ||
-                    (strcasecmp(optarg, "a3000t") == 0) ||
                     (strcasecmp(optarg, "a4000t") == 0) ||
                     (strcasecmp(optarg, "a1200") == 0)) {
-                    swapmode = SWAPMODE_A3000;
+                    swapmode = SWAPMODE_32;
                     break;
                 }
-                if (strcasecmp(optarg, "a1200") == 0) {
-                    swapmode = SWAPMODE_A1200;
+                if (strcasecmp(optarg, "a3000t") == 0) {
+                    swapmode = SWAPMODE_32SWAP;
                     break;
                 }
                 if ((strcasecmp(optarg, "a500") == 0) ||
@@ -6769,7 +6827,7 @@ errx(EXIT_FAILURE, "how did we get here?");
                     (strcasecmp(optarg, "a1000") == 0) ||
                     (strcasecmp(optarg, "a2000") == 0) ||
                     (strcasecmp(optarg, "cdtv") == 0)) {
-                    swapmode = SWAPMODE_A500;
+                    swapmode = SWAPMODE_16;
                     break;
                 }
                 if ((sscanf(optarg, "%i%n", (int *)&swapmode, &pos) != 1) ||
