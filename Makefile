@@ -27,7 +27,7 @@ clean-sw clean-fw clean-amiga clean-romswitcher:
 # ---------------------------------------------------------------
 
 RELEASE_DIR := kicksmash_$(VERSION)
-RELEASE_LHA := kicksmash_$(VERSION).lha
+RELEASE_LHA := kicksmash_$(VERSION)_amiga.lha
 RELEASE_ZIP := kicksmash_$(VERSION).zip
 
 RELEASE_TARGETS :=
@@ -73,10 +73,12 @@ release: all
 
 do_release: populating $(RELEASE_TARGETS) $(RELEASE_LHA) $(RELEASE_ZIP)
 
+AMIGA_RELS := $(RELEASE_DIR)/amiga/* \
+	      $(RELEASE_DIR)/README.md $(RELEASE_DIR)/LICENSE.md
 $(RELEASE_LHA): all populating $(RELEASE_TARGETS)
 	@echo "* Building $@"
 	@rm -f $@
-	lha -aq2 $@ $(RELEASE_DIR)
+	lha -aq2 $@ $(AMIGA_RELS)
 
 $(RELEASE_ZIP): all populating $(RELEASE_TARGETS)
 	@echo "* Building $@"
