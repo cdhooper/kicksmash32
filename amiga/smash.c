@@ -401,6 +401,7 @@ static const chip_ids_t chip_ids[] = {
     { 0x00012223, "M29F400FT" },   // AMD+others 512K top boot
     { 0x000122ab, "M29F400FB" },   // AMD+others 512K bottom boot
     { 0x000422d2, "M29F160TE" },   // Fujitsu 2MB top boot
+    { 0x000422D8, "M29F160TB" },   // Fujitsu 2MB bottom boot
 //  { 0x002022cc, "M29F160BT" },   // ST-Micro 2MB top boot
 //  { 0x0020224b, "M29F160BB" },   // ST-Micro 2MB bottom boot
     { 0x00c222D6, "MX29F800CT" },  // Macronix 2MB top boot

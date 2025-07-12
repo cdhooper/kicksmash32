@@ -832,6 +832,7 @@ typedef struct {
 static const chip_vendors_t chip_vendors[] = {
     { 0x0001, "AMD" },      // AMD, Alliance, ST, Micron, others
     { 0x0004, "Fujitsu" },
+    { 0x0020, "ST" },
     { 0x00c2, "Macronix" }, // MXIC
     { 0x0000, "Unknown" },  // Must remain last
 };
@@ -848,6 +849,7 @@ static const chip_ids_t chip_ids[] = {
     { 0x00012223, "M29F400FT" },   // AMD+others 512K top boot
     { 0x000122ab, "M29F400FB" },   // AMD+others 512K bottom boot
     { 0x000422d2, "M29F160TE" },   // Fujitsu 2MB top boot
+    { 0x000422D8, "M29F160TB" },   // Fujitsu 2MB bottom boot
     { 0x00c222D6, "MX29F800CT" },  // Macronix 1MB top boot
     { 0x00c22258, "MX29F800CB" },  // Macronix 1MB bottom boot
     { 0x00000000, "Unknown" },     // Must remain last

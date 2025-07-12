@@ -13,7 +13,7 @@
 #define __PIN_TESTS_H
 
 void check_board_standalone(void);
-uint pin_tests(void);
+uint pin_tests(uint verbose);
 
 extern uint8_t board_is_standalone;  // Board is not in Amiga
 extern uint8_t kbrst_in_amiga;       // KBRST is connected

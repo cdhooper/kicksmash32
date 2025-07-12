@@ -395,7 +395,7 @@ in_amiga:
     }
 
     board_is_standalone = true;
-    rc = pin_tests();
+    rc = pin_tests(0);
     if (rc == 0)
         rc = prom_test();
     if (rc != 0)
@@ -433,7 +433,7 @@ gpio_set_0_fast(uint32_t GPIOx, uint16_t GPIO_Pins)
  * Verify interaction between OE, WE, and OEWE pins.
  */
 static uint
-pin_test_oewe(void)
+pin_test_oewe(uint verbose)
 {
     uint count;
     uint32_t ticks_to_1_total = 0;
@@ -581,7 +581,7 @@ pin_test_oewe(void)
         return (1);
     }
 
-    if (config.flags & CF_OEWE_PIN_SHOW) {
+    if (verbose || (config.flags & CF_OEWE_PIN_SHOW)) {
         printf("FLASH_WE time to 0 = %llu nsec\n", nsec_0);
         printf("FLASH_WE time to 1 = %llu nsec\n", nsec_1);
     }
@@ -609,7 +609,7 @@ pin_test_oewe(void)
  * Performs stand-alone board pin tests.
  */
 uint
-pin_tests(void)
+pin_tests(uint verbose)
 {
     uint     pass;
     uint     cur;
@@ -879,7 +879,7 @@ pin_tests(void)
     usb_poll();
 
     /* Test OE, WE, and OEWE interaction */
-    fail += pin_test_oewe();
+    fail += pin_test_oewe(verbose);
 
     if (fail)
         return (RC_FAILURE);

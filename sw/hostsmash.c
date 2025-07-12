@@ -17,6 +17,7 @@
 #include <stdarg.h>
 #include <sys/time.h>
 #ifdef __MINGW32__
+#include <time.h>
 #include <sys/utime.h>
 #define handle_t winhandle_t
 #include <shlwapi.h>
@@ -3896,7 +3897,10 @@ time_t
 get_localtime(time_t rawtime)
 {
 #ifdef __MINGW32__
-    return (rawtime);
+    const int local_time = localtime(&rawtime)->tm_hour;
+    const int gm_time    = gmtime(&rawtime)->tm_hour;
+    const int gmtoff     = (local_time - gm_time) * 60 * 60;
+    return (rawtime + gmtoff);
 #else
     struct tm *ptm = localtime(&rawtime);
     return (rawtime + ptm->tm_gmtoff);
@@ -3912,7 +3916,10 @@ time_t
 get_utctime(time_t rawtime)
 {
 #ifdef __MINGW32__
-    return (rawtime);
+    const int local_time = localtime(&rawtime)->tm_hour;
+    const int gm_time    = gmtime(&rawtime)->tm_hour;
+    const int gmtoff     = (local_time - gm_time) * 60 * 60;
+    return (rawtime - gmtoff);
 #else
     struct tm *ptm = localtime(&rawtime);
     return (rawtime - ptm->tm_gmtoff);
