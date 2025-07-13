@@ -2760,6 +2760,66 @@ reset_amiga(int hold)
     return (0);
 }
 
+#ifdef __MINGW32__
+/*
+ * winkey_special() handles special windows virtual keystrokes, turning
+ *                  them into input keystrokes which are compatible with
+ *                  Kicksmash firmware input handling.
+ */
+static void
+winkey_special(int ch)
+{
+    switch (ch) {
+        case VK_LEFT:
+            tx_rb_put(0x1b);
+            tx_rb_put('[');
+            tx_rb_put('D');
+            break;
+        case VK_RIGHT:
+            tx_rb_put(0x1b);
+            tx_rb_put('[');
+            tx_rb_put('C');
+            break;
+        case VK_UP:
+            tx_rb_put(0x1b);
+            tx_rb_put('[');
+            tx_rb_put('A');
+            break;
+        case VK_DOWN:
+            tx_rb_put(0x1b);
+            tx_rb_put('[');
+            tx_rb_put('B');
+            break;
+        case VK_INSERT:
+            tx_rb_put(0x1b);
+            tx_rb_put('[');
+            tx_rb_put('2');
+            tx_rb_put('~');
+            break;
+        case VK_HOME:
+            tx_rb_put(0x1b);
+            tx_rb_put('[');
+            tx_rb_put('1');
+            tx_rb_put('~');
+            break;
+        case VK_END:
+            tx_rb_put(0x1b);
+            tx_rb_put('[');
+            tx_rb_put('F');
+            break;
+        case VK_DELETE:
+            tx_rb_put(4);  // ^D
+            break;
+        case VK_ESCAPE:
+            tx_rb_put(0x1b);
+            break;
+        default:
+//          printf("[%x]", ch);
+            break;
+    }
+}
+#endif
+
 /*
  * run_terminal_mode() implements a terminal interface with the KickSmash
  *                     command line.
@@ -2835,11 +2895,15 @@ run_terminal_mode(void)
                 break;
             }
             for (cur = 0; cur < read_count; cur++) {
+                // KEY_EVENT MOUSE_EVENT
                 if (inbuffer[cur].EventType == KEY_EVENT) {
                     if (inbuffer[cur].Event.KeyEvent.bKeyDown) {
                         ch = inbuffer[cur].Event.KeyEvent.uChar.AsciiChar;
-                        if (ch == 0)
+                        if (ch == 0) {
+                            ch = inbuffer[cur].Event.KeyEvent.wVirtualKeyCode;
+                            winkey_special(ch);
                             continue;
+                        }
                         if (literal == TRUE) {
                             literal = FALSE;
                             tx_rb_put(ch);
