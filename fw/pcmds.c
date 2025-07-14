@@ -84,6 +84,7 @@ const char cmd_reset_help[] =
 
 const char cmd_set_help[] =
 "set bank [show|name|?]     - do various prom bank settings\n"
+"set board_rev <num>        - set board revision\n"
 "set flags <flags> [save]   - set config flags\n"
 "set led <pct>              - set the Power LED brightness level\n"
 "set mode <num>             - set prom mode (0=32, 1=16, 2=16hi, 3=auto)\n"
@@ -938,6 +939,8 @@ typedef struct {
     uint8_t     cs_mode;    // Mode bits for display (1=hex)
 } config_set_t;
 static const config_set_t config_set[] = {
+    { "board_rev",      "Board Revision",
+      CFOFF(board_rev), MODE_DEC },
     { "flags",          "",
       CFOFF(flags), MODE_HEX | MODE_BIT_FLAGS },
     { "led",            "LED",
@@ -1012,6 +1015,24 @@ cmd_set(int argc, char * const *argv)
 
     if (strcmp(argv[1], "bank") == 0) {
         return (cmd_prom(argc - 1, argv + 1));
+    } else if (strcmp(argv[1], "board_rev") == 0) {
+        if (argc <= 2) {
+            printf("%s %u\n", argv[0], config.board_rev);
+            return (RC_SUCCESS);
+        }
+        if (argc != 3) {
+            printf("set %s requires an argument\n", argv[1]);
+            return (RC_FAILURE);
+        }
+        uint rev = atoi(argv[2]);
+        if (rev > 0xff) {
+            printf("FAIL: Valid range is 0 to 255\n");
+            return (RC_FAILURE);
+        }
+        if (config.board_rev != rev) {
+            config.board_rev = rev;
+            config_updated();
+        }
     } else if ((strcmp(argv[1], "help") == 0) ||
                (strcmp(argv[1], "?") == 0)) {
         return (RC_USER_HELP);

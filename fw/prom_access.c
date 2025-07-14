@@ -23,14 +23,24 @@
 #include "config.h"
 #include "led.h"
 #include "gpio.h"
+#include "pin_tests.h"
+#include "adc.h"
 
 #define DATA_CRC_INTERVAL 256
 
 static int
 warn_amiga_not_in_reset(void)
 {
+    if (board_is_standalone)
+        return (0);
+
     if (amiga_not_in_reset) {
         printf("Fail: Amiga is not in reset\n");
+        return (1);
+    }
+
+    if ((config.board_rev >= 4) && (!v5_stable)) {
+        printf("Fail: Amiga is not powered on\n");
         return (1);
     }
     return (0);

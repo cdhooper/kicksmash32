@@ -26,7 +26,8 @@ typedef struct {
     uint8_t     ee_mode;    // Flash mode (0=32-bit, 1=16-bit, 2=16-bit hi)
     char        name[16];   // Unique name for this board
     uint8_t     led_level;  // Power LED brightness (0 to 100)
-    uint8_t     unused[30]; // Unused
+    uint8_t     board_rev;  // Board revision
+    uint8_t     unused[29]; // Unused
     uint32_t    flags;      // Runtime flags
     uint8_t     nv_mem[32]; // Non-volatile storage for Amiga
 } config_t;

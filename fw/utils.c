@@ -195,8 +195,8 @@ identify_cpu(void)
             runtime_cpu = "?";
             break;
     }
-    printf("    CPUID=%08lx Dev=%04lx Rev=%04lx (compile: %s BOARD=%d)\n",
-           SCB_CPUID, DBGMCU_DEVID, DBGMCU_REVID, COMPILE_CPU, BOARD_REV);
+    printf("    CPUID=%08lx Dev=%04lx Rev=%04lx (compile: %s)\n",
+           SCB_CPUID, DBGMCU_DEVID, DBGMCU_REVID, COMPILE_CPU);
     printf("    Hardware: %s", runtime_cpu);
     if (DBGMCU_DEVID != 0) {
         const char *core_type;

@@ -20,6 +20,8 @@
 #include "adc.h"
 #include "timer.h"
 #include "gpio.h"
+#include "config.h"
+#include "pin_tests.h"
 
 #define TEMP_BASE          25000     // Base temperature is 25C
 
@@ -75,9 +77,9 @@ static const channel_gpio_t channel_gpios[] = {
 #define CHANNEL_COUNT ARRAY_SIZE(channel_defs)
 
 /* Buffer to store the results of the ADC conversion */
-volatile uint16_t adc_buffer[CHANNEL_COUNT];
+static volatile uint16_t adc_buffer[CHANNEL_COUNT];
 
-int v5_stable = false;
+int8_t v5_stable = false;
 
 static void
 adc_enable(void)
@@ -249,17 +251,16 @@ adc_show_sensors(void)
     print_reading(calc_vref, "V\n");
     printf("  Vtemp=%04x %8u   ", adc[1], adc[1] * scale);
     print_reading(calc_temp, "C\n");
-#if BOARD_REV >= 4
-    printf("     5V=%04x %8u   ", adc[2], adc[2] * scale);
-    print_reading(calc_v5, "V\n");
-#else
-    (void) calc_v5;
-#endif
+
+    if (config.board_rev >= 4) {
+        printf("     5V=%04x %8u   ", adc[2], adc[2] * scale);
+        print_reading(calc_v5, "V\n");
+    }
 }
 
 /*
- * adc_poll() will capture the current readings from the sensors and take
- *            action to maintain the 10V rail as close as possible to 10V.
+ * adc_poll() will monitor the 5V sensor, which reports the Amiga
+ *            motherboard voltage.
  */
 void
 adc_poll(int verbose, int force)
@@ -269,8 +270,11 @@ adc_poll(int verbose, int force)
     uint            scale;
     int             v5_good = false;
     uint16_t        adc[CHANNEL_COUNT];
+    static uint16_t got_v5_count = 0;
+    static int8_t   got_v5_state = false;
     static uint8_t  deglitch = 0;
     static uint64_t next_check = 0;
+
 
     if ((timer_tick_has_elapsed(next_check) == false) && (force == false))
         return;
@@ -290,16 +294,42 @@ adc_poll(int verbose, int force)
         v5_good = true;
     }
 
+    /*
+     * If power is off, drive SOCKET_OE high to prevent the bus buffer
+     * chips from driving current into the bus of a powered off Amiga.
+     */
+    if (got_v5_state == false) {
+        if (got_v5_count++ > 300) {  // 300 msec
+            got_v5_state = true;
+            if (config.board_rev >= 4) {
+                if (v5_good == false) {
+                    if (!board_is_standalone)
+                        printf("Power is off\n");
+                    goto drive_oe_high;
+                }
+            }
+        }
+    }
     if (v5_stable != v5_good) {
         if (deglitch == 0) {
             v5_stable = v5_good;
-#if BOARD_REV >= 4
-            if (verbose) {
-                printf("Amiga V5 %sstable at ",
-                       (v5_stable == false) ? "not " : "");
-                print_reading(avg_v5, "V\n");
+            if (config.board_rev >= 4) {
+                if (verbose) {
+                    printf("Amiga V5 %sstable at ",
+                           (v5_stable == false) ? "not " : "");
+                    print_reading(avg_v5, "V\n");
+                }
             }
-#endif
+            if (v5_stable) {
+                /* Just pull up SOCKET_OE */
+                gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
+                             GPIO_SETMODE_INPUT_PULLUPDOWN);
+            } else {
+drive_oe_high:
+                /* Drive SOCKET_OE high */
+                gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
+                             GPIO_SETMODE_OUTPUT_PPULL_2);
+            }
         } else {
             deglitch--;
             next_check = 0;

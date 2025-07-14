@@ -130,6 +130,8 @@ config_read(void)
                 config.bi.bi_valid = 1;
                 if (config.led_level == 0)
                     config.led_level = 100;  // Old board
+                if (config.board_rev == 0)
+                    config.board_rev = 7;
                 if (config.version < 2) {
                     /* Structure expanded for this new field */
                     memset(config.nv_mem, 0, sizeof (config.nv_mem));
@@ -147,6 +149,7 @@ config_read(void)
     config.version = CONFIG_VERSION;
     config.ee_mode = 3;  // EE_MODE_AUTO
     config.led_level = 10;  // 10%
+    config.board_rev = 7;
 
     config.bi.bi_valid = 1;
     config.bi.bi_bank_current = 0;

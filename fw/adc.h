@@ -17,4 +17,6 @@ void adc_shutdown(void);
 void adc_show_sensors(void);
 void adc_poll(int verbose, int force);
 
+extern int8_t v5_stable;  // Amiga V5 is stable
+
 #endif /* _ADC_H */
