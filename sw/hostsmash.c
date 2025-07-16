@@ -826,7 +826,11 @@ microsleep(__int64 usec)
     HANDLE timer;
     LARGE_INTEGER ft;
 
-    ft.QuadPart = -(10*usec); // Convert to 100 nanosecond interval, negative value indicates relative time
+    /*
+     * Convert to 100 nanosecond interval; negative value indicates
+     * relative time.
+     */
+    ft.QuadPart = -(10*usec);
 
     timer = CreateWaitableTimer(NULL, TRUE, NULL);
     SetWaitableTimer(timer, &ft, 0, NULL, NULL, 0);
@@ -960,12 +964,12 @@ config_dev(void)
     DCB port;
     TIMECAPS timecaps;
 
-    if(timeGetDevCaps(&timecaps, sizeof(timecaps)) == MMSYSERR_NOERROR)
-    {
+    if (timeGetDevCaps(&timecaps, sizeof (timecaps)) == MMSYSERR_NOERROR) {
         // Set improved timer-accuracy for Sleep/Wait functions
-        if(timeBeginPeriod(timecaps.wPeriodMin)!= TIMERR_NOERROR)
+        if (timeBeginPeriod(timecaps.wPeriodMin) != TIMERR_NOERROR)
             printf("timeBeginPeriod() failed\n");
     }
+
     /* Get the current DCB, and adjust to our liking */
     memset(&port, 0, sizeof (port));
     port.DCBlength = sizeof (port);
@@ -2585,8 +2589,7 @@ eeprom_write(const uint8_t *filebuf, uint addr, uint len)
     printf("Wrote 0x%x bytes to device\n", len);
 #ifdef __MINGW32__
     DWORD dwElapsed = (GetTickCount() - dwTickStart);
-    if(dwElapsed > 0)
-    {
+    if (dwElapsed > 0) {
         printf("Elapsed time = %lums\n", dwElapsed);
         printf("bytes/sec = %lu\n", (DWORD)(len/((float)dwElapsed/1000.0)));
     }
@@ -3852,6 +3855,11 @@ send_msg(void *buf, uint len, uint *status)
     uint pos;
     uint bodylen_rounded;
 
+#ifdef MSG_DEBUG
+    km_msg_hdr_t *km = (km_msg_hdr_t *) buf;
+    msgprintf("  send msg len=%04x op=%02x mstatus=%02x tag=%02x data ",
+              len, km->km_op, km->km_status, km->km_tag);
+#endif
     mem16_swap(buf, len);
     if (sendlen > SEND_MSG_MAX)
         sendlen = SEND_MSG_MAX;
@@ -4849,6 +4857,9 @@ reply_open_fail:
         oflags |= O_CREAT;
     if (hm_mode & HM_MODE_TRUNC)
         oflags |= O_TRUNC;
+#ifdef __MINGW32__
+    oflags |= O_BINARY;
+#endif
 
     if (oflags & O_CREAT) {
         uint32_t aperms = SWAP32(hm->hm_aperms);
@@ -5106,8 +5117,8 @@ dir_read_common:
                  */
                 rc = 0;
 #ifdef DEBUG_READ
-                fsprintf("No space for next dirent %lu %u\n",
-                         sizeof (*dp), maxlen);
+                fsprintf("No space for next dirent %u %u\n",
+                         (uint) sizeof (*dp), maxlen);
 #endif
                 break;
             }
@@ -6045,7 +6056,7 @@ reply_setdate_fail:
         hm->hm_hdr.km_status = errno_to_km_status();
         goto reply_setdate_fail;
     }
-#elif defined (OSX)
+#elif defined(OSX)
     /* MacOS */
     struct timeval times[2];
     timespec_to_timeval(&times[0], &statbuf.st_atimespec);  // last access time
@@ -6340,7 +6351,7 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
         if (rc == 0)
             break;
 
-        printf("KS send_msg failure op=%x status=%02x: %d (%s)\n",
+        printf("KS process_msg failure op=%x status=%02x: %d (%s)\n",
                km->km_op, status, rc, smash_err(rc));
         time_delay_msec(100);
     } while (retry-- > 0);
@@ -6399,8 +6410,9 @@ run_message_mode(void)
     uint status;
     uint rc;
     uint curtick = 10;
-    uint fstick = 0;
     uint count;
+    time_t   time_now  = time(NULL) + 1;
+    time_t   time_next = time_now + 4;
     uint16_t app_state = MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_LOOPBACK;
     smash_msg_info_t mi;
 
@@ -6440,13 +6452,11 @@ run_message_mode(void)
                 usleep(curtick);
             else
                 time_delay_msec(curtick / 1024);
-            fstick += (curtick / 1024) + 10;
-        } else {
-            fstick += 20;
         }
-        if (fstick >= 5000) {
-            fstick = 0;
-            keep_app_state();  // do this once every 5 seconds
+        time_now = time(NULL);
+        if (time_next <= time_now) {
+            time_next = time_now + 4;
+            keep_app_state();  // do this once every 4 seconds
         }
 
         if (curtick > 1000) {
@@ -6469,7 +6479,6 @@ run_message_mode(void)
         if (count != 0) {
             /* Handled message */
             curtick = 0;
-            fstick += count * 10;
         } else {
             /* No message */
             if (curtick == 0)

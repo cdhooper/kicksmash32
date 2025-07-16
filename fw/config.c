@@ -118,7 +118,7 @@ config_read(void)
                 crclen = 1024;
             crc = crc32(0, &ptr->crc + 1, crclen);
             if (crc == ptr->crc) {
-                printf("Valid config at %lx", addr);
+                printf("    Valid config at %lx", addr);
                 memcpy(&config, (void *) addr, sizeof (config));
                 if (config.name[0] != '\0')
                     printf("  (%s)", config.name);
@@ -141,7 +141,7 @@ config_read(void)
             }
         }
     }
-    printf("New config\n");
+    printf("    New config\n");
     memset(&config, 0, sizeof (config));
     config.magic   = CONFIG_MAGIC;
     config.size    = sizeof (config);

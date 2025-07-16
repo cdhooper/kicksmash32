@@ -260,11 +260,10 @@ host_send_msg(void *smsg, uint len)
 #endif
             rc = send_cmd(KS_CMD_MSG_SEND, smsg + pos, sendlen, NULL, 0, NULL);
             memcpy(smsg + pos, savebuf, sizeof (km_msg_hdr_t));
-// XXX: If we get KS_STATUS_BADLEN, this means that there wasn't enough
-//      space available in the KS buffer. Try again.
 
             if (rc == KS_STATUS_BADLEN) {
-                if (timeout++ < 10) {
+                /* Not wasn't enough space in the KS buffer; try again. */
+                if (timeout++ < 20) {
                     cia_spin(CIA_USEC(1000));
                     continue;
                 }

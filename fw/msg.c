@@ -296,8 +296,13 @@ atou_add(uint len, void *ptr)
     uint xlen;
     uint8_t *sptr = ptr;
     len = (len + 1) & ~1;  // Round up to 16-bit alignment
-    if (len > SPACE_AVAIL_ATOU)
+    if (len > SPACE_AVAIL_ATOU) {
+        /*
+         * Should never get this failure on Amiga message side, as the
+         * caller first checks for sufficient space.
+         */
         return (1);
+    }
     xlen = sizeof (msg_atou) - prod_atou;
     if (len <= xlen) {
         memcpy(msg_atou + prod_atou, sptr, len);
@@ -1648,9 +1653,14 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             /* Compute start of raw message */
             cons_s = rx_consumer - (raw_len - 2 + 1) / 2;
 
-            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(2))) ||
-                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(3)))) {
+            if ((!(cmd & KS_MSG_ALTBUF) && (msg_lock & BIT(2))) ||
+                 ((cmd & KS_MSG_ALTBUF) && (msg_lock & BIT(3)))) {
                 ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                break;
+            }
+            if ((!(cmd & KS_MSG_ALTBUF) && (raw_len > SPACE_AVAIL_ATOU)) ||
+                 ((cmd & KS_MSG_ALTBUF) && (raw_len > SPACE_AVAIL_UTOA))) {
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                 break;
             }
 

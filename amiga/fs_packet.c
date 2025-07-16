@@ -664,6 +664,12 @@ action_findinput(void)
            (hm_mode & HM_MODE_WRITE) ? "UPDATE" : "INPUT", phandle, lock, name);
 
     rc = sm_fopen(phandle, name, hm_mode, &type, create_perms, &handle);
+
+    if (rc != 0) {
+        /* Try again without write access */
+        hm_mode = HM_MODE_READ;
+        rc = sm_fopen(phandle, name, hm_mode, &type, create_perms, &handle);
+    }
     *bname = cho;
 
     if (rc != 0) {
