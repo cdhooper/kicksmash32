@@ -61,10 +61,18 @@ void *malloc_chipmem(size_t size);
 void free_chipmem(void *addr);
 
 static inline uint32_t
+get_sp(void)
+{
+    uint32_t sp;
+    __asm volatile("move.l sp, %0" : "=d" (sp)::);
+    return (sp);
+}
+
+static inline uint32_t
 get_sr(void)
 {
     uint32_t sr;
-    __asm volatile("move.w sr, %0" : "=r" (sr)::);
+    __asm volatile("move.w sr, %0" : "=d" (sr)::);
     return (sr);
 }
 
@@ -74,7 +82,7 @@ irq_disable(void)
 {
     uint32_t sr;
     __asm volatile("move.w sr, %0 \n"
-                   "or.w #0x0700, sr" : "=r" (sr)::);
+                   "or.w #0x0700, sr" : "=d" (sr)::);
     return (sr);
 }
 
@@ -87,7 +95,7 @@ irq_enable(void)
 {
     uint32_t sr;
     __asm volatile("move.w sr, %0 \n"
-                   "and.w #0xf8ff, sr" : "=r" (sr)::);
+                   "and.w #0xf8ff, sr" : "=d" (sr)::);
     return (sr);
 }
 
@@ -95,7 +103,7 @@ irq_enable(void)
 static inline void
 irq_restore(uint32_t sr)
 {
-    __asm volatile("move.w %0, sr" :: "r" (sr));
+    __asm volatile("move.w %0, sr" :: "d" (sr));
 }
 
 void checknull(uintptr_t addr, const char *text);

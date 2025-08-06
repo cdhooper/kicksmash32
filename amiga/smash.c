@@ -377,19 +377,6 @@ show_test_state(const char * const name, int state)
 }
 
 typedef struct {
-    uint16_t cv_id;       // Vendor code
-    char     cv_vend[12]; // Vendor string
-} chip_vendors_t;
-
-static const chip_vendors_t chip_vendors[] = {
-    { 0x0001, "AMD" },      // AMD, Alliance, ST, Micron, others
-    { 0x0004, "Fujitsu" },
-    { 0x0020, "ST" },
-    { 0x00c2, "Macronix" }, // MXIC
-    { 0x0000, "Unknown" },  // Must remain last
-};
-
-typedef struct {
     uint32_t ci_id;       // Vendor code
     char     ci_dev[16];  // ID string for display
 } chip_ids_t;
@@ -402,11 +389,14 @@ static const chip_ids_t chip_ids[] = {
     { 0x000122ab, "M29F400FB" },   // AMD+others 512K bottom boot
     { 0x000422d2, "M29F160TE" },   // Fujitsu 2MB top boot
     { 0x000422D8, "M29F160TB" },   // Fujitsu 2MB bottom boot
-//  { 0x002022cc, "M29F160BT" },   // ST-Micro 2MB top boot
-//  { 0x0020224b, "M29F160BB" },   // ST-Micro 2MB bottom boot
-    { 0x00c222D6, "MX29F800CT" },  // Macronix 2MB top boot
-    { 0x00c22258, "MX29F800CB" },  // Macronix 2MB bottom boot
-
+    { 0x00c222D6, "MX29F800CT" },  // Macronix 1MB top boot
+    { 0x00c22258, "MX29F800CB" },  // Macronix 1MB bottom boot
+    { 0x00c222c4, "MX29LV160CT" }, // Macronix 2MB top boot
+    { 0x00c22249, "MX29LV160CB" }, // Macronix 2MB bottom boot
+    { 0x002022cc, "M29F160BT" },   // ST-Micro 2MB top boot
+    { 0x0020224b, "M29F160BB" },   // ST-Micro 2MB bottom boot
+    { 0x002022c4, "M29W160ET" },   // ST-Micro 2MB top boot
+    { 0x00202249, "M29W160EB" },   // ST-Micro 2MB bottom boot
     { 0x00000000, "Unknown" },     // Must remain last
 };
 
@@ -423,8 +413,10 @@ static const chip_blocks_t chip_blocks[] = {
     { 0x22D8,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
     { 0x22D6, 15, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
     { 0x2258,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
-//  { 0x22CC, 31, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
-//  { 0x224B,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
+    { 0x22CC, 31, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x224B,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
+    { 0x22C4, 15, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x2249,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
     { 0x0000,  0, 32, 4, 0x1d },  // Default to bottom boot
 };
 
@@ -440,18 +432,6 @@ get_chip_block_info(uint32_t chipid)
             break;
 
     return (&chip_blocks[pos]);
-}
-
-const char *
-ee_vendor_string(uint32_t id)
-{
-    uint16_t vid = id >> 16;
-    uint     pos;
-
-    for (pos = 0; pos < ARRAY_SIZE(chip_vendors) - 1; pos++)
-        if (chip_vendors[pos].cv_id == vid)
-            break;
-    return (chip_vendors[pos].cv_vend);
 }
 
 const char *
@@ -1380,6 +1360,34 @@ smash_test_flash_id(void)
         printf("Failed to identify device 2 (%08x)", dev2_first);
         rc = MSG_STATUS_BAD_DATA;
     }
+    if (rc != 0)
+        goto test_flash_id_fail;
+
+    if (mode == 32) {
+        const chip_blocks_t *cb1 = get_chip_block_info(dev1_first);
+        const chip_blocks_t *cb2 = get_chip_block_info(dev2_first);
+        if (cb1 == NULL) {
+            printf("Failed to determine erase block information for %08x\n",
+                   dev1_first);
+            rc = MSG_STATUS_BAD_DATA;
+            goto test_flash_id_fail;
+        }
+        if (cb2 == NULL) {
+            printf("Failed to determine erase block information for %08x\n",
+                   dev2_first);
+            rc = MSG_STATUS_BAD_DATA;
+            goto test_flash_id_fail;
+        }
+        if ((cb1->cb_bbnum != cb2->cb_bbnum) ||
+            (cb1->cb_bsize != cb2->cb_bsize) ||
+            (cb1->cb_ssize != cb2->cb_ssize) ||
+            (cb1->cb_map != cb2->cb_map)) {
+            printf("Failure: flash device IDs are not compatible "
+                   "(%08x %08x)\n", dev1_first, dev2_first);
+            rc = MSG_STATUS_BAD_DATA;
+            goto test_flash_id_fail;
+        }
+    }
 
     for (count = 1; count < 100; count++) {
         rc = flash_id(&dev1, &dev2, &mode);
@@ -1945,7 +1953,10 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
         uint16_t device;
         const chip_blocks_t *cb;
 
-        if ((data[0x2] == 0x00000000) && (data[0x3] == 0x00000000)) {
+        if ((data[0x0] != 0x00000000) && (data[0x0] != 0xffffffff) &&
+            (data[0x1] != 0x00000000) && (data[0x1] != 0xffffffff) &&
+            (data[0x2] == 0x00000000) &&
+            ((uint16_t) data[0x1] == (data[1] >> 16))) {
             /* flash is 32-bit */
             flash_mode = 32;
             device = data[1] & 0xffff;
@@ -2039,8 +2050,8 @@ flash_show_id(void)
         printf("  %08x %08x %s %s", flash_dev1, flash_dev2, id1, id2);
     }
     printf(" (%u-bit mode)\n", mode);
-    if ((mode == 32) && (flash_dev1 != flash_dev2)) {
-        printf("  Warning: flash device ids differ\n");
+    if ((mode == 32) && ((flash_dev1 & 0xffff) != (flash_dev2 & 0xffff))) {
+        printf("  Warning: flash device IDs differ\n");
         rc = MSG_STATUS_NO_REPLY;
     }
 
@@ -3537,6 +3548,7 @@ cmd_erase(int argc, char *argv[])
 {
     bank_info_t          info;
     const chip_blocks_t *cb;
+    const chip_blocks_t *cb2;
     const char *ptr;
     uint64_t    time_start;
     uint64_t    time_end;
@@ -3694,11 +3706,6 @@ usage:
         printf("Failed to identify device 2 (%08x)\n", flash_dev2);
         rc = MSG_STATUS_BAD_DATA;
     }
-    if ((mode == 32) && (flash_dev1 != flash_dev2)) {
-        printf("    Failure: flash device ids differ (%08x %08x)\n",
-               flash_dev1, flash_dev2);
-        rc = MSG_STATUS_BAD_DATA;
-    }
     if (rc != 0)
         return (rc);
 
@@ -3706,8 +3713,25 @@ usage:
     if (cb == NULL) {
         printf("Failed to determine erase block information for %08x\n",
                flash_dev1);
-        return (1);
+        return (MSG_STATUS_BAD_DATA);
     }
+    if (mode == 32) {
+        cb2 = get_chip_block_info(flash_dev1);
+        if (cb2 == NULL) {
+            printf("Failed to determine erase block information for %08x\n",
+                   flash_dev2);
+            return (MSG_STATUS_BAD_DATA);
+        }
+        if ((cb->cb_bbnum != cb2->cb_bbnum) ||
+            (cb->cb_bsize != cb2->cb_bsize) ||
+            (cb->cb_ssize != cb2->cb_ssize) ||
+            (cb->cb_map != cb2->cb_map)) {
+            printf("    Failure: flash device IDs are not compatible "
+                   "(%08x %08x)\n", flash_dev1, flash_dev2);
+            return (MSG_STATUS_BAD_DATA);
+        }
+    }
+
     flash_start_addr  = bank * ROM_WINDOW_SIZE + addr;
     flash_end_addr    = bank * ROM_WINDOW_SIZE + addr + len - 1;
     flash_start_bsize = get_flash_bsize(cb, flash_start_addr);

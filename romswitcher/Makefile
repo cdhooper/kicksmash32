@@ -8,7 +8,7 @@ PROG     := switcher
 OBJDIR   := objs
 AM	 := ../amiga
 FW	 := ../fw
-MED_SRCS := med_cmds.c mem_access.c med_cmdline.c med_readline.c
+MED_SRCS := med_cmds.c mem_access.c med_cmdline.c med_readline.c db_disasm.c
 SRCS     := main.c autoconfig.c cache.c keyboard.c pcmds.c \
             printf.c reset.c scanf.c screen.c serial.c \
             sprite.c strtoll.c strtoull.c timer.c util.c blitter.c \
@@ -26,7 +26,6 @@ CC      := m68k-amigaos-gcc
 LD      := m68k-amigaos-ld
 OBJCOPY := m68k-amigaos-objcopy
 OBJDUMP := m68k-amigaos-objdump
-DD	:= dd
 CFLAGS  := -Wall -Wextra -Wno-pointer-sign -Wno-format -Wno-strict-aliasing
 CFLAGS  += -Wno-sign-compare -fomit-frame-pointer
 CFLAGS  += -DROMFS -DSTANDALONE -DEMBEDDED_CMD -fbaserel -resident -mcpu=68060
@@ -103,7 +102,7 @@ all: $(PROGROM)
 	@:
 
 dis:
-	$(OBJDUMP) -b binary -D $(PROGROM) --adjust-vma=0x00f80000 | less
+	$(OBJDUMP) -b binary -D $(PROGROM) -S --adjust-vma=0x00f80000 | less
 
 define DEPEND_SRC
 # The following line creates a rule for an object file to depend on a
@@ -117,6 +116,8 @@ $(foreach SRCFILE,$(SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),OBJS)))
 #$(info $(patsubst %,$(2)/%,$(filter-out $(2)/%,$(basename $(notdir $(1))).o)) $(filter $(2)/%,$(basename $(1)).o): $(1))
 #$(info OBJS = $(OBJS))
 
+# Ensure main.o always gets rebuilt when anything else changes (for version)
+$(OBJDIR)/main.o: ../fw/version.c $(filter-out $(OBJDIR)/main.o,$(OBJS))
 
 $(OBJS): amiga_chipset.h screen.h printf.h util.h serial.h timer.h
 $(OBJDIR)/serial.o: keyboard.h
@@ -131,7 +132,7 @@ $(MED_OBJS):: CFLAGS += -Wno-unused-parameter
 
 $(OBJS): Makefile | $(OBJDIR)
 	@echo Building $@
-	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -Wa,-a,-ad >$(@:.o=.lst) -o $@
+	$(QUIET)$(CC) $(CFLAGS) -c $(filter-out ../fw/version.c,$(filter %.c,$^)) -Wa,-a,-ad >$(@:.o=.lst) -o $@
 
 #$(OBJDIR)/audio0.o: audio0.wav
 #	@echo Creating $@
@@ -151,9 +152,9 @@ $(PROG):
 # Amiga executable.
 #
 $(PROGROM): $(PROG) $(DEHUNK)
+	@echo Building $@
 #	$(QUIET)$(LD) $(filter %.o,$^) $(LDFLAGS) -Map=$(OBJDIR)/$@.map > $(OBJDIR)/$@.lst -o $@ -Trom.ld
 	$(QUIET)$(DEHUNK) $(PROG) $@ $(VERBOSE)
-#	$(QUIET)cat $@ $@ >$@.double
 
 $(DEHUNK): dehunk.c
 	cc -o $@ $?

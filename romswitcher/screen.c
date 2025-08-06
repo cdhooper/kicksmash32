@@ -15,6 +15,7 @@
  */
 #include <stdint.h>
 #include <string.h>
+#include "printf.h"
 #include "util.h"
 #include "screen.h"
 #include "serial.h"
@@ -293,6 +294,19 @@ WaitBlit(void)
     }
 }
 
+uint
+WaitBlit_timeout(void)
+{
+    uint timeout = 500000;
+    while (blitter_is_busy()) {
+        if (timeout-- == 0)
+            return (1);
+        __asm("nop");
+        __asm("nop");
+        __asm("nop");
+    }
+    return (0);
+}
 
 #if 0
 void
@@ -372,7 +386,6 @@ render_char(uint8_t ch)
 __attribute__((aligned(4)))
 uint8_t __chip render_buf[RENDER_BUF_CHARS * FONT_HEIGHT];
 
-
 /*
  * render_char_to_buf
  * ------------------
@@ -390,8 +403,6 @@ render_char_to_buf(char ch, char *buf)
     }
 }
 
-
-#include "printf.h"
 /*
  * render_text_at
  * --------------
@@ -406,6 +417,12 @@ render_text_at(const char *str, uint maxlen, uint x, uint y,
     uint plane;
     uint len = 0;
     uint line;
+    static uint8_t recursion;
+
+    if (recursion)
+        return;
+
+    recursion = 1;
 
     if (maxlen > RENDER_BUF_CHARS)
         maxlen = RENDER_BUF_CHARS;
@@ -543,6 +560,7 @@ render_text_at(const char *str, uint maxlen, uint x, uint y,
             }
         }
     }
+    recursion = 0;
 }
 
 void
@@ -638,12 +656,8 @@ screen_displaybeep(void)
 void
 SetRGB4(void *vp, int32_t index, uint32_t red, uint32_t green, uint32_t blue)
 {
-    /* Don't set any colors for now */
     (void) vp;
-    (void) index;
-    (void) red;
-    (void) green;
-    (void) blue;
+    *(COLOR00 + index) = (red << 8) | (green << 4) | blue;
 }
 
 void
@@ -689,10 +703,107 @@ screen_init(void)
      *   DDFSTRT = ($81/2 - 4.5) AND $FFFC = $3C
      *   DDFSTOP = $3C + (640/4 - 8) = $D4
      */
-    *DIWSTRT  = 0x2c81;  // Start of screen window
-    *DIWSTOP  = 0x2cc1;  // End of screen window
+#if 0
+    *DIWSTRT  = 0x2c81;  // Start of screen window  (V=2c H=81)
+    *DIWSTOP  = 0x2cc1;  // End of screen window    (V=2c H=c1)
     *DDFSTRT  = 0x3c;    // Bit plane DMA start
     *DDFSTOP  = 0xd4;    // Bit plane DMA stop
+#endif
+
+#if 0
+    /*
+     * NTSC 640x200 60 Hz
+     *      cw dff08e 2c81 f4c1 3c d4
+     */
+    *DIWSTRT  = 0x2c81;  // Start of screen window  (V=2c H=81)
+    *DIWSTOP  = 0xf4c1;  // End of screen window    (V=f4 H=c1)
+    *DDFSTRT  = 0x3c;    // Bit plane DMA start
+    *DDFSTOP  = 0xd4;    // Bit plane DMA stop
+#endif
+#if 1
+    /*
+     * PAL 640x256 50 Hz
+     *      cw dff08e 2c81 2cc1 3c d4
+     */
+    *DIWSTRT  = 0x2c81;  // Start of screen window  (V=2c H=81)
+    *DIWSTOP  = 0x2cc1;  // End of screen window    (V=f4 H=c1)
+    *DDFSTRT  = 0x3c;    // Bit plane DMA start
+    *DDFSTOP  = 0xd4;    // Bit plane DMA stop
+#endif
+#if 0
+    *DIWSTRT  = 0x2c81;  // Start of screen window  (V=2c H=81)
+    *DIWSTOP  = 0xf4c1;  // End of screen window    (V=f4 H=c1)
+    *DDFSTRT  = 0x38;    // Bit plane DMA start
+    *DDFSTOP  = 0xd4;    // Bit plane DMA stop
+#endif
+#if 0
+#define MIN_NTSC_ROW    21
+#define MIN_PAL_ROW     29
+#define STANDARD_VIEW_X 0x81
+#define STANDARD_VIEW_Y 0x2C
+#define STANDARD_HBSTRT 0x06
+#define STANDARD_HSSTRT 0x0B
+#define STANDARD_HSSTOP 0x1C
+#define STANDARD_HBSTOP 0x2C
+#define STANDARD_VBSTRT 0x0122
+#define STANDARD_VSSTRT 0x02A6
+#define STANDARD_VSSTOP 0x03AA
+#define STANDARD_VBSTOP 0x1066
+
+#define VGA_COLORCLOCKS (STANDARD_COLORCLOCKS/2)
+#define VGA_TOTAL_ROWS  (STANDARD_NTSC_ROWS*2)
+#define VGA_DENISE_MIN  59
+#define MIN_VGA_ROW     29
+#define VGA_HBSTRT      0x08
+#define VGA_HSSTRT      0x0E
+#define VGA_HSSTOP      0x1C
+#define VGA_HBSTOP      0x1E
+#define VGA_VBSTRT      0x0000
+#define VGA_VSSTRT      0x0153
+#define VGA_VSSTOP      0x0235
+#define VGA_VBSTOP      0x0CCD
+
+    *HSSTRT   = STANDARD_HSSTRT; // 0x0005; // Horizontal centering
+    *DIWSTRT  = // 0x2c81;  // Start of screen window  (V=2c H=81)
+    *DIWSTOP  = // 0xf4c1;  // End of screen window    (V=f4 H=c1)
+    *DDFSTRT  = // 0x0018; // Bit plane DMA start
+    *DDFSTOP  = // 0x0058; // Bit plane DMA stop
+    *FMODE    = // 0xc00f; // BLP32 BPAGEM SPR32 SPAGEM  BSCAN2 SSCAN2
+    *HBSTRT   = STANDARD_HBSTRT; // 0x0009;
+    *HBSTOP   = STANDARD_HBSTOP; // 0x0017;
+    *HTOTAL   = // 0x0071;
+    *HSSTOP   = STANDARD_HSSTOP; // 0x0025;
+    *VBSTRT   = STANDARD_VBSTRT; // 0x0000;
+    *VSSTRT   = STANDARD_VSSTRT; // 0x0003;
+    *VSSTOP   = STANDARD_VSSTOP; // 0x0005;
+    *VBSTOP   = STANDARD_VBSTOP; // 0x001d;
+    *VTOTAL   = // 0x020e;
+    *BEAMCON0 = // 0x0B88;
+    *BPLCON2  = // 0x027f;
+    *BPLCON3  = // 0x00a3;
+    *BPLCON4  = // 0x0011;
+#endif
+
+#if 0
+    uint hr = 
+    uint vr = 
+    uint x;
+    uint y;
+
+    x = (hr * 0x81) >> 4;
+    y = (vr * 0x2c) >> 4;
+    io->diwstrt = (y << 8) | (x & 0xff);
+
+    y = (hr * 0xc1) >> 4;
+    y = (vr * 0xf4) >> 4;
+    *DIWSTOP  = (y << 8) | (x & 0xff);
+#endif
+
+    *DMACON   = DMACON_SET |     // Enable
+//              DMACON_BLTPRI |  // Blitter gets priority over CPU
+                DMACON_DMAEN |   // Enable DMA
+                DMACON_BPLEN |   // Bitplane DMA
+                DMACON_BLTEN;    // Blitter DMA
 
     /* Initialize the Blitter */
     *BLTAFWM  = 0xffff;
@@ -703,14 +814,16 @@ screen_init(void)
     *BLTAPT   = 0;
     *BLTBPT   = 0;
     *BLTCPT   = 0;
-    *BLTDPT   = 0;
+    *BLTDPT   = 0x60000;  // Destination out of the way at 384 KB
     *BLTAMOD  = 0;
     *BLTBMOD  = 0;
     *BLTCMOD  = 0;
     *BLTDMOD  = 0;
-    *BLTCON0  = 0;
+    *BLTCON0  = 0xf0;  // A to D, no shift
     *BLTCON1  = 0;
     *BLTSIZE  = (1 << 6) | 0x1;  // 1 pixel high, 1 pixel wide
+    if (WaitBlit_timeout())
+        serial_puts("[Blitter timeout]\n");
 
 #if 0
     /* Implementation of multiscan 31.56 kHz doesn't seem to work */
@@ -775,14 +888,6 @@ screen_init(void)
     *BPLCON3  = 0x00a3;
     *BPLCON4  = 0x0011;
 #endif
-
-    serial_puts("\bB");
-
-    *DMACON   = DMACON_SET |     // Enable
-//              DMACON_BLTPRI |  // Blitter gets priority over CPU
-                DMACON_DMAEN |   // Enable DMA
-                DMACON_BPLEN |   // Bitplane DMA
-                DMACON_BLTEN;    // Blitter DMA
 
     *INTENA   = INTENA_SETCLR |  // Set
                 INTENA_INTEN |   // Enable interrupts

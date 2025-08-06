@@ -167,6 +167,8 @@ recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
 {
     uint rc;
     rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
+    if (timeout_ms > 4000)
+        timeout_ms = 4000;  // cap at 4 seconds
     timeout_ms /= 2;
     while (rc == KS_STATUS_NODATA) {
         cia_spin(CIA_USEC(600));
@@ -262,7 +264,7 @@ host_send_msg(void *smsg, uint len)
             memcpy(smsg + pos, savebuf, sizeof (km_msg_hdr_t));
 
             if (rc == KS_STATUS_BADLEN) {
-                /* Not wasn't enough space in the KS buffer; try again. */
+                /* Not enough space in the KS buffer; try again. */
                 if (timeout++ < 20) {
                     cia_spin(CIA_USEC(1000));
                     continue;

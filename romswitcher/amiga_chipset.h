@@ -190,38 +190,38 @@
 #define SPR0CTL   VADDR16(0x00dff142)  // Sprite 7 vert stop and control data
 #define SPR0DATA  VADDR16(0x00dff144)  // Sprite 7 image data register A
 #define SPR0DATB  VADDR16(0x00dff146)  // Sprite 7 image data register B
-#define COLOR00   VADDR16(0x00dff180)  // Pallette color 0
-#define COLOR01   VADDR16(0x00dff182)  // Pallette color 1
-#define COLOR02   VADDR16(0x00dff184)  // Pallette color 2
-#define COLOR03   VADDR16(0x00dff186)  // Pallette color 3
-#define COLOR04   VADDR16(0x00dff188)  // Pallette color 4
-#define COLOR05   VADDR16(0x00dff18a)  // Pallette color 5
-#define COLOR06   VADDR16(0x00dff18c)  // Pallette color 6
-#define COLOR07   VADDR16(0x00dff18e)  // Pallette color 7
-#define COLOR08   VADDR16(0x00dff190)  // Pallette color 8
-#define COLOR09   VADDR16(0x00dff192)  // Pallette color 9
-#define COLOR10   VADDR16(0x00dff194)  // Pallette color 10
-#define COLOR11   VADDR16(0x00dff196)  // Pallette color 11
-#define COLOR12   VADDR16(0x00dff198)  // Pallette color 12
-#define COLOR13   VADDR16(0x00dff19a)  // Pallette color 13
-#define COLOR14   VADDR16(0x00dff19c)  // Pallette color 14
-#define COLOR15   VADDR16(0x00dff19e)  // Pallette color 15
-#define COLOR16   VADDR16(0x00dff1a0)  // Pallette color 16
-#define COLOR17   VADDR16(0x00dff1a2)  // Pallette color 17 & Sprite 0+1 color 1
-#define COLOR18   VADDR16(0x00dff1a4)  // Pallette color 18 & Sprite 0+1 color 2
-#define COLOR19   VADDR16(0x00dff1a6)  // Pallette color 19 & Sprite 0+1 color 3
-#define COLOR20   VADDR16(0x00dff1a8)  // Pallette color 20
-#define COLOR21   VADDR16(0x00dff1aa)  // Pallette color 21 & Sprite 2+3 color 1
-#define COLOR22   VADDR16(0x00dff1ac)  // Pallette color 22 & Sprite 2+3 color 2
-#define COLOR23   VADDR16(0x00dff1ae)  // Pallette color 23 & Sprite 2+3 color 3
-#define COLOR24   VADDR16(0x00dff1b0)  // Pallette color 24
-#define COLOR25   VADDR16(0x00dff1b2)  // Pallette color 25 & Sprite 4+5 color 1
-#define COLOR26   VADDR16(0x00dff1b4)  // Pallette color 26 & Sprite 4+5 color 2
-#define COLOR27   VADDR16(0x00dff1b6)  // Pallette color 27 & Sprite 4+5 color 3
-#define COLOR28   VADDR16(0x00dff1b8)  // Pallette color 28
-#define COLOR29   VADDR16(0x00dff1ba)  // Pallette color 29 & Sprite 6+7 color 1
-#define COLOR30   VADDR16(0x00dff1bc)  // Pallette color 30 & Sprite 6+7 color 2
-#define COLOR31   VADDR16(0x00dff1be)  // Pallette color 31 & Sprite 6+7 color 3
+#define COLOR00   VADDR16(0x00dff180)  // Palette color 0
+#define COLOR01   VADDR16(0x00dff182)  // Palette color 1
+#define COLOR02   VADDR16(0x00dff184)  // Palette color 2
+#define COLOR03   VADDR16(0x00dff186)  // Palette color 3
+#define COLOR04   VADDR16(0x00dff188)  // Palette color 4
+#define COLOR05   VADDR16(0x00dff18a)  // Palette color 5
+#define COLOR06   VADDR16(0x00dff18c)  // Palette color 6
+#define COLOR07   VADDR16(0x00dff18e)  // Palette color 7
+#define COLOR08   VADDR16(0x00dff190)  // Palette color 8
+#define COLOR09   VADDR16(0x00dff192)  // Palette color 9
+#define COLOR10   VADDR16(0x00dff194)  // Palette color 10
+#define COLOR11   VADDR16(0x00dff196)  // Palette color 11
+#define COLOR12   VADDR16(0x00dff198)  // Palette color 12
+#define COLOR13   VADDR16(0x00dff19a)  // Palette color 13
+#define COLOR14   VADDR16(0x00dff19c)  // Palette color 14
+#define COLOR15   VADDR16(0x00dff19e)  // Palette color 15
+#define COLOR16   VADDR16(0x00dff1a0)  // Palette color 16
+#define COLOR17   VADDR16(0x00dff1a2)  // Palette color 17 & Sprite 0+1 color 1
+#define COLOR18   VADDR16(0x00dff1a4)  // Palette color 18 & Sprite 0+1 color 2
+#define COLOR19   VADDR16(0x00dff1a6)  // Palette color 19 & Sprite 0+1 color 3
+#define COLOR20   VADDR16(0x00dff1a8)  // Palette color 20
+#define COLOR21   VADDR16(0x00dff1aa)  // Palette color 21 & Sprite 2+3 color 1
+#define COLOR22   VADDR16(0x00dff1ac)  // Palette color 22 & Sprite 2+3 color 2
+#define COLOR23   VADDR16(0x00dff1ae)  // Palette color 23 & Sprite 2+3 color 3
+#define COLOR24   VADDR16(0x00dff1b0)  // Palette color 24
+#define COLOR25   VADDR16(0x00dff1b2)  // Palette color 25 & Sprite 4+5 color 1
+#define COLOR26   VADDR16(0x00dff1b4)  // Palette color 26 & Sprite 4+5 color 2
+#define COLOR27   VADDR16(0x00dff1b6)  // Palette color 27 & Sprite 4+5 color 3
+#define COLOR28   VADDR16(0x00dff1b8)  // Palette color 28
+#define COLOR29   VADDR16(0x00dff1ba)  // Palette color 29 & Sprite 6+7 color 1
+#define COLOR30   VADDR16(0x00dff1bc)  // Palette color 30 & Sprite 6+7 color 2
+#define COLOR31   VADDR16(0x00dff1be)  // Palette color 31 & Sprite 6+7 color 3
 #define HTOTAL    VADDR16(0x00dff1c0)  // Horizontal count (VARBEAMEN=1)
 #define HSSTOP    VADDR16(0x00dff1c2)  // Horizontal line post for HSYNC stop
 #define HBSTRT    VADDR16(0x00dff1c4)  // Horizontal line pos for HBLANK start

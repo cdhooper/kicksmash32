@@ -18,8 +18,8 @@
 #include "util.h"
 #include "printf.h"
 #include "serial.h"
-#include "vectors.h"
 #include "timer.h"
+#include "vectors.h"
 
 #undef KEYBOARD_DEBUG
 #ifdef KEYBOARD_DEBUG

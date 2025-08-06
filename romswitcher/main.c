@@ -38,6 +38,7 @@
 /*
  * Memory map
  *    0x00000100     [0x4] pointer to globals
+ *    0x00000180    [0x26] register save area
  *    0x00000200   [0x100] vectors
  *    0x00001000    [0x80] runtime counters
  *    0x00001080    [0x80] sprite data
@@ -49,7 +50,7 @@
  *    0x00030000 [0x10000] globals
  */
 
-const char RomID[] = "ROM Switcher "VERSION" (" BUILD_DATE ")\n";
+const char RomID[] = "ROM Switcher "VERSION" (" BUILD_DATE" "BUILD_TIME ")\n";
 
 #define VECTORS_BASE (RAM_BASE + 0x200)
 #define COUNTER0     (RAM_BASE + 0x1000)
@@ -69,18 +70,14 @@ reset(void)
 }
 
 void
-chipset_init(void)
+chipset_init_early(void)
 {
-    /* Ramsey config */
-//  *RAMSEY_CONTROL = RAMSEY_CONTROL_REFRESH0;  // Clobber burst/page/wrap
-
     /* Shut down interrupts and DMA */
     *CIAA_ICR = 0x7f;    // Disable interrupt forwarding to chipset
     *INTENA   = 0x7fff;  // Disable interrupt forwarding to m68k
     *INTREQ   = 0x7fff;  // Reply to all interrupt requests
     *INTREQ   = 0x7fff;  // Reply to all interrupt requests (A4000 bug)
     *DMACON   = 0x7fff;  // Disable all chipset DMA
-    serial_putc('A');
 
     /* Stop timers */
     *CIAA_CRA  = 0x00;
@@ -92,15 +89,21 @@ chipset_init(void)
     *AUD1VOL  = 0;
     *AUD2VOL  = 0;
     *AUD3VOL  = 0;
+}
+
+void
+chipset_init(void)
+{
+    /* Ramsey config */
+//  *RAMSEY_CONTROL = RAMSEY_CONTROL_REFRESH0;  // Clobber burst/page/wrap
 
     /* Re-enable CIA interrupts (keyboard) */
     *INTENA   = INTENA_SETCLR |  // Set
                 INTENA_INTEN |   // Enable interrupts
                 INTENA_PORTS;    // CIA-A
-    serial_puts("\bD");
 
     /* Enable interrupts for keyboard input */
-    *CIAA_ICR = CIA_ICR_SET | CIA_ICR_SP;  // Serial Port input
+    *CIAA_ICR = CIA_ICR_SET | CIA_ICR_SP;  // Serial Port input from keyboard
 //  *CIAA_ICR = CIA_ICR_SET | CIA_ICR_TA;
 }
 
@@ -114,8 +117,8 @@ globals_init(void)
     __asm("lea ___data_size,%0" : "=a" (data_size) ::);
     __asm("lea ___bss_size,%0"  : "=a" (bss_size) ::);
 
-    /* Set up globals (compile with -fbaserel for a5 is global pointer) */
-    uint8_t *globals = (uint8_t *) (GLOBALS_BASE);  // Globals begin at 64K
+    /* Set up globals (compile with -fbaserel for a4 to be globals pointer) */
+    uint8_t *globals = (uint8_t *) (GLOBALS_BASE);  // Globals begin at 192K
 
     memcpy(globals, data_start, data_size);
     memset(globals + data_size, 0, bss_size);
@@ -160,38 +163,43 @@ setup(void)
     globals_init();
     vectors_init((void *)VECTORS_BASE);
     memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
+    chipset_init_early();
     cpu_control_init();  // Get CPU type
-    cache_init();        // Enable cache
     serial_init();
     serial_puts("\n\033[31m");
     serial_puts(RomID);
     serial_puts("\033[0m\n");
 
+    cache_init();        // Enable cache
+    serial_putc('A');
     chipset_init();
-    serial_puts("\bC");
+    serial_putc('B');
     screen_init();
-    serial_puts("\bE");
+    serial_putc('C');
 //  dbg_show_string(RomID);
 
     timer_init();
+    serial_putc('D');
     audio_init();
-    serial_puts("\bF");
+//  serial_putc('E');
 //  serial_init();  // Now that ECLK is known
+    serial_putc('F');
     keyboard_init();
-    serial_puts("\bG");
+    serial_putc('G');
     mouse_init();
-    serial_puts("\bH");
+    serial_putc('H');
     sprite_init();
-    serial_puts("\bI");
+    serial_putc('I');
     autoconfig_init();
-    serial_puts("\bJ");
+    serial_putc('J');
 
     gui_wants_all_input = 1;
     rl_initialize();
     using_history();
-    serial_puts("\n");
+    serial_putc('K');
     test_draw();
     test_gadget();
+    serial_putc('\n');
 #ifdef STANDALONE
     extern void main_func(void);
     main_func();
@@ -199,6 +207,32 @@ setup(void)
     while (1) {
         main_poll();
     }
+#if 0
     *COLOR00 = 0x0f0c;  // Purple
     __asm("halt");
+#endif
+}
+
+void
+debug_cmdline(void)
+{
+    /* Set up globals (compile with -fbaserel for a4 to be globals pointer) */
+    uint8_t *globals = (uint8_t *) (GLOBALS_BASE);  // Globals begin at 192K
+    globals += 0x7ffe;  // offset that gcc applies to a4-relative globals
+    __asm("move.l %0,a4" :: "r" (globals));  // set up globals pointer
+    __asm("move.l a4,0x100");  // save globals pointer at fixed location
+
+//  globals_init();
+
+    /* Activate MED cmdline */
+    gui_wants_all_input = 0;  // Turns off GUI stealing input
+    cursor_visible |= 2;
+    dbg_all_scroll = 25;
+    dbg_cursor_y = 25;
+
+    rl_initialize();
+    using_history();
+    while (1) {
+        main_poll();
+    }
 }

@@ -21,6 +21,7 @@
 #include "reset.h"
 #include "util.h"
 #include "autoconfig.h"
+#include "db_disasm.h"
 
 const char cmd_aconfig_help[] =
 "aconfig [show]         - show current (unconfigured) device\n"
@@ -28,6 +29,12 @@ const char cmd_aconfig_help[] =
 "aconfig board [<addr>] - config current device to Zorro address\n"
 "aconfig list           - show autoconfig space (free and allocated)\n"
 "aconfig shutup         - tell device to shutup (go to next)\n";
+
+const char cmd_dis_help[] =
+"disas                          - disassemble from previous address\n"
+"disas <addr> [<count>] [<syn>] - disassemble from <addr>\n"
+"                                 <count> is the number of instructions\n"
+"                                 <syn> is either mit or mot syntax";
 
 const char cmd_reset_help[] =
 "reset - reset Amiga\n";
@@ -88,6 +95,68 @@ cmd_aconfig(int argc, char * const *argv)
     } else {
         printf("Unknown argument %s\n", argv[1]);
         return (RC_USER_HELP);
+    }
+    return (RC_SUCCESS);
+}
+
+/*
+ * cmd_dis
+ * -------
+ * Disassemble instructions at memory address
+ */
+rc_t
+cmd_dis(int argc, char * const *argv)
+{
+    static db_addr_t next_addr;
+    static bool      moto_syntax;
+    static uint16_t  dis_count;
+    uint             count;
+    int              pos;
+    char   const    *arg;
+    if (dis_count == 0) {
+        dis_count = 12;
+        moto_syntax = 1;
+    }
+    if (argc > 4) {
+        printf("Too many arguments\n");
+        return (RC_USER_HELP);
+    }
+    if (argc > 1) {
+        pos = 0;
+        arg = argv[1];
+        if ((sscanf(arg, "%x%n", &next_addr, &pos) != 1) ||
+            (arg[pos] != '\0')) {
+            printf("Invalid address %s\n", arg);
+            return (RC_USER_HELP);
+        }
+    }
+    if (argc > 2) {
+        pos = 0;
+        arg = argv[2];
+        if ((sscanf(arg, "%u%n", &count, &pos) != 1) ||
+            (arg[pos] != '\0')) {
+            printf("Invalid count %s\n", arg);
+            return (RC_USER_HELP);
+        }
+        if (count == 0)
+            return (RC_SUCCESS);
+        dis_count = count;
+    }
+    if (argc > 3) {
+        arg = argv[3];
+        if (strncmp(arg, "motorola", 3) == 0) {
+            moto_syntax = 1;
+        } else if (strcmp(arg, "mit") == 0) {
+            moto_syntax = 0;
+        } else {
+            printf("Invalid syntax %s\n", arg);
+            return (RC_USER_HELP);
+        }
+    }
+    for (count = 0; count < dis_count; count++) {
+        next_addr = db_disasm(next_addr, moto_syntax);
+        if (next_addr == 0)
+            return (RC_FAILURE);
     }
     return (RC_SUCCESS);
 }

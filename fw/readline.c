@@ -64,6 +64,7 @@
 #define KEY_ESC              0x1b  /* Escape key */
 #define KEY_SPACE            0x20  /* Space key */
 #define KEY_BACKSPACE2       0x7f  /* ^? Backspace on some keyboards */
+#define KEY_DELETE           0x7f  /* ^? Backspace on some keyboards */
 #define KEY_AMIGA_ESC        0x9b  /* Amiga key sequence */
 
 #define KEY_LINE_BEGIN       KEY_CTRL_A
@@ -463,6 +464,7 @@ redraw_prompt:
             putchar(KEY_SPACE);
             putchars(KEY_BACKSPACE, strlen(input_buf + input_pos) + 1);
             break;
+//      case KEY_DELETE:
         case KEY_DEL_CHAR:
             if (input_buf[input_pos] == '\0')
                 break;  /* Nothing more to delete at end of line */

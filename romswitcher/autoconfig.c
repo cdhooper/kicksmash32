@@ -216,10 +216,10 @@ autoconfig_reserved(uint8_t *cfgdata, uint reg)
 }
 
 static void
-autoconfig_assign(ac_t *node)
+autoconfig_assign(ac_t *node, uint is_z3)
 {
     /* Fill in ac_mfg and ac_product */
-    if (node->ac_type == AC_TYPE_ALLOC_Z2) {
+    if (!is_z3) {
         node->ac_mfg = ~((get_z2_byte(0x10 / 4) << 8) | get_z2_byte(0x14 / 4));
         node->ac_product = ~get_z2_byte(0x04 / 4);
     } else {
@@ -460,6 +460,7 @@ autoconfig_z2_address(uint32_t addr)
     uint8_t  cfg0       = get_z2_byte(0);
     uint     is_z3_size = cfg0 & BIT(5);
     uint     is_z3 = 0;
+    uint     addr_z3 = 0;
     uint32_t devsize;
 
     switch (cfg0 >> 6) {
@@ -480,7 +481,15 @@ autoconfig_z2_address(uint32_t addr)
     else
         devsize = z2_config_sizenums[cfg0 & 0x7];
 
-    ac_t *node = autoconfig_alloc(addr, devsize, AC_TYPE_FREE_Z2);
+    if (addr == 0)
+        addr_z3 = is_z3;
+    else if (addr >= 0x10000000)
+        addr_z3 = 1;
+    else
+        addr_z3 = 0;
+
+    ac_t *node = autoconfig_alloc(addr, devsize,
+                                  addr_z3 ? AC_TYPE_FREE_Z3 : AC_TYPE_FREE_Z2);
     if (node == NULL)
         return (RC_BAD_PARAM);
     addr = node->ac_addr;
@@ -491,7 +500,7 @@ autoconfig_z2_address(uint32_t addr)
         return (RC_BAD_PARAM);
     }
 
-    autoconfig_assign(node);
+    autoconfig_assign(node, 0);
     if (is_z3) {
         *Z2_BASE_A27_A24 = (addr >> 20);  // Nibble
         *Z2_BASE_A31_A24 = (addr >> 24);  // Byte
@@ -510,6 +519,7 @@ autoconfig_z3_address(uint32_t addr)
 {
     uint8_t  cfg0       = get_z3_byte(0);
     uint     is_z3_size = cfg0 & BIT(5);
+    uint     addr_z3 = 0;
     uint32_t devsize;
 
     if ((cfg0 >> 6) != 2) {
@@ -523,7 +533,16 @@ autoconfig_z3_address(uint32_t addr)
     else
         devsize = z2_config_sizenums[cfg0 & 0x7];
 
-    ac_t *node = autoconfig_alloc(addr, devsize, AC_TYPE_FREE_Z3);
+    if (addr == 0)
+        addr_z3 = 1;  // Assume Zorro III
+    else if (addr >= 0x10000000)
+        addr_z3 = 1;
+    else
+        addr_z3 = 0;
+
+    ac_t *node = autoconfig_alloc(addr, devsize,
+                                  addr_z3 ? AC_TYPE_FREE_Z3 : AC_TYPE_FREE_Z2);
+
     if (node == NULL)
         return (RC_BAD_PARAM);
     addr = node->ac_addr;
@@ -534,14 +553,14 @@ autoconfig_z3_address(uint32_t addr)
         return (RC_BAD_PARAM);
     }
 
-    autoconfig_assign(node);
+    autoconfig_assign(node, 1);
 
 #undef CONFIG_Z3_FROM_Z2
 #ifdef CONFIG_Z3_FROM_Z2
     /* Config in Z2 space */
     *Z2_BASE_A27_A24 = (addr >> 20);  // Nibble
     *Z2_BASE_A31_A24 = (addr >> 24);  // Byte
-    *Z3_BASE_A23_A16 = (addr >> 16);  // Nibble
+    *Z2_BASE_A23_A16 = (addr >> 16);  // Nibble
     *Z2_BASE_A23_A16 = (addr >> 16);  // Byte
 #else
     /* Config in Z3 space, as specified in the hardware reference manual */
@@ -555,27 +574,12 @@ autoconfig_z3_address(uint32_t addr)
 rc_t
 autoconfig_address(uint32_t addr)
 {
-    if ((addr >= 0x10000000) && (addr < 0x80000000)) {
+    /* Dynamically allocate an address based on the board type */
+    if (z3_is_present())
         return (autoconfig_z3_address(addr));
-    }
-    if (((addr >= 0x00200000) && (addr < 0x00bf0000)) ||
-        ((addr >= 0x00e90000) && (addr < 0x00eff000))) {
-        /*
-         * Actually the limit should be 0x00a00000, but the space below
-         * the CIAs at 0x00bf0000 is reserved, and might be usable
-         */
+    if (z2_is_present())
         return (autoconfig_z2_address(addr));
-    }
-    if (addr == 0) {
-        /* Dynamically allocate an address based on the board type */
-        if (z3_is_present())
-            return (autoconfig_z3_address(0));
-        if (z2_is_present())
-            return (autoconfig_z2_address(0));
-        return (RC_NO_DATA);
-    }
-    printf("0x%08x is not a valid Zorro address\n", addr);
-    return (RC_BAD_PARAM);
+    return (RC_NO_DATA);
 }
 
 static void
@@ -599,4 +603,6 @@ autoconfig_init(void)
     autoconfig_insert(AC_TYPE_FREE_Z3, 0x40000000, 0x40000000);  // 0x80000000
     autoconfig_insert(AC_TYPE_FREE_Z2, 0x00200000, 0x00800000);  // 0x00a00000
     autoconfig_insert(AC_TYPE_FREE_Z2, 0x00e90000, 0x00070000);  // 0x0f000000
+
+    *ADDR8(GARY_BTIMEOUT) &= ~BIT(7);  // Disable BERR
 }

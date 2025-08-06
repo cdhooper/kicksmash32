@@ -148,7 +148,7 @@ config_read(void)
     config.valid   = 0x01;
     config.version = CONFIG_VERSION;
     config.ee_mode = 3;  // EE_MODE_AUTO
-    config.led_level = 10;  // 10%
+    config.led_level = 40;  // 40%
     config.board_rev = 7;
 
     config.bi.bi_valid = 1;

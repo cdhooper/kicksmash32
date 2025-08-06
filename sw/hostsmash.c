@@ -2187,6 +2187,7 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
             goto unrecognized;
         default:
 unrecognized:
+            printf("\n");
             errx(EXIT_FAILURE,
                  "Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
                  buf[0], buf[1], buf[2], buf[3]);

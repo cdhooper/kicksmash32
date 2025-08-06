@@ -2076,7 +2076,7 @@ new_cmd_post:
 
         if (++rx_consumer == ARRAY_SIZE(buffer_rxa_lo)) {
             rx_consumer = 0;
-            if (++consumer_wrap - consumer_wrap_last_poll > 20) {
+            if (++consumer_wrap - consumer_wrap_last_poll > 4) {
                 /*
                  * Spinning too much in interrupt context.
                  * Disable interrupt -- it will be re-enabled in ee_poll().
@@ -2113,23 +2113,31 @@ tim5_isr(void)
 int
 address_log_replay(uint max)
 {
+    int  rc = 0;
     uint dma_left;
     uint prod;
     uint cons;
     uint addr;
     uint data;
     uint count = 0;
+    bool full = (max == (uint) -1);
 #if 0
     uint flags = TIM_SR(TIM5) & TIM_DIER(TIM5);
     TIM_SR(TIM5) = ~flags;  /* Clear interrupt */
 #endif
 
+    if (full) {
+        nvic_disable_irq(LOG_DMA_NVIC_IRQ);
+        TIM_CCER(TIM2) = 0;  // Disable everything
+        TIM_CCER(TIM5) = 0;
+    }
     dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER, LOG_DMA_CHANNEL);
     prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
 
     if (prod >= ARRAY_SIZE(buffer_rxa_lo)) {
         printf("Invalid producer=%x left=%x\n", prod, dma_left);
-        return (1);
+        rc = 1;
+        goto end_snoop;
     }
     if (max == 0x999) {  // magic value
         printf("T2C1=%04x %08lx->%08lx addrbuf_hi=%08x\n"
@@ -2161,7 +2169,7 @@ address_log_replay(uint max)
         fail_crc_u = 0;
         fail_cmd_a = 0;
         fail_cmd_u = 0;
-        return (0);
+        goto end_snoop;
     }
     if (max > ARRAY_SIZE(buffer_rxa_lo) - 1)
         max = ARRAY_SIZE(buffer_rxa_lo) - 1;
@@ -2172,7 +2180,7 @@ address_log_replay(uint max)
             cons = 0;
             if (prod == 0) {
                 printf("No log entries\n");
-                return (1);
+                goto end_snoop;
             }
         } else {
             cons += ARRAY_SIZE(buffer_rxa_lo);  // Fix negative wrap
@@ -2206,7 +2214,12 @@ address_log_replay(uint max)
             break;
         }
     }
-    return (0);
+end_snoop:
+    if (full) {
+        nvic_enable_irq(LOG_DMA_NVIC_IRQ);
+        configure_oe_capture_rx(false);
+    }
+    return (rc);
 }
 
 /*
@@ -2249,8 +2262,11 @@ bus_snoop(uint mode)
         cons = prod;
 
         while (1) {
-            if (((count++ & 0xff) == 0) && getchar() > 0)
-                break;
+            if ((count++ & 0x0fff) == 0) {
+                usb_poll();
+                if (getchar() > 0)
+                    break;
+            }
             dma_left = dma_get_number_of_data(LOG_DMA_CONTROLLER,
                                               LOG_DMA_CHANNEL);
             prod = ARRAY_SIZE(buffer_rxa_lo) - dma_left;
@@ -2269,12 +2285,16 @@ bus_snoop(uint mode)
                     cons++;
                     if (cons >= ARRAY_SIZE(buffer_rxa_lo))
                         cons = 0;
-                    if (((count++ & 0xffff) == 0) && getchar() > 0)
-                        break;
+                    if ((count++ & 0x0fff) == 0) {
+                        usb_poll();
+                        if (getchar() > 0)
+                            goto snoop_abort;
+                    }
                 }
                 printf("\n");
             }
         }
+snoop_abort:
         return;
     }
 
@@ -2303,6 +2323,11 @@ bus_snoop(uint mode)
                 continue;
             }
         }
+        if ((count++ & 0x0fff) == 0) {
+            usb_poll();
+            if (getchar() > 0)
+                break;
+        }
         if ((no_data++ & 0x1ff) != 0)
             continue;
         if (cons != prod) {
@@ -2313,11 +2338,6 @@ bus_snoop(uint mode)
             }
             printf("\n");
         }
-        if ((no_data & 0xffff) != 1)
-            continue;
-        if (getchar() > 0)
-            break;
-        no_data = 0;
     }
     nvic_enable_irq(LOG_DMA_NVIC_IRQ);
     printf("\n");

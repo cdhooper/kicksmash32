@@ -298,9 +298,9 @@ static const char * const gpio_mode_long[] = {
 #endif
 
 typedef struct {
-    char    name[10];
-    uint8_t port;
-    uint8_t pin;
+    char    name[11];
+    uint8_t port : 4;
+    uint8_t pin  : 4;
 } gpio_names_t;
 
 #define GPIO_A 0

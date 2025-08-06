@@ -559,9 +559,15 @@ cmd_prom(int argc, char * const *argv)
     } else if (strcmp("log", arg) == 0) {
         uint max = 0;
         if (argc > 1) {
-            rc = parse_value(argv[1], (uint8_t *) &max, 2);
-            if (rc != RC_SUCCESS)
-                return (rc);
+            if (strncmp(argv[1], "stats", 4) == 0) {
+                max = 0x999;
+            } else if (strncmp(argv[1], "full", 4) == 0) {
+                max = (uint) -1;
+            } else {
+                rc = parse_value(argv[1], (uint8_t *) &max, 2);
+                if (rc != RC_SUCCESS)
+                    return (rc);
+            }
         }
         if (max == 0)
             max = 10;

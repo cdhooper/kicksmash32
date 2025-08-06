@@ -42,6 +42,8 @@ static const cmd_t cmd_list[] = {
     { cmd_c,       "c",       1, cmd_c_help,
                         "[bwlqohS] <addr> <value...>", "change memory" },
     { cmd_delay,   "delay",   2, NULL, "<time> [s|ms|us]", "delay for time" },
+    { cmd_dis,     "disas",   3, cmd_dis_help,
+                        " <addr> [<count>] [mit|mot]", "disassemble memory" },
     { cmd_d,       "d",       1, cmd_d_help,
                         "[bwlqohRS] <addr> [<len>]", "display memory" },
     { cmd_echo,    "echo",    0, NULL, " <text>", "display text" },
@@ -60,8 +62,8 @@ static const cmd_t cmd_list[] = {
                         "[bwlqoh] <addr> <l> <mode> [<p>]", "test memory" },
     { cmd_time,    "time",    2, cmd_time_help, " cmd <cmd>",
                         "measure command execution time" },
-    { cmd_reset,   "reset",   0, cmd_reset_help, " [amiga]",
-                        "reset CPU" },
+    { cmd_reset,   "reset",   0, cmd_reset_help, "", "reset Amiga" },
+    { cmd_what,    "what",    0, NULL, "", "show recent output" },
     { cmd_version, "version", 1, NULL, "", "show version" },
 };
 

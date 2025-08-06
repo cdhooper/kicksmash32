@@ -1636,6 +1636,13 @@ cmd_version(int argc, char * const *argv)
     return (RC_SUCCESS);
 }
 
+rc_t
+cmd_what(int argc, char * const *argv)
+{
+    serial_replay_output();
+    return (RC_SUCCESS);
+}
+
 #ifdef AMIGA
 /* XXX: this should go in cmds_amiga.c */
 #include <time.h>

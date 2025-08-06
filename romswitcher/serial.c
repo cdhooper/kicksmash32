@@ -21,6 +21,7 @@
 #include "screen.h"
 #include "amiga_chipset.h"
 #include "timer.h"
+#include "main.h"
 
 #define ECLOCK_NTSC 3579545
 #define ECLOCK_PAL  3546895
@@ -30,8 +31,12 @@ static uint          ser_in_rb_consumer;  // Console input current reader pos
 static uint16_t      ser_in_rb[64];       // Console input ring buffer (FIFO)
 uint8_t              serial_active;       // Serial port is active
 volatile uint8_t     gui_wants_all_input; // Non-zero if GUI wants all key input
+static uint8_t       ser_out_wrapped;     // Serial output wrapped buffer
+static uint8_t       ser_out_buf[4096];   // Serial output
+static volatile uint16_t ser_out_prod;    // Serial output producer
 
-static const uint8_t input_med_magic[] = { 0x0d, 0x05, 0x04 };  // ^M^E^D
+static const uint8_t input_med_magic[] = { 0x0d, 0x05, 0x04,         // ^M^E^D
+                                           0x13, 0x14, 0x0f, 0x10 }; // ^S^T^O^P
 
 /*
  * input_rb_put() stores a character in the input ring buffer.
@@ -48,7 +53,8 @@ input_rb_put(uint ch)
 
     if ((ch & 0xff) != 0) {
         if (((uint8_t) ch) == input_med_magic[magic_pos]) {
-            if (++magic_pos == ARRAY_SIZE(input_med_magic)) {
+            if (++magic_pos == 3) {
+                // ^M ^E ^D
                 gui_wants_all_input ^= 1;
                 if (gui_wants_all_input & 1) {
                     /* MED deactivated */
@@ -59,6 +65,10 @@ input_rb_put(uint ch)
                     dbg_all_scroll = 25;
                     dbg_cursor_y = 25;
                 }
+            } else if (magic_pos == ARRAY_SIZE(input_med_magic)) {
+                /* ^M ^E ^D ^S ^T ^O ^P */
+                while (1)
+                    main_poll();
                 magic_pos = 0;
             }
         } else {
@@ -117,13 +127,17 @@ serial_init(void)
     *INTENA = INTENA_INTEN;             // disable internal interrupt
     *SERPER = serper_divisor;
     *CIAB_PRA = 0x4f; // Set DTR
-    *INTENA = INTENA_TBE | INTENA_RBF;  // disable interrupt
-    *INTREQ = INTREQ_TBE | INTREQ_RBF;  // clear interrupt
+    *INTENA = INTENA_TBE | INTENA_RBF;  // disable interrupts
+    *INTREQ = INTREQ_TBE | INTREQ_RBF;  // clear interrupts
+    *INTENA = INTENA_SETCLR | INTENA_RBF;  // enable interrupt
 }
 
 void
 serial_putc(unsigned int ch)
 {
+    ser_out_buf[ser_out_prod] = ch;
+    ser_out_prod = (ser_out_prod + 1) % sizeof (ser_out_buf);
+
     if ((serial_active == 0) && (timer_tick_get() >> 25))
         return;  // No serial input and it's past 45 seconds
 
@@ -148,8 +162,6 @@ serial_putc(unsigned int ch)
         uint32_t sr = irq_disable();
         sdat = *SERDATR;
         if (sdat & SERDATR_RBF) {
-            if ((sdat & 0xff) == 0x7f)  // Map other delete to backspace
-                sdat = 0x08;
             input_rb_put(sdat);
             serial_active = 1;
             *INTREQ = INTREQ_RBF;  // Clear interrupt status
@@ -199,6 +211,19 @@ serial_puts(const char *str)
     }
 }
 
+void
+serial_poll(void)
+{
+    int ch;
+    uint32_t sr = irq_disable();
+    ch = serial_getc();
+    if (ch != -1) {
+        serial_active = 1;
+        input_rb_put(ch);
+    }
+    irq_restore(sr);
+}
+
 int
 getchar(void)
 {
@@ -212,13 +237,8 @@ getchar(void)
         // XXX: Seems broken on real hardware -- maybe delays not long enough
         keyboard_poll();
 #endif
+        serial_poll();
         ch = input_rb_get();
-    }
-    if (ch == -1) {
-        /* Attempt to pull directly from serial port */
-        ch = serial_getc();
-        if (ch != -1)
-            serial_active = 1;
     }
     if (ch == -1)
         return (ch);
@@ -236,6 +256,7 @@ putchar(int ch)
         serial_putc('\r');
         dbg_show_char('\r');
     }
+
     serial_putc((uint) ch);
     dbg_show_char((uint) ch);
     return (ch);
@@ -268,6 +289,7 @@ input_break_pending(void)
 
     extern uint vblank_ints;
     vblank_ints = 0;  // XXX DEBUG
+
     for (cur = ser_in_rb_consumer; cur != ser_in_rb_producer; cur = next) {
         next = (cur + 1) % ARRAY_SIZE(ser_in_rb);
         if (ser_in_rb[cur] == 0x03) {  /* ^C is abort key */
@@ -275,14 +297,25 @@ input_break_pending(void)
             return (1);
         }
     }
-    cur = serial_getc();
-    if (cur != (uint)-1)
-        input_rb_put(cur);
-    if (cur == 0x03)
-        return (1);
+    serial_poll();
 #ifdef KEYBOARD_POLL
     keyboard_poll();
 #endif
 
     return (0);
+}
+
+void
+serial_replay_output(void)
+{
+    uint prod = ser_out_prod;
+    uint cons = 0;
+    if (ser_out_wrapped) {
+        cons = (prod + 1) % sizeof (ser_out_buf);
+    }
+    while (cons != prod) {
+        putchar(ser_out_buf[cons]);
+        cons = (cons + 1) % sizeof (ser_out_buf);
+    }
+    ser_out_prod = prod;  // Reset producer
 }

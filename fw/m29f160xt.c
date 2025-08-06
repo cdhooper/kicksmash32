@@ -61,11 +61,12 @@ static uint32_t ee_cmd_mask;
 static uint32_t ee_addr_shift;
 static uint32_t ee_status = EE_STATUS_NORMAL;  // Status from program/erase
 
-static uint32_t ticks_per_15_nsec;
 static uint32_t ticks_per_20_nsec;
 static uint32_t ticks_per_30_nsec;
+static uint32_t ticks_per_35_nsec;
 static uint64_t ee_last_access = 0;
 static bool     ee_enabled = false;
+static bool     ee_write_bug = true;
 
 /*
  * address_output
@@ -432,6 +433,13 @@ ee_disable(void)
  *   tHZ  - CE high to Data OUT High-Z           (max 15ns)
  *   tDF  - OE high to Data OUT High-Z           (max 15ns)
  *   tOH  - OE high to Data Out no longer valid  (min 0ns)
+ *
+ * Timing comparison with M29F800CB
+ *       MXIC        Micron
+ *      M29F800CB   M29F160FT
+ * tOE   30ns        20ns        Time to valid read data following OE low
+ * tAA   70ns        55ns        Time to valid read data following address
+ * tDF   20ns        15ns        Time to HiZ after OE high
  */
 static void
 ee_read_word(uint32_t addr, uint32_t *data)
@@ -440,11 +448,11 @@ ee_read_word(uint32_t addr, uint32_t *data)
     address_output_enable();
     oe_output(0);
     oe_output_enable();
-    timer_delay_ticks(ticks_per_20_nsec);  // Wait for tOE
+    timer_delay_ticks(ticks_per_30_nsec);  // Wait for tOE
     *data = data_input();
     oe_output(1);
     oe_output_disable();
-    timer_delay_ticks(ticks_per_15_nsec);  // Wait for tDF
+    timer_delay_ticks(ticks_per_20_nsec);  // Wait for tDF
 #ifdef DEBUG_SIGNALS
     printf(" RWord[%lx]=%08lx", addr, *data);
 #endif
@@ -524,6 +532,13 @@ ee_read(uint32_t addr, void *datap, uint count)
  *   Address lines are latched at the falling edge of WE#
  *   Data lines are latched at the rising edge of WE#
  *   OE# must remain high during the entire bus operation
+ *
+ * Timing comparison with M29F800CB
+ *       MXIC        Micron
+ *      M29F800CB   M29F160FT
+ * tWP   35ns        30ns        WE pulse width (low-to-high minimum)
+ * tDS   30ns        20ns        Data valid to WE high
+ * tAS   0ns         0ns         Address setup to WE low
  */
 static void
 ee_write_word(uint32_t addr, uint32_t data)
@@ -542,7 +557,7 @@ ee_write_word(uint32_t addr, uint32_t data)
     data_output(data & ee_cmd_mask);
     data_output_enable();
 
-    timer_delay_ticks(ticks_per_30_nsec);  // tWP=30ns tDS=20ns
+    timer_delay_ticks(ticks_per_35_nsec);  // tWP=35ns tDS=30ns
     we_output(1);
     data_output_disable();
     oe_output_disable();
@@ -726,7 +741,7 @@ ee_program_word(uint32_t addr, uint32_t word)
     ee_write_word(0x002aa, 0x00550055);
     ee_write_word(0x00555, 0x00a000a0);
     ee_write_word(addr, word);
-    if (((addr & 0xff) == 0x55) || ((addr & 0xff) == 0x56))
+    if (ee_write_bug && (((addr & 0xff) == 0x55) || ((addr & 0xff) == 0x56)))
         ee_read_mode();  // Prevent bug where data gets interpreted as command
     enable_irq();
 
@@ -821,6 +836,7 @@ try_again:
 void
 ee_read_mode(void)
 {
+    timer_delay_usec(1);  // Wait for WE to rise
     ee_cmd(0x00555, 0x00f000f0);
 }
 
@@ -852,6 +868,12 @@ static const chip_ids_t chip_ids[] = {
     { 0x000422D8, "M29F160TB" },   // Fujitsu 2MB bottom boot
     { 0x00c222D6, "MX29F800CT" },  // Macronix 1MB top boot
     { 0x00c22258, "MX29F800CB" },  // Macronix 1MB bottom boot
+    { 0x00c222c4, "MX29LV160CT" }, // Macronix 2MB top boot
+    { 0x00c22249, "MX29LV160CB" }, // Macronix 2MB bottom boot
+    { 0x002022cc, "M29F160BT" },   // ST-Micro 2MB top boot
+    { 0x0020224b, "M29F160BB" },   // ST-Micro 2MB bottom boot
+    { 0x002022c4, "M29W160ET" },   // ST-Micro 2MB top boot
+    { 0x00202249, "M29W160EB" },   // ST-Micro 2MB bottom boot
     { 0x00000000, "Unknown" },     // Must remain last
 };
 
@@ -868,6 +890,8 @@ static const chip_blocks_t chip_blocks[] = {
     { 0x22D8,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
     { 0x22D6, 15, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
     { 0x2258,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
+    { 0x22C4, 15, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x2249,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
     { 0x0000,  0, 32, 4, 0x1d },  // Default to bottom boot
 };
 
@@ -882,12 +906,25 @@ static const chip_blocks_t *
 get_chip_block_info(uint32_t chipid)
 {
     uint16_t cid = (uint16_t) chipid;
+    uint16_t mfgid = (chipid >> 16);
     uint pos;
 
     /* Search for exact match */
     for (pos = 0; pos < ARRAY_SIZE(chip_blocks) - 1; pos++)
         if (chip_blocks[pos].cb_chipid == cid)
             break;
+
+    /*
+     * M29F160FT has bug where a write of 0x0090 to 0x55 gets interpreted
+     * as a command to enter ID mode.
+     *
+     * Macronix MX29F800CBTI interprets bug workaround as a write to flash!
+     */
+    if (mfgid == 0x00c2)
+        ee_write_bug = false;
+    else
+        ee_write_bug = true;
+//  printf("chip=%lx mfgid=%x bug=%x\n", chipid, mfgid, ee_write_bug);
 
     return (&chip_blocks[pos]);
 }
@@ -1357,9 +1394,9 @@ ee_update_bank_at_longreset(void)
 void
 ee_init(void)
 {
-    ticks_per_15_nsec  = timer_nsec_to_tick(15);
     ticks_per_20_nsec  = timer_nsec_to_tick(20);
     ticks_per_30_nsec  = timer_nsec_to_tick(30);
+    ticks_per_35_nsec  = timer_nsec_to_tick(35);
 
     ee_set_mode(ee_mode);
 }

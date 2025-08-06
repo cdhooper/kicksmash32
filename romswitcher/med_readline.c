@@ -48,6 +48,7 @@
 #define KEY_CTRL_Y           0x19  /* ^Y Show history */
 #define KEY_ESC              0x1b  /* Escape key */
 #define KEY_SPACE            0x20  /* Space key */
+#define KEY_BACKSPACE2       0x7f  /* ^? Backspace on some keyboards */
 #define KEY_DELETE           0x7f  /* ^? Backspace on some keyboards */
 #define KEY_AMIGA_ESC        0x9b  /* Amiga key sequence */
 
@@ -437,7 +438,7 @@ redraw_prompt:
             history_cur_line = 0;
             return (RC_USR_ABORT);
         case KEY_BACKSPACE:
-//      case KEY_BACKSPACE2:
+        case KEY_BACKSPACE2:
             /* ^H deletes one character to the left */
             if (input_pos == 0)
                 break;
@@ -449,7 +450,7 @@ redraw_prompt:
             putchar(KEY_SPACE);
             putchars(KEY_BACKSPACE, strlen(input_buf + input_pos) + 1);
             break;
-        case KEY_DELETE:
+//      case KEY_DELETE:
         case KEY_DEL_CHAR:
             if (input_buf[input_pos] == '\0')
                 break;  /* Nothing more to delete at end of line */
@@ -678,13 +679,14 @@ rl_initialize(void)
 {
     static bool_t did_rl_init = FALSE;
 
+    input_need_prompt = 1;
+    input_clear();
+
     if (did_rl_init == TRUE)
         return (0);
 
-    did_rl_init        = TRUE;
-    input_need_prompt = 1;
+    did_rl_init       = TRUE;
     history_cur       = history_buf;
-    input_clear();
 
 #ifndef EMBEDDED_CMD
 #ifdef AMIGA
