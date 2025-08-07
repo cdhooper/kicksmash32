@@ -103,6 +103,7 @@ static const cmd_t cmd_list[] = {
     { cmd_time,    "time",    0, cmd_time_help, " cmd <cmd>",
                         "measure command execution time" },
 #endif
+    { cmd_what,    "what",    0, NULL, "", "show recent output" },
     { cmd_version, "version", 1, NULL, "", "show version" },
 };
 

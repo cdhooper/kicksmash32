@@ -25,6 +25,7 @@ rc_t cmd_patt(int argc, char * const *argv);
 rc_t cmd_test(int argc, char * const *argv);
 rc_t cmd_time(int argc, char * const *argv);
 rc_t cmd_version(int argc, char * const *argv);
+rc_t cmd_what(int argc, char * const *argv);
 rc_t parse_value(const char *arg, uint8_t *value, uint width);
 rc_t parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr);
 
