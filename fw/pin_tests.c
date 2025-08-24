@@ -51,7 +51,6 @@ typedef struct {
 static const pin_config_t pin_config[] =
 {
     { "KBRST",      KBRST_PORT,      KBRST_PIN,      FS_PD, PIN_INPUT },
-    { "FLASH_RP",   FLASH_RP_PORT,   FLASH_RP_PIN,   FS_PU, PIN_EXT_PULLUP },
     { "FLASH_RB",   FLASH_RB_PORT,   FLASH_RB_PIN,   FS_PU, PIN_INPUT },
     { "FLASH_WE",   FLASH_WE_PORT,   FLASH_WE_PIN,   FS_PU, PIN_EXT_PULLUP },
     { "FLASH_OE",   FLASH_OE_PORT,   FLASH_OE_PIN,   FS_PU, PIN_INPUT },

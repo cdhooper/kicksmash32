@@ -2076,7 +2076,7 @@ new_cmd_post:
 
         if (++rx_consumer == ARRAY_SIZE(buffer_rxa_lo)) {
             rx_consumer = 0;
-            if (++consumer_wrap - consumer_wrap_last_poll > 4) {
+            if (++consumer_wrap - consumer_wrap_last_poll > 1) {
                 /*
                  * Spinning too much in interrupt context.
                  * Disable interrupt -- it will be re-enabled in ee_poll().

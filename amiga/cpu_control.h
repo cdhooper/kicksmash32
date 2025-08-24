@@ -146,6 +146,38 @@ cpu_cache_flush_040_both(void)
                    "cpusha %bc");
 }
 
+__attribute__((unused))
+static inline void
+cpu_cache_flush_040_data(void)
+{
+    __asm volatile("nop\n\t"
+                   ".word 0xf478");  // Flush Data Cache
+}
+
+__attribute__((unused))
+static inline void
+cpu_cache_flush_040_inst(void)
+{
+    __asm volatile("nop\n\t"
+                   ".word 0xf4b8");  // Flush Inst Cache
+}
+
+__attribute__((unused))
+static inline void
+cpu_cache_flush_040_instdata(void)
+{
+    __asm volatile("nop\n\t"
+                   ".word 0xf4f8");  // Flush Inst and Data Cache
+}
+
+__attribute__((unused))
+static inline void
+cpu_cache_invalidate_040(void)
+{
+    __asm volatile("nop\n\t"
+                   "cinva %bc");
+}
+
 static __inline void __attribute__((__unused__))
 flush_tlb_030(void)
 {

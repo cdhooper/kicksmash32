@@ -17,11 +17,13 @@
 #define _MED_PCMDS_H
 
 rc_t cmd_aconfig(int argc, char * const *argv);
+rc_t cmd_cpu(int argc, char * const *argv);
 rc_t cmd_dis(int argc, char * const *argv);
 rc_t cmd_reset(int argc, char * const *argv);
 rc_t cmd_time(int argc, char * const *argv);
 
 extern const char cmd_aconfig_help[];
+extern const char cmd_cpu_help[];
 extern const char cmd_dis_help[];
 extern const char cmd_reset_help[];
 

@@ -505,6 +505,8 @@ void
 Text(RastPort *rp, const char * text, uint len)
 {
     int16_t y = rp->cp_y - (FONT_HEIGHT - 1);  // Text location is bottom left
+
+    vblank_ints = 0;  // Quiet VBlank code because we are still busy
     render_text_at(text, len, rp->cp_x, y, rp->FgPen, rp->BgPen);
     rp->cp_x += 8 * len;
     if (rp->cp_x > SCREEN_WIDTH) {

@@ -245,6 +245,7 @@ rom_wait_normal(uint32_t romval)
     while (*VADDR32(ROM_BASE) != romval) {
         if (timeout++ > 1000)
             break;  // Took too long. Oh well!
+        cia_spin(2);
     }
 }
 
@@ -457,6 +458,7 @@ scc_cleanup:
             *(dptr++) = 0xdead;
             *(dptr++) = 0xdead;
 #endif
+            rom_wait_normal(rombase_value);
             return (MSG_STATUS_BAD_CRC);
         }
     }

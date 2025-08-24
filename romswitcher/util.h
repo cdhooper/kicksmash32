@@ -43,7 +43,7 @@ typedef unsigned int uint;
 
 #define SAVE_A4()         __asm("move.l a4,-(sp)")
 #define RESTORE_A4()      __asm("move.l (sp)+,a4")
-#define GET_GLOBALS_PTR() __asm("move.l 0x100,a4")
+#define GET_A4()          __asm("move.l 0x100,a4")
 
 #include <stddef.h>
 

@@ -76,8 +76,13 @@ get_cpu(void)
 
     __asm__ volatile(
         "move.l #68000, %0\n"      // Default to 68000
-        "movec.l  cacr, d0\n"      // Check for 68020+
-        "bne 1f\n"                 // If nonzero, it's 68020+
+        "move.l #0x80000100, d1\n" // Enable 68030 and 68040+ D cache
+        "movec.l cacr, d0\n"       // Save current CACR
+        "movec.l d1, cacr\n"       // Save enable bits to CACR
+        "movec.l cacr, d1\n"       // Read enable bits back
+        "movec.l d0, cacr\n"       // Restore CACR
+        "cmp.l #0, d1\n"
+        "bne 1f\n"                 // If CACR is nonzero, it's 68020+
         "movec.l  sfc, d1\n"       // Check for 68010
         "cmp.l #0x00008000, d1\n"
         "bne 3f\n"                 // If different, it's 68000
@@ -85,11 +90,11 @@ get_cpu(void)
         "bra 3f\n"
 
         // 68020+
-        "1:move.l #0x8000, d1\n"   // CACR.IE (68040 and 68060)
+        "1: move.l #0x8000, d1\n"   // CACR.IE (68040 and 68060)
         "movec.l d1, cacr\n"       // Check if CACR can be written
         "movec.l cacr, d1\n"
         "movec.l d0, cacr\n"       // Restore CACR
-        "cmp.l d0, d1\n"
+        "cmp.l #0, d1\n"
         "beq 2f\n"                 // Doesn't have CACR.IE (ICache Enable)
 
         // 68040 or 68060
@@ -104,7 +109,7 @@ get_cpu(void)
         "bra 3f\n"
 
         // 68020 or 68030
-        "2:move.l #68030, %0\n"    // 68020 or 68030 detected
+        "2: move.l #68030, %0\n"    // 68020 or 68030 detected
         "move.l #0x0200, d1\n"     // CACR.FD (68030)
         "movec.l d1, cacr\n"       // Check if CACR can be written
         "movec.l cacr, d1\n"

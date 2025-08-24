@@ -38,7 +38,7 @@
 /*
  * Memory map
  *    0x00000100     [0x4] pointer to globals
- *    0x00000180    [0x26] register save area
+ *    0x00000120    [0x26] register save area
  *    0x00000200   [0x100] vectors
  *    0x00001000    [0x80] runtime counters
  *    0x00001080    [0x80] sprite data
@@ -74,6 +74,7 @@ chipset_init_early(void)
 {
     /* Shut down interrupts and DMA */
     *CIAA_ICR = 0x7f;    // Disable interrupt forwarding to chipset
+    *CIAB_ICR = 0x7f;    // Disable interrupt forwarding to chipset
     *INTENA   = 0x7fff;  // Disable interrupt forwarding to m68k
     *INTREQ   = 0x7fff;  // Reply to all interrupt requests
     *INTREQ   = 0x7fff;  // Reply to all interrupt requests (A4000 bug)
@@ -82,7 +83,8 @@ chipset_init_early(void)
     /* Stop timers */
     *CIAA_CRA  = 0x00;
     *CIAA_CRB  = 0x00;
-    *CIAA_CRA  = 0;
+    *CIAB_CRA  = 0x00;
+    *CIAB_CRB  = 0x00;
 
     /* Silence audio */
     *AUD0VOL  = 0;
@@ -149,21 +151,23 @@ reset_hi(void)
     __asm("jmp _setup");  // setup()
 }
 
-void
+int
 main_poll()
 {
-    cmdline();
+    if (cmdline())
+        return (1);
     mouse_poll();     // handle mouse buttons
     keyboard_poll();  // handle key repeats
+    return (0);
 }
 
 void __attribute__ ((noinline))
 setup(void)
 {
     globals_init();
-    vectors_init((void *)VECTORS_BASE);
-    memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
     chipset_init_early();
+    memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
+    vectors_init((void *)VECTORS_BASE);
     cpu_control_init();  // Get CPU type
     serial_init();
     serial_puts("\n\033[31m");
@@ -176,12 +180,13 @@ setup(void)
     serial_putc('B');
     screen_init();
     serial_putc('C');
+
 //  dbg_show_string(RomID);
 
     timer_init();
     serial_putc('D');
     audio_init();
-//  serial_putc('E');
+    serial_putc('E');
 //  serial_init();  // Now that ECLK is known
     serial_putc('F');
     keyboard_init();
@@ -233,6 +238,7 @@ debug_cmdline(void)
     rl_initialize();
     using_history();
     while (1) {
-        main_poll();
+        if (main_poll())
+            break;   // "quit" command entered
     }
 }

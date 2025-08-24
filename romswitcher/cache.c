@@ -17,40 +17,98 @@
 #include "util.h"
 #include "cpu_control.h"
 
-static inline uint32_t
-get_cacr(void)
+#define CACR_68040_EDC  BIT(31)  // Enable data cache
+#define CACR_68040_EIC  BIT(15)  // Enable instruction cache
+#define CACR_68060_CABC BIT(22)  // Clear all entries in the branch cache
+
+#define CACR_68030_CD  BIT(11) // Clear data cache
+#define CACR_68030_ED  BIT(8)  // Enable data cache
+#define CACR_68030_CI  BIT(3)  // Clear instruction cache
+#define CACR_68030_EI  BIT(0)  // Enable instruction cache
+static uint32_t
+convert_030_cacr_to_040_cacr(uint32_t cacr_030)
 {
-    uint32_t cacr;
-    __asm volatile("movec.l cacr, %0" : "=r" (cacr)::);
-    return (cacr);
+    uint32_t cacr_040 = 0;
+    if (cacr_030 & CACR_68030_EI)
+        cacr_040 |= CACR_68040_EIC;
+    if (cacr_030 & CACR_68030_ED)
+        cacr_040 |= CACR_68040_EDC;
+    return (cacr_040);
 }
 
-static inline void
-set_cacr(uint32_t cacr)
+static uint32_t
+convert_040_cacr_to_030_cacr(uint32_t cacr_040)
 {
-    __asm volatile("movec.l %0, cacr" :: "r" (cacr):);
+    uint32_t cacr_030 = 0;
+    if (cacr_040 & CACR_68040_EIC)
+        cacr_030 |= CACR_68030_EI;
+    if (cacr_040 & CACR_68040_EDC)
+        cacr_030 |= CACR_68030_ED;
+    return (cacr_030);
 }
 
-// XXX: Need to flush TLB before turning on caches
-//
 uint32_t
 CacheControl(uint32_t cache_bits, uint32_t cache_mask)
 {
     uint32_t old_cacr;
     uint32_t new_cacr;
+    uint32_t cacr_mask;
+    uint32_t cacr_bits;
+    uint32_t return_cacr;
 
-    old_cacr = get_cacr();
-*ADDR32(0x1010) = old_cacr;
-return (old_cacr);
-    new_cacr = (old_cacr & ~cache_mask) | cache_bits;
-    set_cacr(new_cacr);
+    old_cacr = cpu_get_cacr();
+    switch (cpu_type) {
+        default:
+        case 68030:
+            cacr_mask = cache_mask;
+            cacr_bits = cache_bits;
+            return_cacr = old_cacr;
+            break;
+        case 68060:
+        case 68040:
+            cacr_mask = 0;
+            cacr_bits = 0;
+            if (cache_bits & CACRF_ClearD)
+                cpu_cache_flush_040_data();
+            if (cache_bits & CACRF_ClearI)
+                cpu_cache_flush_040_inst();
 
-    return (old_cacr); // Return the previous CACR value
+            cacr_mask = convert_030_cacr_to_040_cacr(cache_mask);
+            cacr_bits = convert_030_cacr_to_040_cacr(cache_bits);
+            return_cacr = convert_040_cacr_to_030_cacr(old_cacr);
+
+            if (cache_mask & CACRF_IBE) {
+                /* Instruction burst enabled in another register on 68040 and 68060 */
+            }
+            if (cache_mask & CACRF_DBE) {
+                /* Data burst enabled in another register on 68040 and 68060 */
+            }
+            break;
+    }
+    new_cacr = (old_cacr & ~cacr_mask) | cacr_bits;
+    cpu_set_cacr(new_cacr);
+
+    return (return_cacr); // Return the previous CACR value
 }
 
 void
 cache_init(void)
 {
+    switch (cpu_type) {
+        case 68030:
+            flush_tlb_030();
+            cpu_set_cacr(CACR_68030_CD | CACR_68030_CI);
+            cpu_set_cacr(CACR_68030_ED | CACR_68030_EI);
+            break;
+        case 68040:
+        case 68060:
+            flush_tlb_040();
+            cpu_cache_invalidate_040();
+            if (cpu_type == 68060)
+                cpu_set_cacr(CACR_68060_CABC);
+            cpu_set_cacr(CACR_68040_EDC | CACR_68040_EIC);
+            break;
+    }
 #if 0
     CacheControl(CACRF_EnableD | CACRF_DBE | CACRF_ClearD |
                  CACRF_EnableI | CACRF_IBE | CACRF_ClearI,

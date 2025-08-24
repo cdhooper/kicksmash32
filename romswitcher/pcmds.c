@@ -22,6 +22,9 @@
 #include "util.h"
 #include "autoconfig.h"
 #include "db_disasm.h"
+#include "amiga_chipset.h"
+#include "vectors.h"
+#include "cpu_control.h"
 
 const char cmd_aconfig_help[] =
 "aconfig [show]         - show current (unconfigured) device\n"
@@ -29,6 +32,23 @@ const char cmd_aconfig_help[] =
 "aconfig board [<addr>] - config current device to Zorro address\n"
 "aconfig list           - show autoconfig space (free and allocated)\n"
 "aconfig shutup         - tell device to shutup (go to next)\n";
+
+const char cmd_cpu_help[] =
+"cpu cacr [<val>]       - get / set CPU SR\n"
+"cpu fault addr         - cause Address Error (alignment) fault\n"
+"cpu fault aline        - cause A-Line instruction fault\n"
+"cpu fault berr         - cause Bus Error\n"
+"cpu fault chk          - cause CHK fault\n"
+"cpu fault div0         - cause Divide By Zero fault\n"
+"cpu fault fline        - cause F-Line instruction fault\n"
+"cpu fault fmt          - cause Format Error (FPU)\n"
+"cpu fault fpoe         - cause Floating Point Operand Error\n"
+"cpu fault ill          - cause Illegal instruction fault\n"
+"cpu fault priv         - cause Privilege Violation\n"
+"cpu fault trap         - cause TRAP #7\n"
+"cpu fault trapv        - cause TRAPV (trap on overflow)\n"
+"cpu regs               - display interrupt registers\n"
+"cpu type               - show CPU type";
 
 const char cmd_dis_help[] =
 "disas                          - disassemble from previous address\n"
@@ -94,6 +114,98 @@ cmd_aconfig(int argc, char * const *argv)
         return (autoconfig_shutup());
     } else {
         printf("Unknown argument %s\n", argv[1]);
+        return (RC_USER_HELP);
+    }
+    return (RC_SUCCESS);
+}
+
+/*
+ * cmd_cpu
+ * -------
+ * Perform processor operations
+ */
+rc_t
+cmd_cpu(int argc, char * const *argv)
+{
+    if (argc < 1)
+        return (RC_USER_HELP);
+
+    if (strcmp(argv[1], "cacr") == 0) {
+        if (argc < 3) {
+            printf("%08x\n" , cpu_get_cacr());
+        } else {
+            int pos = 0;
+            uint value;
+            if ((sscanf(argv[2], "%x%n", &value, &pos) != 1) ||
+                (argv[2][pos] != '\0')) {
+                printf("Invalid cacr value %s\n", argv[2]);
+                return (RC_BAD_PARAM);
+            }
+            cpu_set_cacr(value);
+        }
+    } else if (strcmp(argv[1], "fault") == 0) {
+        if (argc < 3) {
+            printf("cpu fault requires an argument\n");
+            return (RC_USER_HELP);
+        }
+        if (strcmp(argv[2], "aline") == 0) {
+            /* Any instruction whose opcode begins with A */
+            __asm(".word 0xa000");
+        } else if (strcmp(argv[2], "addr") == 0) {
+            /* Branch to unaligned address */
+            __asm("lea.l 0x1(pc),a0\n\t"
+                  "jmp (a0)"::: "a0");
+        } else if (strcmp(argv[2], "berr") == 0) {
+            /* Gary will generate bus fault if address is not claimed by dev */
+            *GARY_BTIMEOUT = 0xff;
+            (void) *VADDR32(0x30000000);
+            *GARY_BTIMEOUT = 0x7f;
+        } else if (strcmp(argv[2], "chk") == 0) {
+            /* CHK compares register in range 0..X */
+            __asm("move.l #-1, d0\n\t"
+                  "chk.l  #10, d0"::: "d0");
+        } else if (strcmp(argv[2], "div0") == 0) {
+            /* Divide by Zero */
+            __asm("move.l #0, d0\n\t"
+                  "divs.w #0, d0"::: "d0", "d1");
+        } else if (strcmp(argv[2], "fline") == 0) {
+            /* Any instruction whose opcode begins with F */
+            __asm(".word 0xf000");
+            __asm(".word 0x0000");
+        } else if (strcmp(argv[2], "fmt") == 0) {
+            /* Push an invalid FPU frame format and attempt to restore it */
+            __asm("move.l #0xff000000, -(sp)");
+            __asm("frestore (sp)+");
+        } else if (strcmp(argv[2], "fpoe") == 0) {
+            /* Any instruction whose opcode begins with F */
+            __asm("fmove.l fp0,d0");
+        } else if (strncmp(argv[2], "illegal", 3) == 0) {
+            /* Illegal instruction */
+            __asm("illegal");
+        } else if (strcmp(argv[2], "priv") == 0) {
+            /* Drop to user mode and issue STOP, which requires supervisor */
+            __asm("move.w #0, sr");
+            __asm("stop #0x2700");
+        } else if (strcmp(argv[2], "trap") == 0) {
+            /* CPU TRAP */
+            __asm("trap #7");
+        } else if (strcmp(argv[2], "trapv") == 0) {
+            __asm("move.l #0x7fffffff, d0\n\t"
+                  "addq.l #2, d0\n\t"
+                  "trapv"::: "d0");
+        } else {
+            printf("Unknown argument cpu fault \"%s\"\n", argv[2]);
+            return (RC_USER_HELP);
+        }
+    } else if (strncmp(argv[1], "regs", 3) == 0) {
+        printf("Last interrupt:\n");
+        irq_show_regs(0);
+        printf("Last exception:\n");
+        irq_show_regs(1);
+    } else if (strncmp(argv[1], "type", 3) == 0) {
+        printf("CPU %u\n", cpu_type);
+    } else {
+        printf("Unknown argument cpu \"%s\"\n", argv[1]);
         return (RC_USER_HELP);
     }
     return (RC_SUCCESS);

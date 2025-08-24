@@ -37,8 +37,9 @@ static const cmd_t cmd_list[] = {
                         " [auto|board|list|?]", "manual autoconfig" },
     { cmd_copy,    "copy",    3, cmd_copy_help,
                         "[bwlqoh] <saddr> <daddr> <len>", "copy memory" },
-    { cmd_comp,    "comp",    2, cmd_comp_help,
+    { cmd_comp,    "comp",    0, cmd_comp_help,
                         "[bwlqoh] <addr1> <addr2> <len>", "compare memory" },
+    { cmd_cpu,     "cpu",     0, cmd_cpu_help, "", "perform CPU operations" },
     { cmd_c,       "c",       1, cmd_c_help,
                         "[bwlqohS] <addr> <value...>", "change memory" },
     { cmd_delay,   "delay",   2, NULL, "<time> [s|ms|us]", "delay for time" },
@@ -898,7 +899,7 @@ cmdline(void)
 
         if ((strcmp(sline, "q") == 0) || (strcmp(sline, "quit") == 0)) {
             *line = '\0';
-            return (0);
+            return (1);
         }
 
 //      led_busy(1);

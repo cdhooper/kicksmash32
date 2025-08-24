@@ -28,6 +28,7 @@ OBJCOPY := m68k-amigaos-objcopy
 OBJDUMP := m68k-amigaos-objdump
 CFLAGS  := -Wall -Wextra -Wno-pointer-sign -Wno-format -Wno-strict-aliasing
 CFLAGS  += -Wno-sign-compare -fomit-frame-pointer
+CFLAGS  += -fno-delete-null-pointer-checks
 CFLAGS  += -DROMFS -DSTANDALONE -DEMBEDDED_CMD -fbaserel -resident -mcpu=68060
 CFLAGS  += -DRAM_BASE=0x00000000
 CFLAGS  += -I. -I$(FW) -I$(AM)

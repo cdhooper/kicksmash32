@@ -16,7 +16,7 @@
 #ifndef _MAIN_H
 #define _MAIN_H
 
-void main_poll(void);
+int main_poll(void);
 void debug_cmdline(void);
 
 #endif /* _MAIN_H */

@@ -17,6 +17,7 @@
 #define _VECTORS_H
 
 void vectors_init(void *base);
+void irq_show_regs(uint which);
 
 extern uint vblank_ints;
 

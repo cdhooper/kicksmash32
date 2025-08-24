@@ -32,15 +32,17 @@
 
 /*
  * Memory map
- *    0x00000000   [0x100] vectors
  *    0x00000100     [0x4] pointer to globals
+ *    0x00000120    [0x26] register save area
+ *    0x00000200   [0x100] vectors
  *    0x00001000    [0x80] runtime counters
  *    0x00001080    [0x80] sprite data
  *    0x00001100  [0xff00] stack
- *    0x00010000 [0x10000] globals
+ *    0x00010000 [0x10000] bsschip
  *    0x00020000  [0x5000] bitplane 0
  *    0x00025000  [0x5000] bitplane 1
  *    0x0002a000  [0x5000] bitplane 2
+ *    0x00030000 [0x10000] globals
  */
 
 #define COUNTER0     (RAM_BASE + 0x1000)
@@ -50,18 +52,16 @@
 #define STACK_BASE   (RAM_BASE + 0x10000 - 4)
 #define GLOBALS_BASE (RAM_BASE + 0x10000)
 
-#define FULL_STACK_REGS 0x180
-#define SAVE_FULL_FRAME() __asm("movem.l d0-d7/a0-a7,0x180\n\t" \
-                                "move.w 0(sp),0x1c0\n\t" \
-                                "move.l 2(sp),0x1c2")
-
-typedef struct
-__attribute__((packed)) {
-    uint32_t d[6];
-    uint32_t a[5];
-    uint16_t sr;
-    uint32_t pc;
-} vblank_stack_regs_t;
+#define FULL_STACK_REGS 0x120
+#if 1
+/* Caution: Hard-coded addresses below */
+#define SAVE_FULL_FRAME() __asm("movem.l d0-d7/a0-a7,0x120\n\t" \
+                                "move.w 0(sp),0x160\n\t" \
+                                "move.l 2(sp),0x162\n\t" \
+                                "move.w 6(sp),0x166")
+#else
+#define SAVE_FULL_FRAME() __asm("movem.l d0-d7/a0-a7,0x120")
+#endif
 
 typedef struct
 __attribute__((packed)) {
@@ -69,13 +69,14 @@ __attribute__((packed)) {
     uint32_t a[8];
     uint16_t sr;
     uint32_t pc;
+    uint16_t vect;
 } full_stack_regs_t;
 
 uint vblank_ints;
 
 static void Default(void);
 void reset_hi(void);
-__attribute__((noinline)) static void irq_debugger(uint32_t sp_reg, uint mode);
+__attribute__((noinline)) static void irq_debugger(uint mode);
 
 __attribute__((noinline))
 static void
@@ -86,17 +87,45 @@ irq_debugger_msg(const char *msg)
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
     memcpy(regs + 1, regs, sizeof (*regs));
+#pragma GCC diagnostic pop
     printf(msg);
-    irq_debugger(0, 1);
+    irq_debugger(1);
 }
 
 __attribute__ ((noinline)) static void
 Unknown_common(uint intnum)
 {
+#undef DEBUG_UNKNOWN_IRQ
+#ifdef DEBUG_UNKNOWN_IRQ
     char buf[40];
-    sprintf(buf, "\nUnknown interrupt %u", intnum);
+    sprintf(buf, "\nUnknown interrupt %u\n", intnum);
     irq_debugger_msg(buf);
     reset_cpu();
+#else
+    char buf[40];
+    SAVE_A4();
+    GET_A4();
+    static int unknown_count;
+    if (unknown_count < 5) {
+        uint32_t sp_reg;
+        uint16_t vector_offset;
+        unknown_count++;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+        full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
+        memcpy(regs + 1, regs, sizeof (*regs));
+        sp_reg = regs->a[7];
+#pragma GCC diagnostic pop
+        vector_offset = *ADDR16(sp_reg + 6);
+        intnum = (vector_offset & 0x0fff) >> 2;
+        sprintf(buf, "\nUnknown interrupt %u\n", intnum);
+        serial_puts(buf);
+        if (unknown_count < 3)
+            irq_show_regs(1);
+    }
+#endif
+    RESTORE_A4();
 }
 
 __attribute__ ((interrupt)) static void
@@ -113,10 +142,10 @@ Audio(void)
 //  *INTENA = INTENA_AUD0 | INTENA_AUD1 | INTENA_AUD2 | INTENA_AUD3; // Disable
 
     SAVE_A4();
-    GET_GLOBALS_PTR();
+    GET_A4();
     audio_handler();
-    RESTORE_A4();
     (*ADDR32(COUNTER0))++;  // counter
+    RESTORE_A4();
 }
 
 __attribute__ ((interrupt)) void
@@ -266,15 +295,11 @@ UninitI(void)
 __attribute__ ((interrupt)) static void
 VBlank(void)
 {
-#define VBLANK_FULL_DEBUG
     SAVE_A4();
-    GET_GLOBALS_PTR();
+    GET_A4();
 
     static uint16_t mouse_quad_last;
     uint16_t mouse_quad_cur;
-#ifndef VBLANK_FULL_DEBUG
-    uint32_t local_sp = get_sp();
-#endif
 
     /*
      * Reset bitplane DMA pointers. This could also be done by the copper.
@@ -370,14 +395,8 @@ VBlank(void)
     }
 
     if (vblank_ints++ > 120) {  // 2 seconds
-#ifdef VBLANK_FULL_DEBUG
         irq_debugger_msg("\nStuck?");
-#else
-        printf("\nStuck?");
-        irq_debugger(local_sp, 2);
-#endif
     }
-
     RESTORE_A4();
 }
 
@@ -396,9 +415,9 @@ VBlank(void)
  * custom.dmacon = DMAF_SETCLR | DMAF_MASTER | DMAF_RASTER | DMAF_COPPER;
  */
 
-/* Int29() is Amiga interrupt L5 (Serial RBF, DSKSYNC) */
+/* Serial() is Amiga interrupt L5 (Serial RBF, DSKSYNC) */
 __attribute__ ((interrupt)) void
-Int29(void)
+Serial(void)
 {
     serial_poll();
 }
@@ -422,19 +441,6 @@ Int7(void)
 }
 #endif
 
-__attribute__ ((interrupt)) static void Int12(void) { Unknown_common(12); }
-__attribute__ ((interrupt)) static void Int16(void) { Unknown_common(16); }
-__attribute__ ((interrupt)) static void Int17(void) { Unknown_common(17); }
-__attribute__ ((interrupt)) static void Int18(void) { Unknown_common(18); }
-__attribute__ ((interrupt)) static void Int19(void) { Unknown_common(19); }
-__attribute__ ((interrupt)) static void Int20(void) { Unknown_common(20); }
-__attribute__ ((interrupt)) static void Int21(void) { Unknown_common(21); }
-__attribute__ ((interrupt)) static void Int22(void) { Unknown_common(22); }
-__attribute__ ((interrupt)) static void Int23(void) { Unknown_common(23); }
-__attribute__ ((interrupt)) static void Int25(void) { Unknown_common(25); }
-__attribute__ ((interrupt)) static void Int30(void) { Unknown_common(30); }
-__attribute__ ((interrupt)) static void Int31(void) { Unknown_common(31); }
-
 #define VECTOR_WRAP(func) void _##func(void) { SAVE_FULL_FRAME(); func(); }
 #define VECTOR(func) _##func
 
@@ -450,24 +456,12 @@ VECTOR_WRAP(PrivVio);
 VECTOR_WRAP(Trace);
 VECTOR_WRAP(ExLineA);
 VECTOR_WRAP(ExLineF);
-VECTOR_WRAP(Int12);
 VECTOR_WRAP(CopErr);
 VECTOR_WRAP(FmtErr);
 VECTOR_WRAP(UninitI);
-VECTOR_WRAP(Int16);
-VECTOR_WRAP(Int17);
-VECTOR_WRAP(Int18);
-VECTOR_WRAP(Int19);
-VECTOR_WRAP(Int20);
-VECTOR_WRAP(Int21);
-VECTOR_WRAP(Int22);
-VECTOR_WRAP(Int23);
 VECTOR_WRAP(SpurIRQ);
-VECTOR_WRAP(Int25);
 VECTOR_WRAP(Ports);
-VECTOR_WRAP(Int29);
-VECTOR_WRAP(Int30);
-VECTOR_WRAP(Int31);
+VECTOR_WRAP(Serial);
 VECTOR_WRAP(Default);
 
 /*
@@ -498,7 +492,9 @@ VECTOR_WRAP(Default);
  *  30     78      Int6      L6 (EXTER / INTEN, CIA-B)
  *  31     7c                L7 NMI
  *  32     80                Trap #0
- *  ...                      Traps #1..#14
+ *  ...                      Traps #1..#6
+ *  39     9c                Trap #7 - generated by gcc for NULL dereference
+ *  ...                      Traps #8..#14
  *  47     bc                Trap #15
  *  48     c0                FPCP Branch or Set on Unordered Condition
  *  49     c4                FPCP Inexact Result
@@ -524,11 +520,11 @@ const void *vectors[] =
     INITSP,          reset_hi,        VECTOR(BusErr),  VECTOR(AddrErr),
     VECTOR(IllInst), VECTOR(DivZero), VECTOR(ChkInst), VECTOR(TrapV),
     VECTOR(PrivVio), VECTOR(Trace),   VECTOR(ExLineA), VECTOR(ExLineF),
-    VECTOR(Int12),   VECTOR(CopErr),  VECTOR(FmtErr),  VECTOR(UninitI),
-    VECTOR(Int16),   VECTOR(Int17),   VECTOR(Int18),   VECTOR(Int19),
-    VECTOR(Int20),   VECTOR(Int21),   VECTOR(Int22),   VECTOR(Int23),
-    VECTOR(SpurIRQ), VECTOR(Int25),   VECTOR(Ports),   VECTOR(VBlank),
-    VECTOR(Audio),   VECTOR(Int29),   VECTOR(Int30),   VECTOR(Int31),
+    VECTOR(Default), VECTOR(CopErr),  VECTOR(FmtErr),  VECTOR(UninitI),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(SpurIRQ), VECTOR(Default), VECTOR(Ports),   VECTOR(VBlank),
+    VECTOR(Audio),   VECTOR(Serial),  VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
@@ -551,94 +547,154 @@ vectors_init(void *base)
 //  __asm("move.w #0x2000, SR");
 }
 
-__attribute__ ((interrupt))
-__attribute__((noinline))
-static void
-irq_debugger(uint32_t sp_reg, uint mode)
+void
+irq_show_regs(uint which)
 {
-    uint x;
     uint32_t *sp;
-    extern uint8_t serial_active;
+    uint32_t sp_reg;
+    uint32_t pc_reg;
+    uint16_t sr_reg;
+    uint16_t vector_offset;
     uint reg;
-
-    SAVE_A4();
-    GET_GLOBALS_PTR();
-
-    vblank_ints = 0;
-    serial_active = 1;
-
-    if ((mode == 0) || (mode == 1)) {
-        full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
+    uint x;
+    full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
+    if (which != 0)
+        regs++;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
-        if (mode == 0)
-            memcpy(regs + 1, regs, sizeof (*regs));
-        regs++;
-#if 0
-        if ((regs->a[7] > 0x01000) && (regs->a[7] < 0x10000)) {
-            /* Fixup A7 past local variables */
-            sp_reg = regs->a[7] + 10 * sizeof (uint16_t);
-            regs->sr = *ADDR16(sp_reg);
-            regs->pc = *ADDR32(sp_reg + sizeof (uint16_t));
-//          sp_reg += 3 * sizeof (uint16_t);
-//          }
-#else
-        if ((regs->a[7] > 0x01000) && (regs->a[7] < 0x10000)) {
-            /* Fixup A7 past SR and PC */
-            sp_reg = regs->a[7] + 6;
-#endif
-        } else {
-            sp_reg = get_sp();
-        }
-        sp = (void *)(uintptr_t) sp_reg;
-        printf("  SP %08x  PC %08x  SR %02x\n",
-               sp_reg, regs->pc, regs->sr);
-        printf("  Ax ");
-        for (reg = 0; reg < ARRAY_SIZE(regs->a); reg++) {
-            if (reg != 0)
-                printf(" ");
-            printf("%08x", regs->a[reg]);
-        }
-        printf("\n  Dx ");
-        for (reg = 0; reg < ARRAY_SIZE(regs->d); reg++) {
-            if (reg != 0)
-                printf(" ");
-            printf("%08x", regs->d[reg]);
-        }
-#pragma GCC diagnostic pop
-        printf("\n");
-    } else if (sp_reg == 0) {
+
+    sp_reg = regs->a[7];
+    if ((sp_reg < 0x01000) || (sp_reg > 0x10000)) {
+        /* Fixup A7 past SR and PC */
         sp_reg = get_sp();
-        printf("  SP %08x", sp_reg);
-        sp = (void *)(uintptr_t) (sp_reg);
-    } else {
-        vblank_stack_regs_t *regs = (void *)(uintptr_t) (sp_reg);
-        sp = (void *) (regs + 1);
-        printf("  SP %08x  PC %08x  SR %02x\n",
-               sp_reg, regs->pc, regs->sr);
-        printf("  Ax ");
-        for (reg = 0; reg < ARRAY_SIZE(regs->a); reg++) {
-            if (reg != 0)
-                printf(" ");
-            printf("%08x", regs->a[reg]);
-        }
-        printf("\n  Dx ");
-        for (reg = 0; reg < ARRAY_SIZE(regs->d); reg++) {
-            if (reg != 0)
-                printf(" ");
-            printf("%08x", regs->d[reg]);
-        }
-        printf("\n");
     }
+    pc_reg = regs->pc;
+    sr_reg = regs->sr;
+    vector_offset = regs->vect;
+    printf("  SP %08x  PC %08x  SR %04x  Vect %04x",
+           sp_reg, pc_reg, sr_reg, vector_offset);
+    switch (vector_offset >> 12) {
+        default:
+            /* Invalid format */
+            printf("\n");
+            break;
+        case 0:
+            /*
+             * Four-word stack frame
+             * =======================
+             *
+             * Exception (Fmt $0)   PC points to
+             * -------------------- -----------------------------------------
+             * Interrupt            Next Instruction
+             * Format Error         RTE or FRESTORE instruction
+             * TRAP #N              Next Instruction
+             * Illegal Instruction  Illegal Instruction
+             * A-Line Instruction   A-Line Instruction
+             * F-Line Instruction   F-Line Instruction
+             * Privilege Violation  Instruction causing Violation
+             * FP Pre-Instruction   Floating-Point Instruction
+             * Unimplemented Int    Unimplemented Integer Instruction
+             * Unimplemented Addr   Instruction that used Effective Address
+             */
+            printf("\n");
+            sp_reg += 8;
+            break;
+        case 2:
+        case 3:
+            /*
+             * Six-word stack frame
+             * ====================
+             *
+             * Exception (Fmt $2)   PC points to
+             * -------------------- -----------------------------------------
+             * CHK, CHK2, TRAPcc,   Next Instruction
+             * TRAPV, Trace, or
+             * Zero Divide
+             *
+             * Unimplemented FP Ins Next Instruction
+             *
+             * Address Error        Instruction that caused the error
+             *
+             *
+             * Exception (Fmt $3)   PC points to
+             * -------------------- -----------------------------------------
+             * FP Post-Instruction  Next Instruction
+             */
+            printf("  Addr %08x\n", *ADDR32(sp_reg + 8));
+            sp_reg += 12;
+            break;
+        case 4:
+            /*
+             * Eight-word stack frame
+             * ======================
+             *
+             * Exception (Fmt $4)      PC points to
+             * --------------------    --------------------------------------
+             * Data or Instruction     Next Instruction
+             * Access Fault (ATC/BERR)
+             * BERR Read               Faulting instruction
+             * BERR Write              Next Instruction on push/store
+             *                         otherwise, Faulting Instruction
+             *
+             * FP Disabled Exception   Next Instruction
+             */
+            printf("  Addr %08x  Fault %08x\n",
+                   *ADDR32(sp_reg + 8), *ADDR32(sp_reg + 12));
+            sp_reg += 16;
+            break;
+    }
+    printf("  Ax ");
+    for (reg = 0; reg < ARRAY_SIZE(regs->a); reg++) {
+        if (reg != 0)
+            printf(" ");
+        printf("%08x", regs->a[reg]);
+    }
+    printf("\n  Dx ");
+    for (reg = 0; reg < ARRAY_SIZE(regs->d); reg++) {
+        if (reg != 0)
+            printf(" ");
+        printf("%08x", regs->d[reg]);
+    }
+#pragma GCC diagnostic pop
+    printf("\n");
+
+    sp = (void *)(uintptr_t) sp_reg;
     for (x = 0; x < 32; x++) {
         if ((x & 7) == 0)
             printf("\n ");
         printf(" %08x", *(sp++));
     }
-    printf("\nForcing cmdline...\n");
-    debug_cmdline();
-    reset_cpu();
+    printf("\n");
+}
 
+__attribute__((noinline))
+static void
+irq_debugger(uint mode)
+{
+    extern uint8_t serial_active;
+    full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
+
+    SAVE_A4();
+    GET_A4();
+
+    vblank_ints = 0;
+    serial_active = 1;
+
+    /*
+     * mode
+     * 0 - CPU regs need to be copied from save area
+     * 1 - CPU regs have already been copied from save area
+     * 2 - Partial CPU regs are on the stack
+     */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+    if (mode == 0)
+        memcpy(regs + 1, regs, sizeof (*regs));
+    regs++;
+    irq_show_regs(1);
+    printf("Forcing cmdline...\n");
+    debug_cmdline();
     RESTORE_A4();
 }
