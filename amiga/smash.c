@@ -944,8 +944,10 @@ smash_test_msg_loopback(void)
     if ((rc = get_msg_info(&omsginfo)) != 0)
         goto fail;
     if ((omsginfo.smi_atou_inuse != 0) || (omsginfo.smi_utoa_inuse != 0)) {
-        printf("Clearing atou=%u and utoa=%u bytes\n",
-                omsginfo.smi_atou_inuse, omsginfo.smi_utoa_inuse);
+        if (flag_debug) {
+            printf("Clearing atou=%u and utoa=%u bytes\n",
+                    omsginfo.smi_atou_inuse, omsginfo.smi_utoa_inuse);
+        }
 
         /* Discard old messages */
         if ((rc = send_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, NULL)) != 0) {

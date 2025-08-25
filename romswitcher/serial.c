@@ -254,11 +254,11 @@ putchar(int ch)
 {
     if (ch == '\n') {
         serial_putc('\r');
-        dbg_show_char('\r');
+        show_char('\r');
     }
 
     serial_putc((uint) ch);
-    dbg_show_char((uint) ch);
+    show_char((uint) ch);
     return (ch);
 }
 
@@ -268,8 +268,8 @@ puts(const char *str)
     serial_puts(str);
     serial_putc('\r');
     serial_putc('\n');
-    dbg_show_string(str);
-    dbg_show_string("\r\n");
+    show_string(str);
+    show_string("\r\n");
     return (0);
 }
 

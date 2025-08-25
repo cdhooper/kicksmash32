@@ -33,7 +33,7 @@
 /*
  * Memory map
  *    0x00000100     [0x4] pointer to globals
- *    0x00000120    [0x26] register save area
+ *    0x00000120    [0x50] register save area
  *    0x00000200   [0x100] vectors
  *    0x00001000    [0x80] runtime counters
  *    0x00001080    [0x80] sprite data

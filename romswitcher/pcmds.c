@@ -127,7 +127,7 @@ cmd_aconfig(int argc, char * const *argv)
 rc_t
 cmd_cpu(int argc, char * const *argv)
 {
-    if (argc < 1)
+    if (argc < 2)
         return (RC_USER_HELP);
 
     if (strcmp(argv[1], "cacr") == 0) {

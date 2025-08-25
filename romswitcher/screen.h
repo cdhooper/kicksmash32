@@ -30,8 +30,8 @@
 #define TEXTPEN      1  // Black
 #define HIGHLIGHTPEN 4  // Gold
 
-void dbg_show_char(uint ch);
-void dbg_show_string(const uint8_t *str);
+void show_char(uint ch);
+void show_string(const uint8_t *str);
 void render_text_at(const char *str, uint maxlen, uint x, uint y,
                     uint fg_color, uint bg_color);
 void screen_init(void);

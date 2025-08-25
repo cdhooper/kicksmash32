@@ -564,7 +564,7 @@ render_text_at(const char *str, uint maxlen, uint x, uint y,
 }
 
 void
-dbg_show_char(uint ch)
+show_char(uint ch)
 {
     switch (ch) {
         case '\r':  // Carriage return
@@ -620,12 +620,12 @@ next_row:
 }
 
 void
-dbg_show_string(const uint8_t *str)
+show_string(const uint8_t *str)
 {
     while (*str != '\0') {
         if (*str == '\n')
-            dbg_show_char('\r');
-        dbg_show_char(*str);
+            show_char('\r');
+        show_char(*str);
         str++;
     }
 }
