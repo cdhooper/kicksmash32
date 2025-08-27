@@ -140,6 +140,13 @@ cpu_set_cacr(uint32_t cacr)
 
 __attribute__((unused))
 static inline void
+cpu_set_dttr0(uint32_t ttr)
+{
+    __asm volatile("movec.l %0, dtt0" :: "r" (ttr):);
+}
+
+__attribute__((unused))
+static inline void
 cpu_cache_flush_040_both(void)
 {
     __asm volatile("nop\n\t"

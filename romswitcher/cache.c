@@ -25,6 +25,11 @@
 #define CACR_68030_ED  BIT(8)  // Enable data cache
 #define CACR_68030_CI  BIT(3)  // Clear instruction cache
 #define CACR_68030_EI  BIT(0)  // Enable instruction cache
+
+#define TTR_E     BIT(15)       // Enable transparent translation
+#define TTR_S_I   BIT(14)       // Supervisor mode -- Ignore
+#define TTR_CM_NC BIT(6)|BIT(5) // Cache mode -- Noncachable
+
 static uint32_t
 convert_030_cacr_to_040_cacr(uint32_t cacr_030)
 {
@@ -104,6 +109,7 @@ cache_init(void)
         case 68060:
             flush_tlb_040();
             cpu_cache_invalidate_040();
+            cpu_set_dttr0(TTR_E | TTR_S_I | TTR_CM_NC);
             if (cpu_type == 68060)
                 cpu_set_cacr(CACR_68060_CABC);
             cpu_set_cacr(CACR_68040_EDC | CACR_68040_EIC);
