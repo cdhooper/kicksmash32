@@ -8,7 +8,8 @@ PROG     := switcher
 OBJDIR   := objs
 AM	 := ../amiga
 FW	 := ../fw
-MED_SRCS := med_cmds.c mem_access.c med_cmdline.c med_readline.c db_disasm.c
+MED_SRCS := med_cmds.c mem_access.c med_cmdline.c med_readline.c \
+	    med_cpu.c db_disasm.c
 SRCS     := main.c autoconfig.c cache.c keyboard.c pcmds.c \
             printf.c reset.c scanf.c screen.c serial.c \
             sprite.c strtoll.c strtoull.c timer.c util.c blitter.c \
@@ -126,6 +127,7 @@ $(OBJDIR)/sprite.o: sprite.h
 $(OBJDIR)/main.o: sprite.h keyboard.h reset.h
 $(OBJDIR)/draw.o: draw.h intuition.h
 $(OBJDIR)/intuition.o: draw.h intuition.h
+$(OBJDIR)/cache.o $(OBJDIR)/main.o $(OBJDIR)/med_cpu.o: $(AM)/cpu_control.h
 $(OBJDIR)/sm_msg.o $(OBJDIR)/sm_msg_core.o: $(AM)/cpu_control.h $(AM)/sm_msg.h $(FW)/smash_cmd.h $(AM)/host_cmd.h
 
 $(MED_OBJS): med_cmdline.h med_cmds.h med_main.h med_readline.h pcmds.h

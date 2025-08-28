@@ -16,6 +16,7 @@
 #include "med_main.h"
 #include "med_cmdline.h"
 #include "med_cmds.h"
+#include "med_cpu.h"
 #include "med_readline.h"
 #include "pcmds.h"
 #include "util.h"

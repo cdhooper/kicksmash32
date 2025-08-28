@@ -43,17 +43,17 @@ typedef struct MinNode {
 } MinNode;
 
 typedef struct MinList {
-   struct MinNode *mlh_Head;
-   struct MinNode *mlh_Tail;
-   struct MinNode *mlh_TailPred;
+    struct MinNode *mlh_Head;
+    struct MinNode *mlh_Tail;
+    struct MinNode *mlh_TailPred;
 } MinList;
 
 typedef struct List {
-   struct  Node *lh_Head;
-   struct  Node *lh_Tail;
-   struct  Node *lh_TailPred;
-   uint8_t lh_Type;
-   uint8_t l_pad;
+    struct  Node *lh_Head;
+    struct  Node *lh_Tail;
+    struct  Node *lh_TailPred;
+    uint8_t lh_Type;
+    uint8_t l_pad;
 } List;
 
 #define FALSE 0

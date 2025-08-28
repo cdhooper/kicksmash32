@@ -69,7 +69,19 @@
                 break; \
             case 68040: \
             case 68060: \
-                cpu_cache_flush_040_both(); \
+                cpu_cache_flush_040(); \
+                break; \
+        } \
+        __asm volatile("nop");
+
+#define CACHE_INVALIDATE() \
+        switch (cpu_type) { \
+            case 68030: \
+                cpu_set_cacr(cpu_get_cacr() | CACRF_ClearI | CACRF_ClearD); \
+                break; \
+            case 68040: \
+            case 68060: \
+                cpu_cache_invalidate_040(); \
                 break; \
         } \
         __asm volatile("nop");
@@ -126,29 +138,167 @@ __attribute__((unused))
 static inline uint32_t
 cpu_get_cacr(void)
 {
-    uint32_t cacr;
-    __asm volatile("movec.l cacr, %0" : "=r" (cacr)::);
-    return (cacr);
+    uint32_t value;
+    __asm volatile("movec cacr, %0" : "=d" (value)::);
+    return (value);
 }
 
 __attribute__((unused))
 static inline void
-cpu_set_cacr(uint32_t cacr)
+cpu_set_cacr(uint32_t value)
 {
-    __asm volatile("movec.l %0, cacr" :: "r" (cacr):);
+    __asm volatile("movec %0, cacr" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline uint32_t
+cpu_get_dtt0(void)
+{
+    uint32_t value;
+    __asm volatile("movec dtt0, %0" : "=d" (value)::);
+    return (value);
 }
 
 __attribute__((unused))
 static inline void
-cpu_set_dttr0(uint32_t ttr)
+cpu_set_dtt0(uint32_t value)
 {
-    __asm volatile("movec.l %0, dtt0" :: "r" (ttr):);
+    __asm volatile("movec %0, dtt0" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline uint32_t
+cpu_get_dtt1(void)
+{
+    uint32_t value;
+    __asm volatile("movec dtt1, %0" : "=d" (value)::);
+    return (value);
 }
 
 __attribute__((unused))
 static inline void
-cpu_cache_flush_040_both(void)
+cpu_set_dtt1(uint32_t value)
 {
+    __asm volatile("movec %0, dtt1" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline uint32_t
+cpu_get_itt0(void)
+{
+    uint32_t value;
+    __asm volatile("movec itt0, %0" : "=d" (value)::);
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+cpu_set_itt0(uint32_t value)
+{
+    __asm volatile("movec %0, itt0" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline uint32_t
+cpu_get_itt1(void)
+{
+    uint32_t value;
+    __asm volatile("movec itt1, %0" : "=d" (value)::);
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+cpu_set_itt1(uint32_t value)
+{
+    __asm volatile("movec %0, itt1" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline uint32_t
+cpu_get_pcr(void)
+{
+    uint32_t value;
+    __asm volatile("movec pcr, %0" : "=d" (value)::);
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+cpu_set_pcr(uint32_t value)
+{
+    __asm volatile("movec %0, pcr" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline uint32_t
+cpu_get_tc(void)
+{
+    uint32_t value;
+    __asm volatile("movec tc, %0" : "=d" (value)::);
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+cpu_set_tc(uint32_t value)
+{
+    __asm volatile("movec %0, tc" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline uint32_t
+cpu_get_vbr(void)
+{
+    uint32_t value;
+    __asm volatile("movec vbr, %0" : "=d" (value)::);
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+cpu_set_vbr(uint32_t value)
+{
+    __asm volatile("movec %0, vbr" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline uint32_t
+fpu_get_fpcr(void)
+{
+    uint32_t value;
+    __asm volatile("fmove.l fpcr, %0" : "=d" (value)::);
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+fpu_set_fpcr(uint32_t value)
+{
+    __asm volatile("fmove.l %0, fpcr" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline uint32_t
+fpu_get_fpsr(void)
+{
+    uint32_t value;
+    __asm volatile("fmove.l fpsr, %0" : "=d" (value)::);
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+fpu_set_fpsr(uint32_t value)
+{
+    __asm volatile("fmove.l %0, fpsr" :: "d" (value):);
+}
+
+__attribute__((unused))
+static inline void
+cpu_cache_flush_040(void)
+{
+    /* Flush Instruction and Data Cache: 0xf4f8  cpusha %bc */
     __asm volatile("nop\n\t"
                    "cpusha %bc");
 }
@@ -157,32 +307,45 @@ __attribute__((unused))
 static inline void
 cpu_cache_flush_040_data(void)
 {
+    /* Flush Instruction and Data Cache: 0xf478  cpusha %dc */
     __asm volatile("nop\n\t"
-                   ".word 0xf478");  // Flush Data Cache
+                   ".word 0xf478");
 }
 
 __attribute__((unused))
 static inline void
 cpu_cache_flush_040_inst(void)
 {
+    /* Flush Instruction Cache: 0xf4b8  cpusha %ic */
     __asm volatile("nop\n\t"
-                   ".word 0xf4b8");  // Flush Inst Cache
-}
-
-__attribute__((unused))
-static inline void
-cpu_cache_flush_040_instdata(void)
-{
-    __asm volatile("nop\n\t"
-                   ".word 0xf4f8");  // Flush Inst and Data Cache
+                   ".word 0xf4b8");
 }
 
 __attribute__((unused))
 static inline void
 cpu_cache_invalidate_040(void)
 {
+    /* Invalidate Instruction and Data Cache: 0xf4d8  cinva %bc */
     __asm volatile("nop\n\t"
                    "cinva %bc");
+}
+
+__attribute__((unused))
+static inline void
+cpu_cache_invalidate_040_inst(void)
+{
+    /* Invalidate Instruction Cache: 0xf498  cinva %ic */
+    __asm volatile("nop\n\t"
+                   "cinva %ic");
+}
+
+__attribute__((unused))
+static inline void
+cpu_cache_invalidate_040_data(void)
+{
+    /* Invalidate Data Cache: 0xf458  cinva %dc */
+    __asm volatile("nop\n\t"
+                   "cinva %dc");
 }
 
 static __inline void __attribute__((__unused__))

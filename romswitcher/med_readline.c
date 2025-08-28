@@ -267,6 +267,7 @@ get_new_input_line(const char *prompt, char **line)
     int  ch;
 
     *line = NULL;
+    input_line_prompt = prompt;
 
     if (gui_wants_all_input)
         return (RC_NO_DATA);
@@ -730,12 +731,11 @@ readline(const char *prompt)
 
     (void) rl_initialize();
 
-    input_line_prompt = prompt;
     input_clear();
 
     /* Acquire input command by processing keystrokes */
     do {
-        rc_t rc = get_new_input_line(input_line_prompt, &cmd);
+        rc_t rc = get_new_input_line(prompt, &cmd);
         if (rc == RC_USR_ABORT)
             return (NULL);
         if (rc == RC_NO_DATA)

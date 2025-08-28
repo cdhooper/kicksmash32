@@ -103,13 +103,17 @@ cache_init(void)
         case 68030:
             flush_tlb_030();
             cpu_set_cacr(CACR_68030_CD | CACR_68030_CI);
-            cpu_set_cacr(CACR_68030_ED | CACR_68030_EI);
+            cpu_set_cacr(CACR_68030_EI);
+            /*
+             * XXX: Data cache must be disabled for I/O region.
+             *      We need 68030 MMU set up for that.
+             */
             break;
         case 68040:
         case 68060:
             flush_tlb_040();
             cpu_cache_invalidate_040();
-            cpu_set_dttr0(TTR_E | TTR_S_I | TTR_CM_NC);
+            cpu_set_dtt0(TTR_E | TTR_S_I | TTR_CM_NC);  // Don't cache I/O
             if (cpu_type == 68060)
                 cpu_set_cacr(CACR_68060_CABC);
             cpu_set_cacr(CACR_68040_EDC | CACR_68040_EIC);

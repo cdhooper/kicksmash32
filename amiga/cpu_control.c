@@ -76,10 +76,10 @@ get_cpu(void)
 
     __asm__ volatile(
         "move.l #68000, %0\n"      // Default to 68000
-        "move.l #0x80000100, d1\n" // Enable 68030 and 68040+ D cache
+        "move.l #0x80000100, d1\n" // Enable 68020, 68030 and 68040+ D cache
         "movec.l cacr, d0\n"       // Save current CACR
-        "movec.l d1, cacr\n"       // Save enable bits to CACR
-        "movec.l cacr, d1\n"       // Read enable bits back
+        "movec.l d1, cacr\n"       // Check if CACR bit can be written
+        "movec.l cacr, d1\n"
         "movec.l d0, cacr\n"       // Restore CACR
         "cmp.l #0, d1\n"
         "bne 1f\n"                 // If CACR is nonzero, it's 68020+
@@ -90,31 +90,31 @@ get_cpu(void)
         "bra 3f\n"
 
         // 68020+
-        "1: move.l #0x8000, d1\n"   // CACR.IE (68040 and 68060)
-        "movec.l d1, cacr\n"       // Check if CACR can be written
+        "1: move.l #0x8000, d1\n"  // CACR.IE (68040 and 68060)
+        "movec.l d1, cacr\n"       // Check if CACR bit can be written
         "movec.l cacr, d1\n"
         "movec.l d0, cacr\n"       // Restore CACR
         "cmp.l #0, d1\n"
         "beq 2f\n"                 // Doesn't have CACR.IE (ICache Enable)
 
         // 68040 or 68060
+        "move.l #68040, %0\n"      // 68040+
         "move.l #0x4000, d1\n"     // CACR.NAI (68060)
-        "movec.l d1, cacr\n"       // Check if CACR can be written
+        "movec.l d1, cacr\n"       // Check if CACR bit can be written
         "movec.l cacr, d1\n"
         "movec.l d0, cacr\n"       // Restore CACR
-        "move.l #68040, %0\n"
-        "cmp.l d0, d1\n"
+        "cmp.l #0, d1\n"
         "beq 3f\n"                 // No CACR.NAI; 68040 detected
         "move.l #68060, %0\n"
         "bra 3f\n"
 
         // 68020 or 68030
-        "2: move.l #68030, %0\n"    // 68020 or 68030 detected
+        "2: move.l #68030, %0\n"   // 68020 or 68030 detected
         "move.l #0x0200, d1\n"     // CACR.FD (68030)
-        "movec.l d1, cacr\n"       // Check if CACR can be written
+        "movec.l d1, cacr\n"       // Check if CACR bit can be written
         "movec.l cacr, d1\n"
         "movec.l d0, cacr\n"       // Restore CACR
-        "cmp.l d0, d1\n"
+        "cmp.l #0, d1\n"
         "bne 3f\n"                 // Has CACR.FD (Freeze Data); 68030 detected
         "move.l #68020, %0\n"      // 68020
         "3: nop\n"

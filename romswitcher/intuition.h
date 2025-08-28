@@ -209,15 +209,15 @@
 #define IEQUALIFIER_LEFTBUTTON          0x4000
 #define IEQUALIFIER_RELATIVEMOUSE       0x8000
 
-#define NTSC		                1
+#define NTSC                            1
 #define PAL                             4
 #define NTSC_MONITOR_ID                 0x00011000
 #define PAL_MONITOR_ID                  0x00021000
 #define HIRES_KEY                       0x00008000
-#define FS_NORMAL	                0
-#define FPF_ROMFONT	                0x01
+#define FS_NORMAL                       0
+#define FPF_ROMFONT                     0x01
 #define VTAG_BORDERSPRITE_SET           0x8000002f
-#define CUSTOMSCREEN	                0x000F
+#define CUSTOMSCREEN                    0x000F
 
 #define RASSIZE(w,h) ((uint32_t)(h) * ((((uint32_t)(w) + 15) >> 3) & 0xFFFE))
 

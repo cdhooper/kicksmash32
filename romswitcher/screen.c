@@ -725,8 +725,8 @@ screen_init(void)
      * PAL 640x256 50 Hz
      *      cw dff08e 2c81 2cc1 3c d4
      */
-    *DIWSTRT  = 0x2c81;  // Start of screen window  (V=2c H=81)
-    *DIWSTOP  = 0x2cc1;  // End of screen window    (V=f4 H=c1)
+    *DIWSTRT  = 0x2c80;  // Start of screen window  (V=2c H=80)
+    *DIWSTOP  = 0xfec4;  // End of screen window    (V=f4 H=c4)
     *DDFSTRT  = 0x3c;    // Bit plane DMA start
     *DDFSTOP  = 0xd4;    // Bit plane DMA stop
 #endif

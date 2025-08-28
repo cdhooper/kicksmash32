@@ -298,23 +298,33 @@ timer_init(void)
     /*
      * At this point, both timers should be ticking.
      *
-     * Watch CIA A TBHI. If it reaches 0 before CIAA_ELSB increments,
-     * then something is broken (no tick).
+     * Watch CIA A TBHI (ECLK). If it reaches 0 before CIAA_ELSB
+     * (HZ tick) increments, then something is broken (no tick).
      */
     eclk_tbhi = *CIAA_TBHI;
     hz_tick   = *CIAA_ELSB;
 
-    timeout = 10000000;
+    timeout = 1000;
     while (eclk_tbhi == *CIAA_TBHI)
         if (--timeout == 0) {
-            printf("CIA-A ECLK timeout\n");
+            if (eclk_tbhi == 0)
+                printf("CIA-E ECLK done too early\n");
+            else
+                printf("CIA-A ECLK timeout\n");
+
+fail_use_defaults:
+            /* Use NTSC 60 Hz as defaults */
+            *CIAA_CRB = CIA_CRB_START;
+            vblank_hz = eclk_to_hz_table[0].tick_hz;
+            eclk_ticks_per_sec = eclk_to_hz_table[0].eclk;
+            vid_type = eclk_to_hz_table[0].vid_type;
             return;
         }
 
     while (hz_tick == *CIAA_ELSB) {
         if (*CIAA_TBHI == 0) {
             printf("CIA-A Hz tick timeout\n");
-            return;
+            goto fail_use_defaults;
         }
     }
 

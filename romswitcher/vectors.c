@@ -74,6 +74,83 @@ __attribute__((packed)) {
 
 uint vblank_ints;
 
+static const char *const vector_names[] = {
+                            // Vector Address
+    NULL,                   // 0     0x00      Reset initial SP
+    "Reset",                // 1     0x04      Reset initial PC
+    "Bus Error",            // 2     0x08      Bus Error
+    "Address Error",        // 3     0x0c      Address Error
+    "Illegal Instruction",  // 4     0x10      Illegal Instruction
+    "Divide by Zero",       // 5     0x14      Divide by Zero
+    "Check Instruction",    // 6     0x18      Check Instruction (CHK, CHK2)
+    "TrapV",                // 7     0x1c      Trap (cpTRAPcc, TRAPcc, TRAPV)
+    "Privilege Violation",  // 8     0x20      Privilege Violation
+    "Instruction Trace",    // 9     0x24      Instruction Trace
+    "FPU Line A",           // 10    0x28      Unimplemented Instr (FPU line A)
+    "FPU Line F",           // 11    0x2c      Unimplemented Instr (FPU line F)
+    NULL,                   // 12    0x30      Unassigned
+    "Coprocessor Error",    // 13    0x34      Coprocessor Protocol Violation
+    "Format Error",         // 14    0x38      Format Error
+    "Uninitialized Int.",   // 15    0x3c      Uninitialized Interrupt
+    NULL, NULL, NULL, NULL, // 16    0x40      Unassigned / reserved
+    NULL, NULL, NULL,       // ...             Unassigned / reserved
+    NULL,                   // 23    0x5c      Unassigned / reserved
+    "Spurious Interrupt",   // 24    0x60      Spurious Interrupt (TBE)
+    "INT1",                 // 25    0x64      L1 (DSKBLK, SOFTINT)
+    "INT2 Ports",           // 26    0x68      L2 (CIA-A, Zorro, onboard SCSI)
+    "INT3 VBlank",          // 27    0x6c      L3 (VERTB, COPER, BLIT)
+    "INT4 Audio",           // 28    0x70      L4 (AUD0, AUD1, AUD2, AUD3)
+    "INT5 Serial",          // 29    0x74      L5 (Serial RBF, DSKSYNC)
+    "INT6",                 // 30    0x78      L6 (EXTER / INTEN, CIA-B)
+    "INT7 NMI",             // 31    0x7c      L7 NMI
+    NULL, NULL, NULL, NULL, // 32    0x80      Trap #0
+    NULL, NULL, NULL, NULL, // ...
+    NULL, NULL, NULL, NULL, // 39    0x9c      Trap #7 - (gcc NULL dereference)
+    NULL, NULL, NULL,       // ...
+    NULL,                   // 47    0xbc      Trap #15
+    "FPCP Branch",          // 48    0xc0      FPCP Branch or Set Unordered Cond
+    "FPCP Inexact Result",  // 49    0xc4      FPCP Inexact Result
+    "FPCP Divide by Zero",  // 50    0xc8      FPCP Divide by Zero
+    "FPCP Underflow",       // 51    0xcc      FPCP Underflow
+    "FPCP Operand Error",   // 52    0xd0      FPCP Operand Error
+    "FPCP Overflow",        // 53    0xd4      FPCP Overflow
+    "FPCP NAN",             // 54    0xd8      FPCP Signaling NAN
+    NULL,                   // 55    0xdc      Unassigned / reserved
+    "MMU Conf Error",       // 56    0xe0      MMU Configuration Error
+    "MC688851",             // 57    0xe4      MC688851-specific
+    "MC688851",             // 58    0xe8      MC688851-specific
+                            // ...             Unassigned / reserved
+                            // 64    0x100     User Defined Vector #0
+                            // ...
+                            // 255   0x3fc     User Defined Vector #191
+};
+
+static const char *
+get_vector_name(uint vector_offset)
+{
+    static char txtname[32];
+    const char *name = NULL;
+    uint vec = (vector_offset >> 2) & 0xff;
+    if (vec < ARRAY_SIZE(vector_names))
+        name = vector_names[vec];
+    if (name == NULL) {
+        switch (vec) {
+            case 32 ...47:
+                sprintf(txtname, "Trap #%u", vec - 32);
+                break;
+            case 64 ...255:
+                sprintf(txtname, "User Defined Vector #%u", vec - 64);
+                break;
+            default:
+                sprintf(txtname, "Unknown Interrupt %u\n", vec);
+                break;
+        }
+        name = txtname;
+    }
+    return (name);
+}
+
+
 static void Default(void);
 void reset_hi(void);
 __attribute__((noinline)) static void irq_debugger(uint mode);
@@ -92,16 +169,9 @@ irq_debugger_msg(const char *msg)
     irq_debugger(1);
 }
 
-__attribute__ ((noinline)) static void
-Unknown_common(uint intnum)
+__attribute__ ((interrupt)) static void
+Default(void)
 {
-#undef DEBUG_UNKNOWN_IRQ
-#ifdef DEBUG_UNKNOWN_IRQ
-    char buf[40];
-    sprintf(buf, "\nUnknown interrupt %u\n", intnum);
-    irq_debugger_msg(buf);
-    reset_cpu();
-#else
     char buf[40];
     SAVE_A4();
     GET_A4();
@@ -116,22 +186,20 @@ Unknown_common(uint intnum)
         full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
         memcpy(regs + 1, regs, sizeof (*regs));
         sp_reg = regs->a[7];
-#pragma GCC diagnostic pop
-        vector_offset = *ADDR16(sp_reg + 6);
-        intnum = (vector_offset & 0x0fff) >> 2;
-        sprintf(buf, "\nUnknown interrupt %u\n", intnum);
-        serial_puts(buf);
-        if (unknown_count < 3)
+        vector_offset = *ADDR16(sp_reg + 6) & 0xff;
+        if ((vector_offset < 0x60) ||
+            ((vector_offset >= 0x80) && (vector_offset < 0x100))) {
+            /* Fatal exception */
+            irq_debugger(1);
+        } else if (unknown_count < 3) {
             irq_show_regs(1);
+        } else if (unknown_count < 20) {
+            sprintf(buf, "\n%\n", get_vector_name(vector_offset));
+            serial_puts(buf);
+        }
+#pragma GCC diagnostic pop
     }
-#endif
     RESTORE_A4();
-}
-
-__attribute__ ((interrupt)) static void
-Default(void)
-{
-    Unknown_common(0);
 }
 
 __attribute__ ((interrupt)) void
@@ -178,118 +246,6 @@ Ports(void)
     }
 
     (*ADDR32(COUNTER2))++;  // counter
-}
-
-/* Address Error (misaligned) */
-__attribute__ ((interrupt)) static void
-AddrErr(void)
-{
-    irq_debugger_msg("Address Error\n");
-    reset_cpu();
-}
-
-/* Bus Cycle timeout or failure */
-__attribute__ ((interrupt)) static void
-BusErr(void)
-{
-    irq_debugger_msg("Bus Error\n");
-    reset_cpu();
-}
-
-/* Illegal Instruction */
-__attribute__ ((interrupt)) static void
-IllInst(void)
-{
-    irq_debugger_msg("Illegal Instruction\n");
-    reset_cpu();
-}
-
-/* Division by Zero */
-__attribute__ ((interrupt)) static void
-DivZero(void)
-{
-    irq_debugger_msg("Division by Zero\n");
-    reset_cpu();
-}
-
-/* TRAPV with overflow flag set */
-__attribute__ ((interrupt)) static void
-TrapV(void)
-{
-    irq_debugger_msg("TrapV\n");
-    reset_cpu();
-}
-
-/* Privilege Violation */
-__attribute__ ((interrupt)) static void
-PrivVio(void)
-{
-    irq_debugger_msg("Privilege Violation\n");
-    reset_cpu();
-}
-
-/* Unimplemented Instruction (line A) */
-__attribute__ ((interrupt)) static void
-ExLineA(void)
-{
-    irq_debugger_msg("Unimplemented Instruction (line A)\n");
-    reset_cpu();
-}
-
-/* Unimplemented Instruction (line F) */
-__attribute__ ((interrupt)) static void
-ExLineF(void)
-{
-    irq_debugger_msg("Unimplemented Instruction (line F)\n");
-    reset_cpu();
-}
-
-/* Check Instruction */
-__attribute__ ((interrupt)) static void
-ChkInst(void)
-{
-    irq_debugger_msg("Check Instruction\n");
-    reset_cpu();
-}
-
-/* Instruction Trace */
-__attribute__ ((interrupt)) static void
-Trace(void)
-{
-    irq_debugger_msg("Instruction Trace\n");
-    reset_cpu();
-}
-
-/* Spurious IRQ */
-__attribute__ ((interrupt)) static void
-SpurIRQ(void)
-{
-    irq_debugger_msg("Spurious IRQ\n");
-    reset_cpu();
-}
-
-/* Coprocessor Error */
-__attribute__ ((interrupt)) static void
-CopErr(void)
-{
-    irq_debugger_msg("Coprocessor Error\n");
-    reset_cpu();
-}
-
-/* Format Error */
-__attribute__ ((interrupt)) static void
-FmtErr(void)
-{
-    irq_debugger_msg("Format Error\n");
-    reset_cpu();
-}
-
-/* Uninitialized Interrupt */
-__attribute__ ((interrupt)) static void
-UninitI(void)
-{
-    irq_debugger_msg("Uninitialized Interrupt\n");
-    reset_cpu();
 }
 
 __attribute__ ((interrupt)) static void
@@ -394,8 +350,8 @@ VBlank(void)
         *SPR7PTH = (uintptr_t) spritex_data;
     }
 
-    if (vblank_ints++ > 120) {  // 2 seconds
-        irq_debugger_msg("\nStuck?");
+    if (vblank_ints++ > 180) {  // 3 seconds
+        irq_debugger_msg("\nStuck?\n");
     }
     RESTORE_A4();
 }
@@ -446,20 +402,6 @@ Int7(void)
 
 VECTOR_WRAP(Audio);
 VECTOR_WRAP(VBlank);
-VECTOR_WRAP(BusErr);
-VECTOR_WRAP(AddrErr);
-VECTOR_WRAP(IllInst);
-VECTOR_WRAP(DivZero);
-VECTOR_WRAP(ChkInst);
-VECTOR_WRAP(TrapV);
-VECTOR_WRAP(PrivVio);
-VECTOR_WRAP(Trace);
-VECTOR_WRAP(ExLineA);
-VECTOR_WRAP(ExLineF);
-VECTOR_WRAP(CopErr);
-VECTOR_WRAP(FmtErr);
-VECTOR_WRAP(UninitI);
-VECTOR_WRAP(SpurIRQ);
 VECTOR_WRAP(Ports);
 VECTOR_WRAP(Serial);
 VECTOR_WRAP(Default);
@@ -517,13 +459,13 @@ VECTOR_WRAP(Default);
 __attribute__ ((section (".text")))
 const void *vectors[] =
 {
-    INITSP,          reset_hi,        VECTOR(BusErr),  VECTOR(AddrErr),
-    VECTOR(IllInst), VECTOR(DivZero), VECTOR(ChkInst), VECTOR(TrapV),
-    VECTOR(PrivVio), VECTOR(Trace),   VECTOR(ExLineA), VECTOR(ExLineF),
-    VECTOR(Default), VECTOR(CopErr),  VECTOR(FmtErr),  VECTOR(UninitI),
+    INITSP,          reset_hi,        VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(SpurIRQ), VECTOR(Default), VECTOR(Ports),   VECTOR(VBlank),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Ports),   VECTOR(VBlank),
     VECTOR(Audio),   VECTOR(Serial),  VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
@@ -572,12 +514,14 @@ irq_show_regs(uint which)
     pc_reg = regs->pc;
     sr_reg = regs->sr;
     vector_offset = regs->vect;
+    vblank_ints = 0;
+    printf("%s\n", get_vector_name(vector_offset));
     printf("  SP %08x  PC %08x  SR %04x  Vect %04x",
            sp_reg, pc_reg, sr_reg, vector_offset);
+    vblank_ints = 0;
     switch (vector_offset >> 12) {
         default:
             /* Invalid format */
-            printf("\n");
             break;
         case 0:
             /*
@@ -597,7 +541,6 @@ irq_show_regs(uint which)
              * Unimplemented Int    Unimplemented Integer Instruction
              * Unimplemented Addr   Instruction that used Effective Address
              */
-            printf("\n");
             sp_reg += 8;
             break;
         case 2:
@@ -621,7 +564,7 @@ irq_show_regs(uint which)
              * -------------------- -----------------------------------------
              * FP Post-Instruction  Next Instruction
              */
-            printf("  Addr %08x\n", *ADDR32(sp_reg + 8));
+            printf("  Addr %08x", *ADDR32(sp_reg + 8));
             sp_reg += 12;
             break;
         case 4:
@@ -639,19 +582,21 @@ irq_show_regs(uint which)
              *
              * FP Disabled Exception   Next Instruction
              */
-            printf("  Addr %08x  Fault %08x\n",
+            printf("  Addr %08x  Fault %08x",
                    *ADDR32(sp_reg + 8), *ADDR32(sp_reg + 12));
             sp_reg += 16;
             break;
     }
-    printf("  Ax ");
+    printf("\n  Ax ");
     for (reg = 0; reg < ARRAY_SIZE(regs->a); reg++) {
+        vblank_ints = 0;
         if (reg != 0)
             printf(" ");
         printf("%08x", regs->a[reg]);
     }
     printf("\n  Dx ");
     for (reg = 0; reg < ARRAY_SIZE(regs->d); reg++) {
+        vblank_ints = 0;
         if (reg != 0)
             printf(" ");
         printf("%08x", regs->d[reg]);
@@ -661,6 +606,7 @@ irq_show_regs(uint which)
 
     sp = (void *)(uintptr_t) sp_reg;
     for (x = 0; x < 32; x++) {
+        vblank_ints = 0;
         if ((x & 7) == 0)
             printf("\n ");
         printf(" %08x", *(sp++));
@@ -697,4 +643,8 @@ irq_debugger(uint mode)
     printf("Forcing cmdline...\n");
     debug_cmdline();
     RESTORE_A4();
+#if 0
+    /* Don't attempt to recover from exception */
+    reset_cpu();
+#endif
 }

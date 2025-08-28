@@ -1570,7 +1570,11 @@ opcode_fpu(dis_buffer_t *dbuf, u_short opc)
 
 		switch(opmode) {
 		case FMOVE:
+#ifdef PORT_MED
+			get_fpustdGEN(dbuf,ext,"fmove");
+#else
 			get_fpustdGEN(dbuf,ext,"fmov");
+#endif
 			return;
 		case FABS:
 			get_fpustdGEN(dbuf,ext,"fabs");
@@ -2380,9 +2384,9 @@ opcode_movec(dis_buffer_t *dbuf, u_short opc)
 	dbuf->used++;
 
 #ifdef PORT_MED
-	addstr(dbuf, "movc\t");
-#else
 	addstr(dbuf, "movec\t");
+#else
+	addstr(dbuf, "movc\t");
 #endif
 	if (ISBITSET(opc,0)) {
 		dbuf->val++;

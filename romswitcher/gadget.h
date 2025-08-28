@@ -354,8 +354,8 @@ struct Message *WaitPort(struct MsgPort *port);
 struct Gadget *CreateContext(Gadget **gad_list);
 IntuiMessage *GT_GetIMsg(struct MsgPort *port);
 void GT_ReplyIMsg(IntuiMessage *imsg);
-int32_t GT_GetGadgetAttrs(Gadget *gad, Window *win, Requester *req, ... );
-void GT_SetGadgetAttrs(Gadget *gad, Window *win, Requester *req, ... );
+int32_t GT_GetGadgetAttrs(Gadget *gad, Window *win, Requester *req, ...);
+void GT_SetGadgetAttrs(Gadget *gad, Window *win, Requester *req, ...);
 void GT_RefreshWindow(Window *win, Requester *req);
 struct Gadget *CreateGadget(uint32_t kind, Gadget *gad,
                             struct NewGadget *ng, ...);

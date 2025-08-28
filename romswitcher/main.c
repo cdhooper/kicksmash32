@@ -164,10 +164,12 @@ main_poll()
 void __attribute__ ((noinline))
 setup(void)
 {
+    irq_disable();
     globals_init();
     chipset_init_early();
     memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
     vectors_init((void *)VECTORS_BASE);
+    irq_enable();
     cpu_control_init();  // Get CPU type
     serial_init();
     serial_puts("\n\033[31m");
