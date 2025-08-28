@@ -132,15 +132,23 @@ show_fault_valid:
         uint value = 0;
         if ((argc < 3) || (argc > 4)) {
 show_reg_valid:
-            printf("cpu reg cacr [<val>]  - get / set CPU CACR\n"
-                   "cpu reg dtt0 [<val>]  - get / set CPU DTT0\n"
-                   "cpu reg dtt1 [<val>]  - get / set CPU DTT1\n"
-                   "cpu reg fpcr [<val>]  - get / set FPU FPCR\n"
-                   "cpu reg fpsr [<val>]  - get / set FPU FPSR\n"
-                   "cpu reg itt0 [<val>]  - get / set CPU ITT0\n"
-                   "cpu reg itt1 [<val>]  - get / set CPU ITT1\n"
-                   "cpu reg pcr [<val>]   - get / set CPU PCR\n"
-                   "cpu reg tc [<val>]    - get / set CPU MMU TC\n"
+            printf("cpu reg cacr [<val>]  - get / set CPU CACR\n");
+            if (cpu_type > 68030) {
+                printf("cpu reg dtt0 [<val>]  - get / set CPU DTT0\n"
+                       "cpu reg dtt1 [<val>]  - get / set CPU DTT1\n");
+            }
+            printf("cpu reg fpcr [<val>]  - get / set FPU FPCR\n"
+                   "cpu reg fpsr [<val>]  - get / set FPU FPSR\n");
+            if (cpu_type > 68030) {
+                printf("cpu reg itt0 [<val>]  - get / set CPU ITT0\n"
+                       "cpu reg itt1 [<val>]  - get / set CPU ITT1\n");
+            }
+            printf("cpu reg pcr [<val>]   - get / set CPU PCR\n");
+            if (cpu_type == 68030) {
+                printf("cpu reg tt0 [<val>]   - get / set CPU TT0\n"
+                       "cpu reg tt1 [<val>]   - get / set CPU TT1\n");
+            }
+            printf("cpu reg tc [<val>]    - get / set CPU MMU TC\n"
                    "cpu reg vbr [<val>]   - get / set CPU VBR\n");
             return (RC_BAD_PARAM);
         }
@@ -197,6 +205,16 @@ show_reg_valid:
                 printf("%08x\n", cpu_get_tc());
             else
                 cpu_set_tc(value);
+        } else if (strcmp(argv[2], "tt0") == 0) {
+            if (argc < 4)
+                printf("%08x\n", cpu_get_tt0());
+            else
+                cpu_set_tt0(value);
+        } else if (strcmp(argv[2], "tt1") == 0) {
+            if (argc < 4)
+                printf("%08x\n", cpu_get_tt1());
+            else
+                cpu_set_tt1(value);
         } else if (strcmp(argv[2], "vbr") == 0) {
             if (argc < 4)
                 printf("%08x\n", cpu_get_vbr());

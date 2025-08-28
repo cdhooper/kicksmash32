@@ -86,8 +86,8 @@ static const char *const vector_names[] = {
     "TrapV",                // 7     0x1c      Trap (cpTRAPcc, TRAPcc, TRAPV)
     "Privilege Violation",  // 8     0x20      Privilege Violation
     "Instruction Trace",    // 9     0x24      Instruction Trace
-    "FPU Line A",           // 10    0x28      Unimplemented Instr (FPU line A)
-    "FPU Line F",           // 11    0x2c      Unimplemented Instr (FPU line F)
+    "CPU Line A",           // 10    0x28      Unimplemented Instr (CPU line A)
+    "CPU Line F",           // 11    0x2c      Unimplemented Instr (CPU line F)
     NULL,                   // 12    0x30      Unassigned
     "Coprocessor Error",    // 13    0x34      Coprocessor Protocol Violation
     "Format Error",         // 14    0x38      Format Error

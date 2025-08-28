@@ -248,6 +248,62 @@ cpu_set_tc(uint32_t value)
 
 __attribute__((unused))
 static inline uint32_t
+cpu_get_tt0(void)
+{
+    uint32_t value;
+    /*
+     * op  3:0   is (sp)
+     * ext 15:13 is 0 for tt0 and tt1
+     * ext 12:10 is 2 for tt0 and 3 for tt1
+     * ext 9     is 0 for mem to reg, 1 for reg to mem
+     */
+    __asm__ __volatile__("subq.l #4,sp \n\t"
+                         ".long 0xf0170a00 \n\t"  // pmove.l tt0,(sp)
+                         "move.l (sp)+,d0 \n\t"
+                         : "=d" (value));
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+cpu_set_tt0(uint32_t value)
+{
+    __asm__ __volatile__("move.l %0,-(sp) \n\t"
+                         ".long 0xf0170800 \n\t"  // pmove.l (sp),tt0
+                         "adda.l #4,sp \n\t"
+                         : "=d" (value));
+}
+
+__attribute__((unused))
+static inline uint32_t
+cpu_get_tt1(void)
+{
+    uint32_t value;
+    /*
+     * op  3:0   is (sp)
+     * ext 15:13 is 0 for tt0 and tt1
+     * ext 12:10 is 2 for tt0 and 3 for tt1
+     * ext 9     is 0 for mem to reg, 1 for reg to mem
+     */
+    __asm__ __volatile__("subq.l #4,sp \n\t"
+                         ".long 0xf0170e00 \n\t"  // pmove.l rt1,(sp)
+                         "move.l (sp)+,d0 \n\t"
+                         : "=d" (value));
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+cpu_set_tt1(uint32_t value)
+{
+    __asm__ __volatile__("move.l %0,-(sp) \n\t"
+                         ".long 0xf0170c00 \n\t"  // pmove.l (sp),rt1
+                         "adda.l #4,sp \n\t"
+                         : "=d" (value));
+}
+
+__attribute__((unused))
+static inline uint32_t
 cpu_get_vbr(void)
 {
     uint32_t value;
