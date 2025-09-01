@@ -164,9 +164,8 @@ ee_address_override(uint8_t bits, uint override)
                 printf(" A%u=%u", 17 + bit, !shift);
 #endif
         } else {
-            /* Disable drive: Weak pull down pin */
-            GPIO_BSRR(port) = pin << 16;
-            gpio_setmode(port, pin, GPIO_SETMODE_INPUT_PULLUPDOWN);
+            /* Disable drive */
+            gpio_setmode(port, pin, GPIO_SETMODE_INPUT);
 #ifdef ADDR_OVERRIDE_DEBUG
             if ((override == 0) && (bits != last))
                 printf(" !A%u", 17 + bit);

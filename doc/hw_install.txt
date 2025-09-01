@@ -3,8 +3,9 @@ KickSmash Hardware Install
 
 KickSmash has so far only been tested in Amiga 3000, 4000, and 4000T systems.
 There are known issues with KickSmash in the Amiga 1200, specifically with
-the TF1260. This combination is not recommended. The issue is Gayle, which will
-glitch ROM enables to KickSmash while code is running on the TF.
+the TF1260 and other CPU accelerators. This combination is not recommended.
+The issue is Gayle, which will glitch ROM enables to KickSmash while code is
+running on the TF.
 
 1. Turn off your computer
     It had to be said.
@@ -55,7 +56,10 @@ glitch ROM enables to KickSmash while code is running on the TF.
 
 5. Attach your KBRST wire to the KBRST pin on KickSmash
 
-6. Optionally attach a USB-C cable to your KickSmash
+6. Optionally attach the A18 (CPU A20) and A19 (CPU A21) pins to Romy
+   or a physical switch to select Kickstart images.
+
+7. Optionally attach a USB-C cable to your KickSmash
     This cable would be routed out the back of your Amiga and then
     connected to your host. Leaving the USB-C connected provides for
     the possibility of a couple features which will be explained in
@@ -65,11 +69,11 @@ glitch ROM enables to KickSmash while code is running on the TF.
     feature is that software on the Amiga can communicate with the
     hostsmash application for host file access.
 
-7. Optionally attach your ST-Link and serial console
+8. Optionally attach your ST-Link and serial console
     It's not necessary unless you plan to do firmware programming. Ensure
     the cable is oriented correctly.
 
-8. Power on your computer
+9. Power on your computer
     If you previously attached your USB-C cable to your host computer,
     the KickSmash power LED should have already been on while your
     Amiga was still powered off. If not, once you power on your Amiga,
@@ -79,7 +83,7 @@ glitch ROM enables to KickSmash while code is running on the TF.
     don't see the POWER LED, it could be that KickSmash is misaligned
     in the socket.
 
-9. Watch for signs of life from your Amiga
+10. Watch for signs of life from your Amiga
     You should see immediate READ LED activity on the KickSmash.
     Your Amiga power LED should go from dim to bright. These are
     excellent signs that things are working.

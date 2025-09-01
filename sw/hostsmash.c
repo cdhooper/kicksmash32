@@ -2011,7 +2011,7 @@ detect_byte_order(uint8_t *bufp)
  * @global [in]  dir     - Image swap direction (SWAP_TO_ROM or SWAP_FROM_ROM)
  * @return       None.
  */
-static void
+static int
 execute_swapmode(uint8_t *buf, uint len, uint dir)
 {
     bool_t  printed    = FALSE;
@@ -2188,9 +2188,9 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
         default:
 unrecognized:
             printf("\n");
-            errx(EXIT_FAILURE,
-                 "Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
-                 buf[0], buf[1], buf[2], buf[3]);
+            warnx("Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
+                  buf[0], buf[1], buf[2], buf[3]);
+            return (1);
     }
 #undef DEBUG_SWAPMODE
 #ifdef DEBUG_SWAPMODE
@@ -2200,6 +2200,7 @@ unrecognized:
     printf(", ");
 #endif
     printf("Length 0x%x\n", len);
+    return (0);
 }
 
 /*
@@ -2432,12 +2433,13 @@ get_kicksmash_mode(void)
  * @return       None.
  * @exit         EXIT_FAILURE - The program will terminate on file access error.
  */
-static void
+static int
 eeprom_read(const char *filename, uint bank, uint addr, uint len)
 {
     char cmd[64];
     char *eebuf;
     int rxcount;
+    int rc = 0;
 
     if (addr == ADDR_NOT_SPECIFIED)
         addr = 0x000000;  // Start of EEPROM
@@ -2458,11 +2460,15 @@ eeprom_read(const char *filename, uint bank, uint addr, uint len)
 
     snprintf(cmd, sizeof (cmd) - 1, "prom read %x %x", addr, len);
     cmd[sizeof (cmd) - 1] = '\0';
-    if (send_cmd(cmd))
+    if (send_cmd(cmd)) {
+        rc = 1;
         goto read_fail; // "timeout" was reported in this case
+    }
     rxcount = receive_ll_crc(eebuf, len);
-    if (rxcount == -1)
+    if (rxcount == -1) {
+        rc = 1;
         goto read_fail;  // Send error was reported
+    }
     if (rxcount < len) {
         printf("Receive failed at byte 0x%x.\n", rxcount);
         if (strncmp(eebuf + rxcount - 11, "FAILURE", 8) == 0) {
@@ -2475,7 +2481,10 @@ eeprom_read(const char *filename, uint bank, uint addr, uint len)
         FILE *fp = fopen(filename, "wb");
         if (fp == NULL)
             err(EXIT_FAILURE, "Failed to open %s", filename);
-        execute_swapmode((uint8_t *)eebuf, rxcount, SWAP_FROM_ROM);
+        if (execute_swapmode((uint8_t *)eebuf, rxcount, SWAP_FROM_ROM)) {
+            rc = 1;
+            goto read_fail;
+        }
         written = fwrite(eebuf, rxcount, 1, fp);
         if (written != 1)
             err(EXIT_FAILURE, "Failed to write %s", filename);
@@ -2485,6 +2494,7 @@ eeprom_read(const char *filename, uint bank, uint addr, uint len)
     }
 read_fail:
     free(eebuf);
+    return (rc);
 }
 
 static uint8_t *
@@ -6658,8 +6668,8 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
 
     get_kicksmash_mode();
     if (mode & MODE_READ) {
-        eeprom_read(file1, bank, baseaddr, len);
-        return (0);
+        rc = eeprom_read(file1, bank, baseaddr, len);
+        goto run_finish;
     }
 
     rc = 0;
@@ -6687,7 +6697,9 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
             free(filebuf2);
             filebuf = newbuf;
         }
-        execute_swapmode(filebuf, len, SWAP_TO_ROM);
+        rc = execute_swapmode(filebuf, len, SWAP_TO_ROM);
+        if (rc != 0)
+            goto run_finish;
     }
 
     /* Length might have changed due to merged ROMs -- do erase now */
@@ -6731,6 +6743,7 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
 
         free(filebuf);
     }
+run_finish:
     if (amiga_was_put_in_reset) {
         reset_amiga(0);
         time_delay_msec(100);

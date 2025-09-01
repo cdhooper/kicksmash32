@@ -1632,7 +1632,7 @@ rc_t
 cmd_version(int argc, char * const *argv)
 {
     extern const char RomID[];
-    printf("%s\n", RomID);
+    printf("%s\n", RomID + 6);
     return (RC_SUCCESS);
 }
 

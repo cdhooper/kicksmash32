@@ -29,14 +29,19 @@ static uint32_t *freelist_chipmem = NULL;
 
 #undef DEBUG_MALLOC
 #ifdef DEBUG_MALLOC
-#define DPRINTF(fmt, ...) printf(fmt, ...)
+#define DPRINTF(...) printf(__VA_ARGS__)
 
 static void
 show_freelist(void)
 {
     uint32_t *cur;
+    uint      count = 0;
     printf("FL:");
-    for (cur = freelist; cur != NULL; cur = ADDR32(cur[1]))
+    if (freelist == NULL) {
+        printf(" NULL\n");
+        return;
+    }
+    for (cur = freelist; (cur != NULL) && (count++ < 20); cur = ADDR32(cur[1]))
         printf(" %x(%x)", cur, cur[0]);
     printf("\n");
 }

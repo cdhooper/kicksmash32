@@ -416,13 +416,16 @@ Each of these are called a bank in the terminology used by this software.
 You may wonder how Romy allows a larger ROM to be present in the Amiga.
 The Amiga memory map reserves the 0x00f80000-0x00ffffff region for the
 Kickstart ROM. A second region, not supported by Gary in the Amiga 3000
-or 4000, is the address range 0x00f00000-0x00f7ffff. This is known as
-the Diagnostic or Expansion ROM area. Romy works by watching the same
-address lines that Gary watches to decode ROM addresses, but it will also
-drive _ROMEN when it sees addresses in the range 0x00f00000-0x00f7ffff.
+or 4000, is the address range 0x00e00000-0x00e7ffff. Romy works by watching
+the same address lines that Gary watches to decode ROM addresses, but it
+will also drive _ROMEN when it sees addresses in the range
+0x00e00000-0x00e7ffff.
+    NOTE that the 4MB version of Romy decodes a different range:
+         0x01000000-0x013fffff.
+    See below for more details.
 This works out well. Now ROM A17 (CPU A19) is useful. The lower ROM
 addresses which were previously selected (OVL) only immediately after
-cold power-on are then also available at the 0x00f00000-0x00f7ffff
+cold power-on are then also available at the 0x00e00000-0x00e7ffff
 addresses during normal system operation. Beyond the minimal amount of
 initial low address code necessary to perform the jump to high memory,
 the remainder of that 512 KB address space is available for additional
@@ -437,8 +440,8 @@ How about 2 MB and 4 MB flash banks? This could also be enabled by
 KickSmash if it doesn't drive the flash A18 and A19 (CPU A20 and A21)
 address lines. The problem is that there is no room for an additional
 1 MB of ROM address space below the 0x00ffffff address. The solution
-that Romy implements is to also decode addresses 0x01000000 through
-0x013fffff as ROM addresses.
+that Romy implements (depending on which Rom firmware is installed) is
+to decode addresses 0x01000000 through 0x013fffff as ROM addresses.
 
 The smash bank command has two additional options to support merging
 flash banks into a larger single bank.

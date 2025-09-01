@@ -50,7 +50,8 @@
  *    0x00030000 [0x10000] globals
  */
 
-const char RomID[] = "ROM Switcher "VERSION" (" BUILD_DATE" "BUILD_TIME ")\n";
+__attribute__ ((section (".romver")))
+const char RomID[] = "$VER: KickSmash ROM Switcher "VERSION" (" BUILD_DATE" "BUILD_TIME ")\n";
 
 #define VECTORS_BASE (RAM_BASE + 0x200)
 #define COUNTER0     (RAM_BASE + 0x1000)
@@ -144,7 +145,7 @@ reset_hi(void)
     /* Set up stack in low 64K of chipmem */
     __asm("move.l %0, sp" :: "r" (stack_base));
 
-    /* Turn off ROM overlay (OVL) and make LED go bright */
+    /* Turn off ROM overlay (OVL) and make LED stay dim */
     __asm("move.b #3, 0xbfe201 \n"  // Set CIA A DRA bit 0 and 1 as output
           "move.b #2, 0xbfe001");   // Set CIA A PRA bit 0=OVL, bit 1=LED
 
@@ -169,11 +170,12 @@ setup(void)
     chipset_init_early();
     memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
     vectors_init((void *)VECTORS_BASE);
+    *CIAA_PRA = 0x00;    // Set power LED bright
     irq_enable();
     cpu_control_init();  // Get CPU type
     serial_init();
     serial_puts("\n\033[31m");
-    serial_puts(RomID);
+    serial_puts(RomID + 6);
     serial_puts("\033[0m\n");
 
     cache_init();        // Enable cache
@@ -183,7 +185,7 @@ setup(void)
     screen_init();
     serial_putc('C');
 
-//  show_string(RomID);
+//  show_string(RomID + 6);
 
     timer_init();
     serial_putc('D');

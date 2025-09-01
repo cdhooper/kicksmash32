@@ -20,6 +20,7 @@ SECTIONS
         _reset_cont = .;
         . = ALIGN(0x00000010);  /* 0x00f80010 */
         *(.reset_hi)
+        *(.romver)
         *(.text)
         *(.vectors)
         _etext = .;

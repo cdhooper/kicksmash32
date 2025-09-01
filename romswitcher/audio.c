@@ -52,10 +52,12 @@ audio_handler(void)
     }
 }
 
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+
 void
 audio_init(void)
 {
-    uint size = 128;
+    uint size = MIN(128, sizeof (sinewave));
     uint8_t *adata = malloc_chipmem(size);
     uint pos;
 
