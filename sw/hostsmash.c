@@ -6584,11 +6584,12 @@ clock_ks_show(int enter)
  * @return       1 - Failure.
  */
 int
-run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
-         bool fill, const char *file1, const char *file2)
+run_mode(uint mode, uint bank, uint baseaddr, uint len_specified,
+         uint report_max, bool fill, const char *file1, const char *file2)
 {
     int amiga_was_put_in_reset = 0;
     int rc;
+    uint len = len_specified;
     uint8_t *filebuf;
 
     if (mode == MODE_UNKNOWN) {
@@ -6688,6 +6689,8 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len, uint report_max,
             /* Merge files */
             if (len <= EEPROM_BANK_SIZE_DEFAULT / 2)
                 len *= 2;
+            if (len_specified != EEPROM_SIZE_NOT_SPECIFIED)
+                len = len_specified;
             for (cur = 0; cur < len; cur += 4) {
                 *(dptr++) = *(sptr1++);
                 *(dptr++) = *(sptr2++);
