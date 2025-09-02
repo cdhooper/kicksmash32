@@ -75,13 +75,13 @@ Documentation
 Release 1.8
 
 NOTE: The Message interface has changed since 1.5. If you are running 1.6
-or more recent, you don't need to update all software and firmware
-at the same time.
+      or more recent, you don't need to update all software and firmware
+      at the same time.
 
 Kicksmash FW
 - Worked around flash chip bug (0x90 to address 0x55) again.
 - Fixed flash programming bug which caused missed data from the USB host.
-- This bug was introduced at the workaround for the M29F160 flash chip bug.
+  This bug was introduced at the workaround for the M29F160 flash chip bug.
 - Added "set sw_timeout" command to set the ROM Switcher timeout
 - Added "set sw_bank" command to set the ROM Switcher bank
 

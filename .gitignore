@@ -36,12 +36,12 @@ amiga/smashfsrom
 amiga/smashfsrom_d
 amiga/romswitch
 amiga/romswitch.rom
-sw/hostsmash
 sw/crcit
 sw/win/
-kicksmash_*
+release/
 sw/hostsmash
 sw/hostsmash.exe
+sw/hostsmash.macos
 sw/crcit
 sw/crcit.exe
 romswitcher/switcher.rom

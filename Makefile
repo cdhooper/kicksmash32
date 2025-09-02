@@ -26,9 +26,12 @@ clean-sw clean-fw clean-amiga clean-romswitcher:
 
 # ---------------------------------------------------------------
 
-RELEASE_DIR := kicksmash_$(VERSION)
-RELEASE_LHA := kicksmash_$(VERSION)_amiga.lha
-RELEASE_ZIP := kicksmash_$(VERSION).zip
+RELEASE_DIR := release/kicksmash_$(VERSION)
+RELEASE_LHA := release/kicksmash_$(VERSION)_amiga.lha
+RELEASE_ZIP := release/kicksmash_$(VERSION).zip
+
+RELEASE_SUBDIR := $(patsubst release/%,%,$(RELEASE_DIR))
+$(info RELEASE_SUBDIR = $(RELEASE_SUBDIR))
 
 RELEASE_TARGETS :=
 RELEASE_DIRS :=
@@ -73,17 +76,17 @@ release: all
 
 do_release: populating $(RELEASE_TARGETS) $(RELEASE_LHA) $(RELEASE_ZIP)
 
-AMIGA_RELS := $(RELEASE_DIR)/amiga/* \
-	      $(RELEASE_DIR)/README.md $(RELEASE_DIR)/LICENSE.md
+AMIGA_RELS := $(RELEASE_SUBDIR)/amiga/* \
+	      $(RELEASE_SUBDIR)/README.md $(RELEASE_SUBDIR)/LICENSE.md
 $(RELEASE_LHA): all populating $(RELEASE_TARGETS)
 	@echo "* Building $@"
 	@rm -f $@
-	lha -aq2 $@ $(AMIGA_RELS)
+	(cd release; lha -aq2 $(notdir $@) $(AMIGA_RELS))
 
 $(RELEASE_ZIP): all populating $(RELEASE_TARGETS)
 	@echo "* Building $@"
 	@rm -f $@
-	zip -rq $@ $(RELEASE_DIR)
+	(cd release; zip -rq $(notdir $@) $(RELEASE_SUBDIR))
 
 populating:
 	@echo "* Populating $(RELEASE_DIR)"
