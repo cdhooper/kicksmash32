@@ -1,0 +1,281 @@
+Release 1.9
+
+Kicksmash FW
+- Added support for M29F160TB - Closes #22
+- When the Amiga is off, SOCKET_OE is now driven high by firmware
+  This should reduce the amount of backpower provided to a powered off Amiga
+- When the Amiga is off, prom access will now fail rather than be attempted
+  "Amiga is not powered on" will be reported. This will help people understand
+  the cause of hostsmash failing to program a powered off Amiga.
+- Added new config "board_rev"
+- Fixed message buffer bug where large transfers might be partially re-sent.
+  Fixes smashfs and smashftp bug when the Amiga sends a file > 2KB in size
+- Added "prom log full" and "prom log stats" options
+- Added support for MX29F800Cx, MX29LV160Cx, and M29W160Ex
+- More work is still required for MX29F800Cx support
+  Write fails at 0x154 wrote=040041f9 read=00f000f0
+- snoop of Amiga ROM accesses should now work better over USB connection
+- Added "what" command to re-display recent output
+- Fixed BIGROM support for A4000T by disabling pull down on address pin
+
+ROM Switcher
+- Fixed MED "aconfig" command to handle Z3 board configured in Z2 space
+- Added MED "what" command to MED command line
+- Added debug command line on exception and unexpected interrupt
+- Added 68k disassembler to MED command line ("dis" command)
+- Changed blitter init to hopefully be more resilient to odd register state
+- Serial input is now interrupt-driven
+- Added register display and stack dump on unexpected interrupt or hang detection
+- Added CPU cache initialization and enable
+  This will hopefully resolve the occasional cold poweron bug that I've been tracking
+  First 16 MB of RAM will not be cached for 040+. 68030 has data cache off.
+- Made minor changes to Amiga chipset init to improve startup reliability.
+- Added MED "cpu" command with fault injection, CPU identify, and CACR control
+- Removed FLASH_RP from pin tests, since it's no longer connected on Rev8 boards
+- Improved spurious interrupt handling and reporting
+- Improved handling of ECLK tick failure
+- Dump on unexpected interrupt is now less likely to cause VBlank timeout
+- Rearranged MED "cpu fault" and "cpu reg" commands
+- Added several processor-specific registers to "cpu reg" command
+- Early init is now protected from unexpected interrupt
+- Fixed command history bug where line was not being redisplayed correctly
+- Screen DIWSTOP fix so that vertical scan stops at a reasonable position
+- Interrupt register display code now reports the vector name
+- Added support for 68030 "cpu reg tt0" and "cpu reg tt1"
+- Moved ROM version string near the beginning of the file and added $VER string
+- Power LED now goes bright during early initialization
+
+hostsmash
+- Fixed '--clock set' to get and report the correct time on Windows
+- The issue was that the Windows code was not computing the UTC offset.
+- Added Windows command line editing keystroke support for term mode
+- Fixed smashfs/smashftp bug on Windows where binary files failed to transfer
+- Fixed bug where app service state would time out on large file transfers
+- Improved error recovery in some failure cases (still needs more improvement)
+- Fixed bug where length (-l) is ignored when merging ROM files: Closes #31
+
+smashfs
+- Fixed bug where copy from write-protected file could fail
+  FINDINPUT and FINDUPDATE now try open a second time with only read permission
+
+smash
+- Added support for MX29F800Cx, MX29LV160Cx, and M29W160Ex
+- Added support for compatible flash parts
+- Eliminated debug "Cleariog atou" message
+
+PCBs
+- KicksmashAPCI added
+- Kicksmash4KCR updated to Rev8
+
+Documentation
+- Minor fixes for address range of 512 KB extension ROM area
+
+----------------------------------------------------------------------------
+
+Release 1.8
+
+NOTE: The Message interface has changed since 1.5. If you are running 1.6
+or more recent, you don't need to update all software and firmware
+at the same time.
+
+Kicksmash FW
+- Worked around flash chip bug (0x90 to address 0x55) again.
+- Fixed flash programming bug which caused missed data from the USB host.
+- This bug was introduced at the workaround for the M29F160 flash chip bug.
+- Added "set sw_timeout" command to set the ROM Switcher timeout
+- Added "set sw_bank" command to set the ROM Switcher bank
+
+smash
+- Added "set sw_timeout" command to set the ROM Switcher timeout
+- Added "set sw_bank" command to set the ROM Switcher bank
+
+hostsmash
+- Now replays Kicksmash output to user when flash programming failure occurs.
+  This will allow one to see an error that the Kicksmash FW emitted..
+- Improved auto byte order swapping to detect more ROM types
+
+ROM switcher
+- Fixed bug where clicking + or - for Long Reset settings was broken.
+- Spacebar now switches between PAL and NTSC.
+
+Documentation
+- Updated FAQ to give better reason why to use Kicksmash.
+- Updated FAQ with specific example of upgrading Kickstart to 3.2.3.
+- Miscellaneous updates to the FAQ.
+- Improved grammar in HW build and programming instructions.
+- Updated SW hostsmash, smash, and smashftp documentation.
+
+----------------------------------------------------------------------------
+
+Release 1.7
+
+NOTE: The Message interface has changed since 1.5. If you are running 1.6
+or newer, you don't need to update all software and firmware at the
+same time.
+
+hostsmash
+- Fixed bug where merging 512KB Amiga ROMs resulting in 1 MB image to write.
+  This is not desirable because AmigaOS ROM images are doubled.
+- Enhanced ROM write to no longer check if area is erased, but to just
+  prompt user for erase approval.
+- Fixed hostsmash "--clock" argument alias for "-c"
+
+ROM switcher
+- Fixed bug introduced in 1.6 ROM switcher which can cause motherboard
+  fast memory to go missing.
+- Fixed bank switch timeout to not abort unexpectedly at startup.
+- Fixed potential Blitter initialization bug.
+- Added polygon fill so the rendering of Kicksmash is not just line art.
+
+Kicksmash FW
+- Fixed bug where crash could happen at long reset if longreset bank is not set
+- Fixed pin test bug where SOCKET_OE=1 might cause SOCKET_D31=1
+- Worked around M29F160 flash chip bug which prevented AmigaOS 2.04 from
+  being flashed. Value 0x90 was being written to address 0x55, which put the
+  flash in "READ CFI QUERY" mode, causing programming to fail.
+- Added "address" pattern to Kicksmash "patt" command.
+- Added "random" pattern to Kicksmash "patt" command.
+- Added Flash OEWE test of Q2 and Q3 based on speed of those parts. This
+  test was implemented because AO34000A parts populated on the Rev 6a boards
+  cause programming from the Amiga to fail because they are too slow.
+  Fixed walking bits tests in "test" command.
+- Increased Amiga UART buffer from 1024 bytes to 2048 bytes.
+- Fixed potential false error at 100% when hostsmash is writing a ROM.
+- Eliminated some variable latency in Kicksmash-Amiga CPU command replies.
+
+smash
+- Improved flash ID test (6) to report values on failure.
+- Code to return flash to read mode now tries extra hard.
+- This may fix crashes with "smash erase" and "smash write" commands.
+- Minor help text improvements.
+- Improved 'flash id' test failure recovery to be less likely to hang Amiga.
+- Implemented flash command sync retry when Kicksmash is late with flash.
+  command. This will hopefully resolve "flash id" test and other flash
+  command failures.
+
+Miscellaneous
+- Fixed bug in wdikicksmash.bat, which was fetching the wdi-simple.exe
+  using a bad filename.
+
+Documentation
+- Added warning about Kicksmash1200 incompatibility with TF1260.
+- Minor documentation updates.
+
+PCBs
+- Rev Kicksmash1200 to version 7.1 (fix USB-C cutout)
+
+----------------------------------------------------------------------------
+Release 1.6
+
+NOTE: The Message interface has changed. You must update all software
+and firmware to the same version.
+
+smash
+- Fixed crash issue with assuming ROM is ready for access too early
+- Fixed ^C handling to consistently report "^C Abort"
+- Flash reads and writes now wait longer before assuming bank is restored.
+- Added new "term" command for Kicksmash firmware terminal from AmigaOS
+- Added flash id test and Kicksmash command test
+- Removed redundant "-v" verify as reported by SimD
+- Added ability to specify write+verify with "-wv"
+- Fixed ROM read / verify bug (wasn't waiting long enough for Kicksmash FW)
+
+smashfs
+- Files larger than 4 GB are now reported as (4 GB - 1) size instead
+  of just the lower 32 bits of the file size. This might need to be
+  clipped further to (2 GB - 1) if Amiga programs don't like >= 2 GB.
+
+smashftp
+- Files larger than 4 GB now have their actual size shown with ls
+
+ROM switcher
+- Added Blitter initialization as it sometimes is stuck at power-up
+- Added initialization of Ramsey refresh and memory burst settings
+- Increased Kicksmash message retry count from 3 to 5
+
+hostsmash
+- Significantly improved throughput on Windows for flash programming
+- Fixed Windows help to reflect "comX" for serial port
+- Increased erase update timeout from 2 seconds to 4 seconds
+- Fixed bug where "-c get" was actually setting Kicksmash Amiga time
+
+Kicksmash FW
+- Improved magic address search to use less memory bandwidth, which
+  hopefully fixes the CRC and missed message failures
+- Fixed pin tests to not report issues with USB-C CC1 and CC2 pins.
+- "prom name" no longer requires quotes around name
+- "set name" no longer requires quotes around name
+- "prom bank name" no longer requires quotes around name
+- Amiga cursor key sequence is now supported (support smash term -T)
+- Added "time amiga" command to show tracked Amiga RTC time (if set)
+
+PCBs
+- Added Kicksmash4KCR PCB for Amiga 4000CR motherboard
+- Added Kicksmash3KT PCB for Amiga 3000T motherboard
+- Added Kicksmash1200 PCB for Amiga 1200 motherboard
+
+Documentation
+- Moved to sub-pages to better organize access
+- Most documentation has been refreshed
+- Added more images and sub-pages, including page to help select board
+
+----------------------------------------------------------------------------
+
+Release 1.5
+
+hostsmash
+- Fixed bug in program verify on Raspberry Pi (ARM ring buffer reordering)
+
+romswitcher
+- Can now run standalone (no Kickstart required)
+- Fixed bug in Kicksmash message error recovery code which would cause hang
+- New feature: timeout and automatic ROM bank selection
+
+Kicksmash FW
+- Made set command output easier to understand
+- Added 32 NVM bytes for Amiga program use (2 used for timeout/bank select)
+----------------------------------------------------------------------------
+
+Release 1.4
+
+Kicksmash FW
+- Added ability to set Power LED brightness "set led <%>"
+- Added preliminary (untested) 32-bit ROM low/high swap support
+- Fixed looped delay cmd clobbering time suffix (ie: loop 5 delay 10ms)
+- Added "cpu hardfault" command to generate a firmware hard fault
+- Added resume and command line recovery attempts at firmware fault
+- Reworked Amiga long reset handling to now hopefully correctly detect it
+- Improved Kicksmash message handling to be slightly faster
+- "prom log 999" now shows both address buffer bases
+- Bad message length is now detected (bug caused Kicksmash FW crash)
+- Fault LED should now blink even during Amiga ROM programming
+- A new input sequence ^R^E^S^E^T will force the KickSmash FW to reset
+- Added stand-alone DFU bootloader for less problematic firmware updates
+- Added "reset dfurom" for STM32 ROM-based ROM updater
+- Flash write LED now also illuminates when writing flash from host
+- Fixed pin tests to correctly detect if D31, A18 and A19 are connected
+- Enhanced pin tests to set alert LED when problems are found with the flash
+- Disabled Amiga-in-reset detection when KBRST is not connected in Amiga
+- Increased 5V warning limit to 5.4V (A4000T has higher MB voltage)
+
+romswitcher
+- Added automatic retry of any failed Kicksmash command
+- Removed Return/Enter as a quick select for switch & reboot
+
+smash
+- Improved message fault recovery to spin until ROM is consistent
+
+smashftp
+- Fixed looped delay cmd clobbering time suffix (ie: loop 5 delay 10ms)
+
+hostsmash
+- Fixed fatal errors to correctly exit on Windows
+- Fixed bug on Windows where programming failed due to timeout
+- The bank option is now required for read, write, verify, or erase
+- Two ROM images may now be specified for programming (will be merged)
+- Flash image write/verify swap mode is now automatically detected
+- The -t command now takes an optional command to send to KickSmash
+- On Windows now lists available COM ports if "-d " is not specified
+- Bank size now defaults to 512 KB, even when writing smaller image
+
+----------------------------------------------------------------------------
