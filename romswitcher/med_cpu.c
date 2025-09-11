@@ -25,6 +25,7 @@ const char cmd_cpu_help[] =
 "cpu fault <type>      - cause a CPU fault\n"
 "cpu regs              - display interrupt registers\n"
 "cpu reg <reg> [<val>] - get / set CPU reg: cacr dtt* itt* pcr tc vbr\n"
+"cpu spin <dev> [w]    - spin accessing one of ciaa, ciab, chipmem, or <addr>\n"
 "cpu type              - show CPU type";
 
 const char cmd_dis_help[] =
@@ -32,6 +33,46 @@ const char cmd_dis_help[] =
 "disas <addr> [<count>] [<syn>] - disassemble from <addr>\n"
 "                                 <count> is the number of instructions\n"
 "                                 <syn> is either mit or mot syntax";
+
+static void
+read_spin(uint32_t addr, uint mode)
+{
+    uint count;
+    switch (mode) {
+        case 1:
+            for (count = 300000; count > 0; count--)
+                (void) *VADDR8(addr);
+            break;
+        case 2:
+            for (count = 300000; count > 0; count--)
+                (void) *VADDR16(addr);
+            break;
+        case 4:
+            for (count = 300000; count > 0; count--)
+                (void) *VADDR32(addr);
+            break;
+    }
+}
+
+static void
+write_spin(uint32_t addr, uint mode)
+{
+    uint count;
+    switch (mode) {
+        case 1:
+            for (count = 300000; count > 0; count--)
+                *VADDR8(addr) = 0;
+            break;
+        case 2:
+            for (count = 300000; count > 0; count--)
+                *VADDR16(addr) = 0;
+            break;
+        case 4:
+            for (count = 300000; count > 0; count--)
+                *VADDR32(addr) = 0;
+            break;
+    }
+}
 
 /*
  * cmd_cpu
@@ -229,6 +270,60 @@ show_reg_valid:
         irq_show_regs(0);
         printf("Last exception:\n  ");
         irq_show_regs(1);
+    } else if (strncmp(argv[1], "spin", 4) == 0) {
+        const char *arg = argv[2];
+        uint read_op = 1;
+        uint mode = 1;
+        switch (argv[1][4]) {
+            case '\0':
+            case 'b':
+                mode = 1;
+                break;
+            case 'w':
+                mode = 2;
+                break;
+            case 'l':
+                mode = 4;
+                break;
+            default:
+                printf("Unknown mode %s for spin\n", argv[1] + 4);
+                return (RC_BAD_PARAM);
+                break;
+        }
+
+        if ((argc < 3) || (argc > 4))
+            return (RC_USER_HELP);
+        if ((argc == 4) && (argv[3][0] == 'w'))
+            read_op = 0;  // Write mode
+
+        if (strcmp(arg, "chipmem") == 0) {
+            if (read_op)
+                read_spin(0x1010, mode);
+            else
+                write_spin(0x1010, mode);
+        } else if (strcmp(arg, "ciaa") == 0) {
+            if (read_op)
+                read_spin(CIA_A_BASE, mode);
+            else
+                write_spin(CIA_A_BASE, mode);
+        } else if (strcmp(arg, "ciab") == 0) {
+            if (read_op)
+                read_spin(CIA_B_BASE, mode);
+            else
+                write_spin(CIA_B_BASE, mode);
+        } else {
+            uint32_t addr;
+            int pos = 0;
+            if ((sscanf(arg, "%x%n", &addr, &pos) != 1) || (arg[pos] != '\0')) {
+                printf("Invalid address %s\n", arg);
+                return (RC_USER_HELP);
+            }
+            if (read_op)
+                read_spin(addr, mode);
+            else
+                write_spin(addr, mode);
+        }
+        return (RC_SUCCESS);
     } else if (strncmp(argv[1], "type", 3) == 0) {
         printf("CPU ");
         if (cpu_type == 68060) {

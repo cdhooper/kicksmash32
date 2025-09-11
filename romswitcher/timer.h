@@ -16,7 +16,7 @@
 #ifndef _TIMER_H
 #define _TIMER_H
 
-uint64_t timer_tick_get(void);
+extern uint64_t (*timer_tick_get)(void);
 void     timer_delay_msec(uint msec);
 void     timer_delay_usec(uint usec);
 void     timer_delay_ticks(uint32_t ticks);

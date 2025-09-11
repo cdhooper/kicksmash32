@@ -275,7 +275,7 @@ keyboard_irq(void)
     DEBUG_COLOR(0x0c4);   // Aqua-Green (background)
     irq_restore(sr);
 
-    *CIAA_CRA |= CIA_CRA_SPMOD;  // Set handshake bit
+    *CIAA_CRA = CIA_CRA_SPMOD;  // Set handshake bit
 
     /* Read keyboard */
     timer_delay_usec(75);
@@ -317,7 +317,7 @@ keyboard_irq(void)
 
 finish:
 //  timer_delay_usec(75);
-    *CIAA_CRA &= ~CIA_CRA_SPMOD;  // Clear handshake bit
+    *CIAA_CRA = 0;        // Clear handshake bit
     DEBUG_COLOR(0x77c);   // Blue (background)
     running = 0;
     key_repeat_timer = 0;
@@ -361,12 +361,13 @@ keyboard_init(void)
     *CIAA_ICR = CIA_ICR_SET | CIA_ICR_SP;  // enable SP interrupt
     timer_delay_msec(5);
 
-    *CIAA_CRA = 0; // Input from keyboard
+    keyboard_init_done = 1;
+
+    *CIAA_CRA = 0;                           // Clear handshake bit
     *INTENA = INTENA_SETCLR | INTENA_PORTS;  // Enable interrupts
 
     /*
      * Dump CIAA registers
      *      loop 16 dbA bfe$a01 1
      */
-    keyboard_init_done = 1;
 }

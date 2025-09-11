@@ -19,7 +19,7 @@
 /* Amiga chipset registers */
 #define GARY_BTIMEOUT  VADDR8(0x00de0000)  // Timeout type: 1=BERR 0=DSACK (b7)
 #define GARY_BTOENB    VADDR8(0x00de0001)  // Timeout enable: 1=enable (bit 7)
-#define COLDSTART      VADDR8(0x00de0002)  // Coldstart (bit 7)
+#define GARY_COLDSTART VADDR8(0x00de0002)  // Coldstart (bit 7)
 #define DSPRST         VADDR8(0x00de1000)  // DSP reset line (bit 7)
 #define KBRSTEN        VADDR8(0x00de1001)  // Keyboard reset control (bit 7)
 #define GARY_ID        VADDR8(0x00de1002)  // Gary ID code

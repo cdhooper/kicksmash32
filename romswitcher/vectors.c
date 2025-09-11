@@ -142,7 +142,7 @@ get_vector_name(uint vector_offset)
                 sprintf(txtname, "User Defined Vector #%u", vec - 64);
                 break;
             default:
-                sprintf(txtname, "Unknown Interrupt %u\n", vec);
+                sprintf(txtname, "Unknown Interrupt %u", vec);
                 break;
         }
         name = txtname;
@@ -238,7 +238,7 @@ Ports(void)
      */
     if (st & CIA_ICR_TA) {
         *CIAA_ICR = CIA_ICR_TA;  // Disable Timer interrupt
-        *COLOR00 = 0x880;  // Yellow background !YAY DEBUG!
+        *COLOR00 = 0xdcc;  // Yellow background !YAY DEBUG!
     }
     if (st & CIA_ICR_SP) {
         /* Keyboard serial input */

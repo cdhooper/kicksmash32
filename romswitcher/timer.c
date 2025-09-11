@@ -27,6 +27,9 @@ uint vid_type;             // VID_NTSC or VID_PAL
 volatile uint64_t timer_tick_base;  // timer last vblank interrupt
 volatile uint16_t eclk_last_update; // ECLK value at last vblank interrupt
 
+static uint64_t timer_tick_get_eclk(void);
+uint64_t (*timer_tick_get)(void) = &timer_tick_get_eclk;
+
 uint
 eclk_ticks(void)
 {
@@ -54,7 +57,7 @@ eclk_ticks(void)
  *                  be usable even in interrupt context.
  */
 uint64_t
-timer_tick_get(void)
+timer_tick_get_eclk(void)
 {
     uint32_t sr = irq_disable();
     uint16_t cur = eclk_ticks();
@@ -63,6 +66,13 @@ timer_tick_get(void)
     eclk_last_update = cur;
     irq_restore(sr);
     return (timer_tick_base);
+}
+
+uint64_t
+timer_tick_get_dummy(void)
+{
+    (void) *CIAA_TBHI;
+    return (timer_tick_base += 19);
 }
 
 /**
@@ -262,6 +272,8 @@ timer_init(void)
     uint16_t eclk_etick;
     uint16_t eclk_stick;
 
+    timer_tick_get = timer_tick_get_dummy;
+
     /*
      * The Amiga 8520 CIA chips have E clock input connected to ECLK.
      * In the A3000, Gary drives ECLK as 7M / 10, which means that
@@ -304,7 +316,7 @@ timer_init(void)
     eclk_tbhi = *CIAA_TBHI;
     hz_tick   = *CIAA_ELSB;
 
-    timeout = 1000;
+    timeout = 10000;
     while (eclk_tbhi == *CIAA_TBHI)
         if (--timeout == 0) {
             if (eclk_tbhi == 0)
@@ -315,7 +327,7 @@ timer_init(void)
 fail_use_defaults:
             /* Use NTSC 60 Hz as defaults */
             *CIAA_CRB = CIA_CRB_START;
-            vblank_hz = eclk_to_hz_table[0].tick_hz;
+            vblank_hz = eclk_to_hz_table[0].tick_hz + 1;
             eclk_ticks_per_sec = eclk_to_hz_table[0].eclk;
             vid_type = eclk_to_hz_table[0].vid_type;
             return;
@@ -400,5 +412,6 @@ fail_use_defaults:
      *      dbA 00bfda00 1;dbA 00bfd900 1;dbA 00bfd800 1
      */
 
+    timer_tick_get = timer_tick_get_eclk;
     eclk_last_update = eclk_ticks();
 }

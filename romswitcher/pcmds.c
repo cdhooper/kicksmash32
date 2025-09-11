@@ -111,6 +111,16 @@ timer_test(void)
     uint64_t start;
     uint64_t diff;
     uint     errs = 0;
+    uint     count;
+
+    start = timer_tick_get();
+    for (count = 1000; count > 0; count--)
+        if (timer_tick_get() != start)
+            break;
+    if (count == 0) {
+        printf("Timer tick is not advancing\n");
+        return (RC_FAILURE);
+    }
 
     start = timer_tick_get();
     timer_delay_ticks(0);
@@ -190,7 +200,6 @@ cmd_reset(int argc, char * const *argv)
     if ((argc < 2) ||
         ((strcmp(argv[1], "amiga") == 0) || (strcmp(argv[1], "cpu") == 0))) {
         printf("Resetting...\n");
-        timer_delay_msec(1);
         reset_cpu();
     } else {
         printf("Unknown argument %s\n", argv[1]);

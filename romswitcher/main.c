@@ -61,6 +61,13 @@ const char RomID[] = "$VER: KickSmash ROM Switcher "VERSION" (" BUILD_DATE" "BUI
 #define STACK_BASE   (RAM_BASE + 0x10000 - 4)
 #define GLOBALS_BASE (RAM_BASE + 0x30000)
 
+#define DO_DEBUG_COLOR
+#ifdef DO_DEBUG_COLOR
+#define DEBUG_COLOR(x) *COLOR00 = x
+#else
+#define DEBUG_COLOR(x)
+#endif
+
 __attribute__ ((section (".reset")))
 void
 reset(void)
@@ -74,12 +81,13 @@ void
 chipset_init_early(void)
 {
     /* Shut down interrupts and DMA */
-    *CIAA_ICR = 0x7f;    // Disable interrupt forwarding to chipset
-    *CIAB_ICR = 0x7f;    // Disable interrupt forwarding to chipset
     *INTENA   = 0x7fff;  // Disable interrupt forwarding to m68k
     *INTREQ   = 0x7fff;  // Reply to all interrupt requests
     *INTREQ   = 0x7fff;  // Reply to all interrupt requests (A4000 bug)
     *DMACON   = 0x7fff;  // Disable all chipset DMA
+
+    *CIAA_ICR = 0x7f;    // Disable interrupt forwarding to chipset
+    *CIAB_ICR = 0x7f;    // Disable interrupt forwarding to chipset
 
     /* Stop timers */
     *CIAA_CRA  = 0x00;
@@ -167,6 +175,7 @@ setup(void)
 {
     irq_disable();
     globals_init();
+    DEBUG_COLOR(0x00f);  // Bright Blue background
     chipset_init_early();
     memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
     vectors_init((void *)VECTORS_BASE);
@@ -183,6 +192,7 @@ setup(void)
     chipset_init();
     serial_putc('B');
     screen_init();
+    DEBUG_COLOR(0x00c);  // Medium Blue background
     serial_putc('C');
 
 //  show_string(RomID + 6);
@@ -191,12 +201,14 @@ setup(void)
     serial_putc('D');
     audio_init();
     serial_putc('E');
+    DEBUG_COLOR(0x008);   // Half Blue background
 //  serial_init();  // Now that ECLK is known
     serial_putc('F');
     keyboard_init();
     serial_putc('G');
     mouse_init();
     serial_putc('H');
+    DEBUG_COLOR(0x004);   // Midnight Blue background
     sprite_init();
     serial_putc('I');
     autoconfig_init();
@@ -209,6 +221,13 @@ setup(void)
     test_draw();
     test_gadget();
     serial_putc('\n');
+    DEBUG_COLOR(0x999); // Grey background
+
+    if (vblank_hz & 1) {
+        /* Timer init failed */
+        while (1)
+            debug_cmdline();
+    }
 #ifdef STANDALONE
     extern void main_func(void);
     main_func();
@@ -244,5 +263,6 @@ debug_cmdline(void)
     while (1) {
         if (main_poll())
             break;   // "quit" command entered
+        vblank_ints = 0;  // No need for VBlank interrupt to trigger entry
     }
 }

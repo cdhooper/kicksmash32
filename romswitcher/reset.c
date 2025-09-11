@@ -31,6 +31,7 @@ do_reset(void)
           "nop");
 }
 
+#include <printf.h>
 void
 reset_cpu(void)
 {
@@ -51,7 +52,7 @@ reset_cpu(void)
     *DMACON   = 0x7fff;  // Disable all chipset DMA
     *BPLCON0  = 0x0000;  // Shut off bitplanes
 
-    *COLDSTART |= BIT(7);  // Make it a coldstart
+    *GARY_COLDSTART |= BIT(7);  // Make it a coldstart
 
     do_reset();
 }

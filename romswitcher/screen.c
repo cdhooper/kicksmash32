@@ -674,7 +674,7 @@ screen_init(void)
 //  *BPL2MOD  = 136;
     *BPL2MOD  = 0;       // Modulo for even bitplanes = 0
     *BPL1DAT  = 0x0;
-    *COLOR00  = 0x999;   // Pen 0: Grey (background)
+//  *COLOR00  = 0x999;   // Pen 0: Grey (background)
     *COLOR01  = 0x000;   // Pen 1: Black
     *COLOR02  = 0xfff;   // Pen 2: White
     *COLOR03  = 0x68b;   // Pen 3: Lt.Blue
