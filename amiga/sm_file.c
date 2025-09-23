@@ -34,7 +34,8 @@ sm_fservice(void)
     uint16_t states[2];
     uint rc;
     uint rxlen;
-    rc = send_cmd(KS_CMD_MSG_STATE, 0, 0, states, sizeof (states), &rxlen);
+    rc = send_cmd_retry(KS_CMD_MSG_STATE, 0, 0, states, sizeof (states),
+                        &rxlen);
     if ((rc == 0) &&
         ((states[1] & (MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_FILE)) ==
                       (MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_FILE))) {

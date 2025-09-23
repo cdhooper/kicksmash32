@@ -140,6 +140,29 @@ send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
 }
 
 /*
+ * send_cmd_retry
+ * --------------
+ * Send a request to Kicksmash, retrying up to 5 times on error.
+ */
+uint
+send_cmd_retry(uint16_t cmd, void *arg, uint16_t arglen,
+               void *reply, uint replymax, uint *replyalen)
+{
+    uint tries = 5;
+    uint rc;
+
+    do {
+        rc = send_cmd(cmd, arg, arglen, reply, replymax, replyalen);
+        if ((rc != MSG_STATUS_BAD_CRC) &&
+            (rc != MSG_STATUS_NO_REPLY) &&
+            (rc != KS_STATUS_CRC)) {
+            break;
+        }
+    } while (--tries > 0);
+    return (rc);
+}
+
+/*
  * msg_init
  * --------
  * Initializes the KickSmash message interface.
@@ -166,13 +189,13 @@ uint
 recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
 {
     uint rc;
-    rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
+    rc = send_cmd_retry(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
     if (timeout_ms > 4000)
         timeout_ms = 4000;  // cap at 4 seconds
     timeout_ms /= 2;
     while (rc == KS_STATUS_NODATA) {
         cia_spin(CIA_USEC(600));
-        rc = send_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
+        rc = send_cmd_retry(KS_CMD_MSG_RECEIVE, NULL, 0, buf, len, rlen);
         if (timeout_ms-- == 0)
             break;
     }
@@ -244,7 +267,8 @@ host_send_msg(void *smsg, uint len)
     if (sendlen > SEND_MSG_MAX)
         sendlen = SEND_MSG_MAX;
 
-    rc = send_cmd(KS_CMD_MSG_SEND, smsg, sendlen, rbuf, sizeof (rbuf), NULL);
+    rc = send_cmd_retry(KS_CMD_MSG_SEND, smsg, sendlen, rbuf, sizeof (rbuf),
+                        NULL);
     if ((rc == 0) && (sendlen < len)) {
         uint timeout = 0;
         pos = sendlen - sizeof (km_msg_hdr_t);
@@ -260,7 +284,8 @@ host_send_msg(void *smsg, uint len)
 #ifdef DEBUG_SEND_MSG
             printf("send %x pos=%x of %x\n", sendlen, pos, len);
 #endif
-            rc = send_cmd(KS_CMD_MSG_SEND, smsg + pos, sendlen, NULL, 0, NULL);
+            rc = send_cmd_retry(KS_CMD_MSG_SEND, smsg + pos, sendlen,
+                                NULL, 0, NULL);
             memcpy(smsg + pos, savebuf, sizeof (km_msg_hdr_t));
 
             if (rc == KS_STATUS_BADLEN) {

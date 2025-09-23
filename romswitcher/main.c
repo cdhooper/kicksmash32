@@ -61,12 +61,7 @@ const char RomID[] = "$VER: KickSmash ROM Switcher "VERSION" (" BUILD_DATE" "BUI
 #define STACK_BASE   (RAM_BASE + 0x10000 - 4)
 #define GLOBALS_BASE (RAM_BASE + 0x30000)
 
-#define DO_DEBUG_COLOR
-#ifdef DO_DEBUG_COLOR
-#define DEBUG_COLOR(x) *COLOR00 = x
-#else
-#define DEBUG_COLOR(x)
-#endif
+#define BACKGROUND_COLOR(x) *COLOR00 = (x)
 
 __attribute__ ((section (".reset")))
 void
@@ -146,9 +141,8 @@ reset_hi(void)
     const uint stack_base = STACK_BASE;
 
     /* Delay for hardware init to complete */
-    __asm("move.l #0x20000, d0 \n"
-          "reset_loop: \n"
-          "dbra d0, reset_loop");
+    __asm("move.w #0x100, d0 \n"
+          "0: dbra d0, 0b");
 
     /* Set up stack in low 64K of chipmem */
     __asm("move.l %0, sp" :: "r" (stack_base));
@@ -156,6 +150,9 @@ reset_hi(void)
     /* Turn off ROM overlay (OVL) and make LED stay dim */
     __asm("move.b #3, 0xbfe201 \n"  // Set CIA A DRA bit 0 and 1 as output
           "move.b #2, 0xbfe001");   // Set CIA A PRA bit 0=OVL, bit 1=LED
+
+    /* Green background color */
+    __asm("move.w #0x0f0, 0xdff180");  // Set video background color to green
 
     __asm("jmp _setup");  // setup()
 }
@@ -175,7 +172,7 @@ setup(void)
 {
     irq_disable();
     globals_init();
-    DEBUG_COLOR(0x00f);  // Bright Blue background
+    BACKGROUND_COLOR(0x00f);  // Bright Blue background
     chipset_init_early();
     memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
     vectors_init((void *)VECTORS_BASE);
@@ -192,7 +189,7 @@ setup(void)
     chipset_init();
     serial_putc('B');
     screen_init();
-    DEBUG_COLOR(0x00c);  // Medium Blue background
+    BACKGROUND_COLOR(0x00c);  // Medium Blue background
     serial_putc('C');
 
 //  show_string(RomID + 6);
@@ -201,14 +198,14 @@ setup(void)
     serial_putc('D');
     audio_init();
     serial_putc('E');
-    DEBUG_COLOR(0x008);   // Half Blue background
+    BACKGROUND_COLOR(0x008);  // Half Blue background
 //  serial_init();  // Now that ECLK is known
     serial_putc('F');
     keyboard_init();
     serial_putc('G');
     mouse_init();
     serial_putc('H');
-    DEBUG_COLOR(0x004);   // Midnight Blue background
+    BACKGROUND_COLOR(0x004);  // Midnight Blue background
     sprite_init();
     serial_putc('I');
     autoconfig_init();
@@ -221,7 +218,7 @@ setup(void)
     test_draw();
     test_gadget();
     serial_putc('\n');
-    DEBUG_COLOR(0x999); // Grey background
+    BACKGROUND_COLOR(0x999);  // Grey background
 
     if (vblank_hz & 1) {
         /* Timer init failed */

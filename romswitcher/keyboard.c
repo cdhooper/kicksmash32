@@ -295,6 +295,8 @@ keyboard_irq(void)
             DEBUG_COLOR(0x00f);   // Bright blue (background)
             key_held = ascii | (scan_conv << 8);
             input_rb_put(key_held);
+        } else {
+            key_held = 0;
         }
     } else {
         input_rb_put(scan_conv << 8);

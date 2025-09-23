@@ -42,6 +42,8 @@ void send_cmd_core_end(void);
 
 uint send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
               void *reply, uint replymax, uint *replyalen);
+uint send_cmd_retry(uint16_t cmd, void *arg, uint16_t arglen,
+                    void *reply, uint replymax, uint *replyalen);
 
 uint host_msg(void *smsg, uint slen, void **rdata, uint *rlen);
 uint host_send_msg(void *smsg, uint slen);

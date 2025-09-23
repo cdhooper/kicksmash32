@@ -2196,15 +2196,21 @@ address_log_replay(uint max)
 
     uint is_32bit = (ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP);
     while (cons != prod) {
+        uint amigaaddr;
         addr = buffer_rxa_lo[cons];
         data = buffer_rxd[cons];
         if (capture_mode == CAPTURE_ADDR) {
             addr |= ((data & 0xf0) << (16 - 4));
-            printf("%3u %05x   %05x\n", cons, addr,
-                   is_32bit ? (addr << 2) : (addr << 1));
+            amigaaddr = is_32bit ? (addr << 2) : (addr << 1);
+            if (addr & BIT(16))
+                amigaaddr |= 0x00e00000;
+            else
+                amigaaddr |= 0x00f80000;
+            printf("%3u %05x   %05x\n", cons, addr, amigaaddr);
         } else {
-            printf("%3u _%04x   %05x     %04x\n", cons, addr,
-                   is_32bit ? (addr << 2) : (addr << 1), data);
+            amigaaddr = is_32bit ? (addr << 2) : (addr << 1);
+            amigaaddr |= 0x00f80000;
+            printf("%3u _%04x   %05x     %04x\n", cons, addr, amigaaddr, data);
         }
         cons++;
         if (cons >= ARRAY_SIZE(buffer_rxa_lo))
