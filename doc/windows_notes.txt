@@ -121,8 +121,8 @@ Program:
     wine hostsmash.exe -d COM33 -w 'z:\home\cdh\projects\amiga_kicksmash32\sw\A3000.47.111.rom' -b 7 -s 3210
 
 From Windows:
-    hostsmashe -d com4 -t
-    hostsmashe -d com4 -w A3000.rom -b 7 -s 3210
+    hostsmash -d com4 -t
+    hostsmash -d com4 -w A3000.rom -b 7 -s 3210
 
 -------------------------------------------------------------------
 

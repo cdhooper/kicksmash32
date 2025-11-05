@@ -7,10 +7,9 @@ FS_PROG      := smashfs
 FTP_PROG     := smashftp
 FSROM_PROG   := smashfsrom
 FSROM_PROG_D := smashfsrom_d
-SWITCH_PROG  := romswitch
 
 ALL_PROGS    := $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) \
-                $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG)
+                $(FSROM_PROG) $(FSROM_PROG_D)
 
 OBJDIR       := objs
 ROM_OBJDIR   := objs.rom
@@ -29,15 +28,12 @@ FSROM_SRCS   := fs_rom.c \
 		fs_hand.c fs_timer.c fs_vol.c fs_packet.c \
 		printf.c sm_msg.c sm_file.c cpu_control.c \
 		my_createtask.c sm_msg_core.c fs_rom_end.c
-SWITCH_SRCS  := romswitch.c sm_msg.c cpu_control.c printf.c \
-		sm_msg_core.c fs_rom_end.c
 
 #SMASH_OBJS   := $(patsubst %.c,$(OBJDIR)/%.o,$(notdir $(SMASH_SRCS)))
 #FS_OBJS      := $(patsubst %.c,$(OBJDIR)/%.o,$(notdir $(FS_SRCS)))
 #FTP_OBJS     := $(patsubst %.c,$(OBJDIR)/%.o,$(notdir $(FTP_SRCS)))
 #FSROM_OBJS   := $(patsubst %.c,$(ROM_OBJDIR)/%.o,$(notdir $(FSROM_SRCS)))
 #FSROM_OBJS_D := $(patsubst %.c,$(ROM_OBJDIR_D)/%.o,$(notdir $(FSROM_SRCS)))
-#SWITCH_OBJS  := $(patsubst %.c,$(ROM_OBJDIR_D)/%.o,$(notdir $(SWITCH_SRCS)))
 
 CC      := m68k-amigaos-gcc
 STRIP   := m68k-amigaos-strip
@@ -63,7 +59,6 @@ CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 #LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lgcc -lc -lamiga -noixemul
 
 LDFLAGS_FSROM = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
-LDFLAGS_SWITCH = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
 
 VERSION := $(shell awk '/Version/{print $$2}' ../fw/version.c)
 CFLAGS += -DVERSION=\"$(VERSION)\"
@@ -103,7 +98,7 @@ ifeq (, $(shell which $(CC) 2>/dev/null ))
 $(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga13/bin")
 endif
 
-all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG)
+all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D)
 	@:
 
 gdb:
@@ -123,17 +118,15 @@ $(foreach SRCFILE,$(FS_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),FS_OB
 $(foreach SRCFILE,$(FTP_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),FTP_OBJS)))
 $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR),FSROM_OBJS)))
 $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D),FSROM_OBJS_D)))
-$(foreach SRCFILE,$(SWITCH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D),SWITCH_OBJS)))
 
-OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS))
+OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D))
 
 $(FSROM_OBJS):: CFLAGS += $(CFLAGS_ROMFS) -DNO_DEBUG
 $(FSROM_OBJS_D):: CFLAGS += $(CFLAGS_ROMFS)
-$(SWITCH_OBJS):: CFLAGS += $(CFLAGS_ROMFS)
 #$(FSROM_OBJS):: CFLAGS += -flto
 #LDFLAGS_FSROM += -flto -O2
 
-$(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS): | $(ROM_OBJDIR) $(ROM_OBJDIR_D)
+$(FSROM_OBJS) $(FSROM_OBJS_D): | $(ROM_OBJDIR) $(ROM_OBJDIR_D)
 
 $(OBJS): Makefile $(SMASH_HDRS) | $(OBJDIR)
 	@echo Building $@
@@ -146,7 +139,6 @@ $(SMASH_PROG): $(SMASH_OBJS)
 $(FTP_PROG): $(FTP_OBJS)
 $(FSROM_PROG): $(FSROM_OBJS) fs_rom.ld
 $(FSROM_PROG_D): $(FSROM_OBJS_D) fs_rom.ld
-$(SWITCH_PROG): $(SWITCH_OBJS) fs_rom.ld
 
 $(SMASH_PROG):
 	@echo Building $@
@@ -165,10 +157,6 @@ $(FSROM_PROG_D):
 	@echo Building $@
 	$(QUIET)$(CC) $(filter %.o,$^) $(LDFLAGS_FSROM) -Xlinker -Map=$(ROM_OBJDIR_D)/$@.map -Wa,-a,-ad > $(ROM_OBJDIR_D)/$@.lst -nostartfiles -o $(ROM_OBJDIR_D)/$@
 	$(QUIET)$(STRIP) -o $@ $(ROM_OBJDIR_D)/$@
-
-$(SWITCH_PROG):
-	@echo Building $@
-	$(QUIET)$(CC) $(filter %.o,$^) $(LDFLAGS_SWITCH) -Xlinker -Map=$(ROM_OBJDIR)/$@.map -Wa,-a,-ad > $(ROM_OBJDIR)/$@.lst -nostartfiles -o $@
 
 $(FS_PROG): $(FS_OBJS)
 	@echo Building $@
@@ -200,7 +188,6 @@ lha:
 adf:
 	xdftool $(DISK) format "$(PROGVER)"
 	xdftool $(DISK) makedir kicksmash
-	xdftool $(DISK) write romswitch kicksmash/romswitch
 	xdftool $(DISK) write smash kicksmash/smash
 	xdftool $(DISK) write smashfs kicksmash/smashfs
 	xdftool $(DISK) write smashfsrom kicksmash/smashfsrom

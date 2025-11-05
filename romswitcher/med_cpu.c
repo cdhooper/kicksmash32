@@ -189,7 +189,8 @@ show_reg_valid:
                 printf("cpu reg tt0 [<val>]   - get / set CPU TT0\n"
                        "cpu reg tt1 [<val>]   - get / set CPU TT1\n");
             }
-            printf("cpu reg tc [<val>]    - get / set CPU MMU TC\n"
+            printf("cpu reg sr [<val>]    - get / set CPU SR\n"
+                   "cpu reg tc [<val>]    - get / set CPU MMU TC\n"
                    "cpu reg vbr [<val>]   - get / set CPU VBR\n");
             return (RC_BAD_PARAM);
         }
@@ -246,6 +247,11 @@ show_reg_valid:
                 printf("%08x\n", cpu_get_tc());
             else
                 cpu_set_tc(value);
+        } else if (strcmp(argv[2], "sr") == 0) {
+            if (argc < 4)
+                printf("%08x\n", cpu_get_sr());
+            else
+                cpu_set_sr(value);
         } else if (strcmp(argv[2], "tt0") == 0) {
             if (argc < 4)
                 printf("%08x\n", cpu_get_tt0());

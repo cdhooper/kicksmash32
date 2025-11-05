@@ -114,6 +114,29 @@
 #define ID_BANK_NAME_6       32
 #define ID_BANK_NAME_7       33
 
+#ifndef RAWKEY_1
+#define RAWKEY_1         0x01
+#define RAWKEY_2         0x02
+#define RAWKEY_3         0x03
+#define RAWKEY_4         0x04
+#define RAWKEY_5         0x05
+#define RAWKEY_6         0x06
+#define RAWKEY_7         0x07
+#define RAWKEY_8         0x08
+#define RAWKEY_9         0x09
+#define RAWKEY_0         0x0a
+#define RAWKEY_KP_1      0x1d
+#define RAWKEY_KP_2      0x1e
+#define RAWKEY_KP_3      0x1f
+#define RAWKEY_KP_4      0x2d
+#define RAWKEY_KP_5      0x2e
+#define RAWKEY_KP_6      0x2f
+#define RAWKEY_KP_7      0x3d
+#define RAWKEY_KP_8      0x3e
+#define RAWKEY_KP_9      0x3f
+#define RAWKEY_KP_0      0x0f
+#endif
+
 typedef unsigned int uint;
 
 #ifndef BEAMCON0
@@ -1098,7 +1121,21 @@ update_switch_box(void)
 }
 
 static void
-update_switchto(int incdec)
+update_switchto(int bank)
+{
+    if (bank_switchto == bank)
+        return;
+    bank_switchto = bank;
+    GT_SetGadgetAttrs(gadget_switchto, NULL, NULL,
+                      GTMX_Active, (LONG) bank_switchto,
+                      TAG_DONE);
+
+    if (update_switch_box())
+        RefreshGList(gadget_switchto_pre, window, NULL, -1);
+}
+
+static void
+update_switchto_updown(int incdec)
 {
     if (incdec > 0) {
         if (++bank_switchto >= ROM_BANKS)
@@ -1909,13 +1946,12 @@ event_loop(void)
                             goto id_save;
                         case RAWKEY_CRSRDOWN: // key down Cursor-Down
                         case 0x26:            // key down J
-                        case 0x1e:            // key down numeric keypad 2
-                            update_switchto(1);
+                            update_switchto_updown(1);
                             break;
                         case RAWKEY_CRSRUP:   // key down Cursor-Up
                         case 0x27:            // key down K
                         case 0x3e:            // key down numeric keypad 8
-                            update_switchto(-1);
+                            update_switchto_updown(-1);
                             break;
                         case 0x13:            // key down R
                             if ((msg->Qualifier & (IEQUALIFIER_LCOMMAND |
@@ -1968,6 +2004,38 @@ event_loop(void)
                                 *BEAMCON0 = 0;
                             else
                                 *BEAMCON0 = BEAMCON0_PAL;
+                            break;
+                        case RAWKEY_0:
+                        case RAWKEY_KP_0:
+                            update_switchto(0);
+                            break;
+                        case RAWKEY_1:
+                        case RAWKEY_KP_1:
+                            update_switchto(1);
+                            break;
+                        case RAWKEY_2:
+                        case RAWKEY_KP_2:
+                            update_switchto(2);
+                            break;
+                        case RAWKEY_3:
+                        case RAWKEY_KP_3:
+                            update_switchto(3);
+                            break;
+                        case RAWKEY_4:
+                        case RAWKEY_KP_4:
+                            update_switchto(4);
+                            break;
+                        case RAWKEY_5:
+                        case RAWKEY_KP_5:
+                            update_switchto(5);
+                            break;
+                        case RAWKEY_6:
+                        case RAWKEY_KP_6:
+                            update_switchto(6);
+                            break;
+                        case RAWKEY_7:
+                        case RAWKEY_KP_7:
+                            update_switchto(7);
                             break;
                     }
                     break;

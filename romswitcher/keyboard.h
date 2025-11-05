@@ -25,6 +25,26 @@
 #define RAWKEY_CRSRDOWN  0x4D
 #define RAWKEY_CRSRRIGHT 0x4E
 #define RAWKEY_CRSRLEFT  0x4F
+#define RAWKEY_1         0x01
+#define RAWKEY_2         0x02
+#define RAWKEY_3         0x03
+#define RAWKEY_4         0x04
+#define RAWKEY_5         0x05
+#define RAWKEY_6         0x06
+#define RAWKEY_7         0x07
+#define RAWKEY_8         0x08
+#define RAWKEY_9         0x09
+#define RAWKEY_0         0x0a
+#define RAWKEY_KP_1      0x1d
+#define RAWKEY_KP_2      0x1e
+#define RAWKEY_KP_3      0x1f
+#define RAWKEY_KP_4      0x2d
+#define RAWKEY_KP_5      0x2e
+#define RAWKEY_KP_6      0x2f
+#define RAWKEY_KP_7      0x3d
+#define RAWKEY_KP_8      0x3e
+#define RAWKEY_KP_9      0x3f
+#define RAWKEY_KP_0      0x0f
 
 void keyboard_init(void);
 void keyboard_irq(void);

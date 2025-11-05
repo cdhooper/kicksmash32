@@ -38,7 +38,7 @@ static const cmd_t cmd_list[] = {
                         " [auto|board|list|?]", "manual autoconfig" },
     { cmd_copy,    "copy",    3, cmd_copy_help,
                         "[bwlqoh] <saddr> <daddr> <len>", "copy memory" },
-    { cmd_comp,    "comp",    0, cmd_comp_help,
+    { cmd_comp,    "comp",    4, cmd_comp_help,
                         "[bwlqoh] <addr1> <addr2> <len>", "compare memory" },
     { cmd_cpu,     "cpu",     0, cmd_cpu_help, "", "perform CPU operations" },
     { cmd_c,       "c",       1, cmd_c_help,

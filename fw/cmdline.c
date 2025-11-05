@@ -50,7 +50,7 @@ static const cmd_t cmd_list[] = {
     { cmd_help,    "?",       0, NULL, " [<cmd>]", "display help" },
     { cmd_copy,    "copy",    3, cmd_copy_help,
                         "[bwlqoh] <saddr> <daddr> <len>", "copy memory" },
-    { cmd_comp,    "comp",    2, cmd_comp_help,
+    { cmd_comp,    "comp",    4, cmd_comp_help,
                         "[bwlqoh] <addr1> <addr2> <len>", "compare memory" },
 #ifdef EMBEDDED_CMD
     { cmd_cpu,     "cpu",     2, cmd_cpu_help, " regs|usb", "CPU information" },

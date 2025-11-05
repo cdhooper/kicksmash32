@@ -231,6 +231,22 @@ cpu_set_pcr(uint32_t value)
 }
 
 __attribute__((unused))
+static inline uint16_t
+cpu_get_sr(void)
+{
+    uint16_t value;
+    __asm volatile("move.w sr, %0" : "=d" (value)::);
+    return (value);
+}
+
+__attribute__((unused))
+static inline void
+cpu_set_sr(uint16_t value)
+{
+    __asm volatile("move.w %0, sr" :: "d" (value):);
+}
+
+__attribute__((unused))
 static inline uint32_t
 cpu_get_tc(void)
 {

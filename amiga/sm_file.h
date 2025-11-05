@@ -33,8 +33,6 @@ uint sm_fsetdate(handle_t parent_handle, const char *name, uint which,
 uint sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid);
 uint sm_fsetprotect(handle_t parent_handle, const char *name, uint perms);
 
-const char *km_status(uint km_status);
-
 extern uint8_t sm_file_active;
 
 #define SEEK_OFFSET_BEGINNING (-1)
