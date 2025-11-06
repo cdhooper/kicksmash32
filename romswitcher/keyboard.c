@@ -125,10 +125,10 @@ const struct {
     { 0x49,    0,   0  },  // Undefined
     { 0x4a,  '-',  '-' },  // Keypad -
     { 0x4b,    0,   0  },  // Undefined
-    { 0x4c,  KEY_CURSOR_UP,    0 },              // Cursor up
-    { 0x4d,  KEY_CURSOR_DOWN,  0 },              // Cursor down
-    { 0x4e,  KEY_CURSOR_RIGHT, KEY_LINE_END },   // Cursor right
-    { 0x4f,  KEY_CURSOR_LEFT,  KEY_LINE_BEGIN }, // Cursor left
+    { 0x4c,  KEY_CURSOR_UP,    KEY_CURSOR_DOWN },  // Cursor up
+    { 0x4d,  KEY_CURSOR_DOWN,  KEY_CURSOR_DOWN },  // Cursor down
+    { 0x4e,  KEY_CURSOR_RIGHT, KEY_LINE_END },     // Cursor right
+    { 0x4f,  KEY_CURSOR_LEFT,  KEY_LINE_BEGIN },   // Cursor left
     { 0x50,    0,   0  },  // F1
     { 0x51,    0,   0  },  // F2
     { 0x52,    0,   0  },  // F3

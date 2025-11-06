@@ -1426,18 +1426,86 @@ gadget_keyboard_update_qual(uint8_t scancode, uint qual)
     return (qual);
 }
 
+static uint
+gadget_is_cursor_key(uint8_t scancode)
+{
+    switch (scancode) {
+        case 0x4c:  // Cursor Up pressed
+            return (0x01);
+        case 0x4d:  // Cursor Down pressed
+            return (0x02);
+        case 0x4e:  // Cursor Right pressed
+            return (0x04);
+        case 0x4f:  // Cursor Left pressed
+            return (0x08);
+        case 0xcc:  // Cursor Up released
+        case 0xcd:  // Cursor Down released
+        case 0xce:  // Cursor Right released
+        case 0xcf:  // Cursor Left released
+            return (0x10);
+    }
+    return (0);
+}
+
+static int
+gadget_nearest(int from_x, int from_y)
+{
+    GadContext *gc;
+    int pos;
+
+    if ((from_x > 0) || (from_y > 0))
+        pos = 0xffff;
+    else
+        pos = -1;
+
+    gc = gad_context_head;
+    while (gc != NULL) {
+        Gadget *gad = gc->gc_Gadget.NextGadget;
+        while (gad != NULL) {
+            int gad_xcenter = gad->LeftEdge + gad->Width / 2;
+            int gad_ycenter = gad->TopEdge + gad->Height / 2;
+            if (from_x > 0) {
+                if ((mouse_x < gad->LeftEdge) && (pos > gad_xcenter)) {
+                    /* Mouse is outside Gadget in X direction */
+                    pos = gad_xcenter;
+                }
+            } else if (from_x < 0) {
+                if ((mouse_x > gad->LeftEdge + gad->Width) &&
+                    (pos < gad_xcenter)) {
+                    /* Mouse is outside Gadget in X direction */
+                    pos = gad_xcenter;
+                }
+            } else if (from_y > 0) {
+                if ((mouse_y < gad->TopEdge) && (pos > gad_ycenter)) {
+                    /* Mouse is outside Gadget in Y direction */
+                    pos = gad_ycenter;
+                }
+            } else {  // (from_y < 0)
+                if ((mouse_y > gad->TopEdge + gad->Height) &&
+                    (pos < gad_ycenter)) {
+                    /* Mouse is outside Gadget in Y direction */
+                    pos = gad_ycenter;
+                }
+            }
+            gad = gad->NextGadget;
+        }
+        gc = gc->gc_next;
+    }
+    return (pos);
+}
+
 static void
 gadget_handle_keyboard_input(int ch)
 {
     static IntuiMessage imsg;
     static uint16_t qual;
+    uint16_t last_qual = qual;
 
     /* Update input qualifiers (Shift, Alt, Amiga keys, Control) */
     qual = gadget_keyboard_update_qual(ch >> 8, qual);
 
     /*
-     * This would be where to handle some keys outside the application.
-     * For example, the help key.
+     * Handle some keys outside the application.
      */
 #if 0
     if ((ch >> 8) == 0x5f) {  // Help key
@@ -1445,6 +1513,90 @@ gadget_handle_keyboard_input(int ch)
         return;
     }
 #endif
+    /* Check for Keyboard-injected Mouse controls */
+    if (qual & (IEQUALIFIER_LCOMMAND | IEQUALIFIER_RCOMMAND)) {
+        /* Left Amiga or Right Amiga is being held */
+        uint movement = gadget_is_cursor_key(ch >> 8);
+        if (movement != 0) {
+            static int8_t move = 1;
+            static uint8_t last_movement;
+            if (last_movement != movement) {
+                last_movement = movement;
+                move = 1;
+            } else if (move < 16) {
+                move *= 2;
+            }
+
+            if (qual & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) {
+                move = 30;
+            } else if (qual & IEQUALIFIER_CONTROL) {
+                /* Center on nearest gadget */
+                switch (movement) {
+                    case 0x01:  // Cursor Up pressed
+                        mouse_y = gadget_nearest(0, -1);
+                        break;
+                    case 0x02:  // Cursor Down pressed
+                        mouse_y = gadget_nearest(0, 1);
+                        break;
+                    case 0x04:  // Cursor Right pressed
+                        mouse_x = gadget_nearest(1, 0);
+                        break;
+                    case 0x08:  // Cursor Left pressed
+                        mouse_x = gadget_nearest(-1, 0);
+                        break;
+                }
+                return;
+            }
+
+            switch (movement) {
+                case 0x01:  // Cursor Up pressed
+                    mouse_y -= move;
+                    if (mouse_y < 0)
+                        mouse_y = 0;
+                    break;
+                case 0x02:  // Cursor Down pressed
+                    mouse_y += move;
+                    if (mouse_y > SCREEN_HEIGHT + 8)
+                        mouse_y = SCREEN_HEIGHT + 8;
+                    break;
+                case 0x04:  // Cursor Right pressed
+                    mouse_x += move * 2;
+                    if (mouse_x > SCREEN_WIDTH - 1)
+                        mouse_x = SCREEN_WIDTH - 1;
+                    break;
+                case 0x08:  // Cursor Left pressed
+                    mouse_x -= move * 2;
+                    if (mouse_x < 0)
+                        mouse_x = 0;
+                    break;
+            }
+            return;
+        }
+        if (qual & IEQUALIFIER_LALT) {
+            /* Left mouse button pressed */
+            gadget_mouse_button(MOUSE_BUTTON_LEFT, 1);
+            return;
+        }
+        if (qual & IEQUALIFIER_RALT) {
+            /* Right mouse button pressed */
+            gadget_mouse_button(MOUSE_BUTTON_RIGHT, 1);
+            return;
+        }
+    }
+    if ((last_qual & (IEQUALIFIER_LCOMMAND | IEQUALIFIER_RCOMMAND)) &&
+        (last_qual & (IEQUALIFIER_LALT | IEQUALIFIER_RALT)) &&
+        (((qual & (IEQUALIFIER_LCOMMAND | IEQUALIFIER_RCOMMAND)) == 0) ||
+         (((qual & (IEQUALIFIER_LALT | IEQUALIFIER_RALT)) == 0)))) {
+        /* Mouse button was asserted, but has now been released */
+        if (last_qual & IEQUALIFIER_LALT) {
+            /* Left mouse button released */
+            gadget_mouse_button(MOUSE_BUTTON_LEFT, 0);
+        }
+        if (last_qual & IEQUALIFIER_RALT) {
+            /* Right mouse button released */
+            gadget_mouse_button(MOUSE_BUTTON_RIGHT, 0);
+        }
+    }
 
     if ((active_gadget != NULL) &&
         ((active_gadget->GadgetType == STRING_KIND) ||
