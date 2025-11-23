@@ -18,7 +18,7 @@ there were, but I certainly didn't expect this many.
 | ReA4000CR   | KickSmash 4KCR        | 55.40 mm (exact) | D0-D15 ROM is on top, 42-pin sockets |
 | A4000T      | KickSmash 4KT         | 20.32 mm (exact) | |
 | A4000TX     | KickSmash 32 (maybe?) | 19.69 mm (exact) | Hese says 0.775" |
-| AmigaPCI    | Not supported         | 22.85 mm (exact) | D0-D15 ROM is on right, 27C4096 ROM pinout |
+| AmigaPCI    | KickSmash APCI        | 22.85 mm (exact) | D0-D15 ROM is on right, 27C4096 ROM pinout |
 | A500        | Not supported         |                  | Single 16-bit socket |
 | A600        | Not supported         |                  | Single 16-bit socket |
 | A2000       | Not supported         |                  | Single 16-bit socket |
@@ -33,6 +33,7 @@ there were, but I certainly didn't expect this many.
 | Kicksmash 3KT | [<IMG SRC="../photos/2025_03_15_kicksmash_3kt_2d_top.jpg" HEIGHT=90>](../photos/2025_03_15_kicksmash_3kt_2d_top.jpg?raw) | KS USB connector should emerge next to MB SCSI connector. Note that the Rev7 board requires -s 1032 when programming from hostsmash. | RP701 pin 6 or U713 pin 1 |
 | Kicksmash 4KT | [<IMG SRC="../photos/2025_01_22_kicksmash_4kt_2d_top.jpg" HEIGHT=90>](../photos/2025_01_22_kicksmash_4kt_2d_top.jpg) | KS USB connector should overlap Fat Gary | U141 pin 1 |
 | Kicksmash 1200 | [<IMG SRC="../photos/2025_03_13_kicksmash_1200_2d_top.jpg" HEIGHT=90>](../photos/2025_03_13_kicksmash_1200_2d_top.jpg) | DO NOT USE KICKSMASH1200 WITH A CPU ACCELERATOR. Due to a bug in Gayle, Kicksmash may drive bus data at the same time an accelerator like the TF1260 is reading or writing another device. This can cause the Amiga to crash. There is no current workaround. KS USB connector should face Gayle. If KS A20 and A21 pins are not populated, the KS pins should not be installed in A1200 socket pins 1 and 42. | TP1 pin 9, U13 pin 38, U5 pin 63, or via near E121R silkscreen. |
+| Kicksmash APCI | [<IMG SRC="../photos/2025_11_23_kicksmash_apci_2d_top.jpg" HEIGHT=90>](../photos/2025_11_23_kicksmash_apci_2d_top.jpg) | USB connector faces Agnus | CN210 near ROM sockets is _KBRST |
 
 Refer to the [Hardware Installation documentation](hw_install.txt) for additional installation details.
 

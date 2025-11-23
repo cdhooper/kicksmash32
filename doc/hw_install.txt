@@ -22,6 +22,8 @@ running on the TF.
     Amiga 4000:   use U141 pin 1.
     Amiga 4000CR: use U141 pin 1.
     Amiga 4000T:  use U141 pin 1.
+    Amiga AA3000: use U693 pin 1.
+    AmigaPCI:     use CN210 near ROM socket
 
 3. Remove your old Kickstart ROMs
     It's best to use a chip extractor to remove the ROM chips. If you must use
@@ -49,6 +51,7 @@ running on the TF.
     Amiga 4000CR: Orient KickSmash with the USB connector emerging next
             to Ramsey.
     Amiga 4000T: Orient KickSmash with the USB connector overlapping Fat Gary.
+    AmigaPCI: Orient KickSmash with the USB connector facing Agnus
 
     Be careful to ensure that all pins are aligned correctly with the
     socket leaf springs before applying force to install KickSmash
