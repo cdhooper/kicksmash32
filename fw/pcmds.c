@@ -133,6 +133,7 @@ static const memmap_t memmap[] = {
     { "GPIOD",  GPIOD_BASE },
     { "GPIOE",  GPIOE_BASE },
     { "IWDG",   IWDG_BASE },
+    { "NVIC",   NVIC_BASE },
     { "PWR",    POWER_CONTROL_BASE },
     { "RCC",    RCC_BASE },
     { "RTC",    RTC_BASE },
@@ -1066,7 +1067,7 @@ cmd_set(int argc, char * const *argv)
                    "specify all bit numbers or names\n");
             for (bit = 0; bit < 32; bit++)
                 if (config_flag_bits[bit][0] != '\0')
-                    printf(" %c %2u  %s\n",
+                    printf(" %c %2x  %s\n",
                            config.flags & BIT(bit) ? '*' : ' ',
                            bit, config_flag_bits[bit]);
             printf("Current config %08lx  ", config.flags);

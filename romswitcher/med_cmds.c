@@ -27,21 +27,20 @@
 
 #ifdef AMIGA
 #define IS_BIG_ENDIAN
+#endif
+
 #ifndef BUILD_DATE
 #define BUILD_DATE __DATE__
 #endif
 #ifndef BUILD_DATE
 #define BUILD_TIME __TIME__
 #endif
-#endif
-
-#undef AMIGA
 
 #ifndef EMBEDDED_CMD
 static int
 input_break_pending(void)
 {
-#ifdef AMIGA
+#ifdef AMIGAOS
     chkabort();  /* Handle ^C */
 #endif
     return (0);
@@ -124,7 +123,7 @@ const char cmd_test_patterns[] =
 
 const char cmd_time_help[] =
 "time cmd <cmd> - measure command execution time\n"
-#ifndef AMIGA
+#ifndef AMIGAOS
 "time now       - display the current time\n"
 #endif
 #ifdef EMBEDDED_CMD
@@ -133,6 +132,44 @@ const char cmd_time_help[] =
 #endif
 ;
 
+#ifdef AMIGAOS
+#include <dos/dos.h>
+
+#define UNUSED(x)
+
+/*
+ * is_user_abort
+ * -------------
+ * Check for user break input (^C)
+ */
+static BOOL
+is_user_abort(void)
+{
+    if (SetSignal(0, 0) & SIGBREAKF_CTRL_C)
+        return (1);
+    return (0);
+}
+
+void
+msleep(uint msec)
+{
+    while (msec > 1000) {
+        Delay(TICKS_PER_SECOND);
+        msec -= 1000;
+        if (is_user_abort())
+            return;
+    }
+    Delay(msec * TICKS_PER_SECOND / 1000);
+}
+
+void
+usleep(uint usec)
+{
+    msleep(usec / 1000);
+}
+#endif
+
+#ifdef EMBEDDED_CMD
 unsigned
 sleep(uint sec)
 {
@@ -146,11 +183,14 @@ usleep(useconds_t us)
     timer_delay_usec(us);
     return (0);
 }
+#endif
 
 #define SPACE_OFFSET 0
 #define SPACE_MEMORY 1
 #define SPACE_FILE   2
 #define SPACE_PROM   3
+#define SPACE_FLASH  4
+#define SPACE_I2C    5
 
 static rc_t
 data_read(uint64_t space, uint64_t addr, uint width, void *buf)
@@ -165,6 +205,20 @@ data_read(uint64_t space, uint64_t addr, uint width, void *buf)
 #ifdef HAVE_SPACE_FILE
         case SPACE_FILE:
             return (file_read(space, addr, width, buf));
+#endif
+#ifdef HAVE_SPACE_FLASH
+        case SPACE_FLASH:
+            return (stm32flash_read((uintptr_t)addr, width, buf));
+#endif
+#ifdef HAVE_SPACE_I2C
+        case SPACE_I2C: {
+            /*
+             * Parameters: bus, dev, offset, width, buf
+             * The offset also includes flags for various access modes.
+             */
+            return (i2c_read(addr >> 48, (uint16_t) (addr >> 32),
+                             (uint32_t) addr, width, buf));
+        }
 #endif
         default:
             printf("Internal error: Unknown space %x\n", (uint8_t) space);
@@ -185,6 +239,17 @@ data_write(uint64_t space, uint64_t addr, uint width, void *buf)
 #ifdef HAVE_SPACE_FILE
         case SPACE_FILE:
             return (file_write(space, addr, width, buf));
+#endif
+#ifdef HAVE_SPACE_FLASH
+        case SPACE_FLASH:
+            return (stm32flash_write((uintptr_t)addr, width, buf,
+                                     STM32FLASH_FLAG_AUTOERASE));
+#endif
+#ifdef HAVE_SPACE_I2C
+        case SPACE_I2C: {
+            return (i2c_write(addr >> 48, (uint16_t) (addr >> 32),
+                              (uint32_t) addr, width, buf));
+        }
 #endif
         default:
             printf("Internal error: Unknown space %x\n", (uint8_t) space);
@@ -224,7 +289,29 @@ print_addr(uint64_t space, uint64_t addr)
             }
             printf("%s:%0*llx",
                    file_track[slot].filename, awidth, (long long)addr);
+            break;
         }
+#endif
+#ifdef HAVE_SPACE_FLASH
+        case SPACE_FLASH:
+            printf("%05x", (int)addr);
+            break;
+#endif
+#ifdef HAVE_SPACE_I2C
+        case SPACE_I2C:
+            printf("I2C %s%s",
+                   ((addr >> 32) & I2C_FLAG_BLOCK) ? "Block " : "",
+                   ((addr >> 32) & I2C_FLAG_PEC) ? "PEC " : "");
+            if (i2c_bus_count > 1)
+                printf("%x.", (uint8_t) (addr >> 48));
+            printf("%02x", (uint8_t) (addr >> 32));
+            if (((addr >> 32) & I2C_FLAG_NONE) == 0) {
+                if ((addr >> 32) & I2C_FLAG_16BIT)
+                    (void) printf(".%04lx", (uint32_t) addr);
+                else
+                    (void) printf(".%02lx", (uint32_t) addr);
+            }
+            break;
 #endif
     }
 }
@@ -258,14 +345,14 @@ parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr)
     unsigned long long x;
     const char *argp = **arg;
 
+    *space = SPACE_MEMORY;  /* Default */
     if (*argc < 1) {
         printf("<addr> argument required\n");
         return (RC_USER_HELP);
     }
-    *space = SPACE_MEMORY;  /* Default */
 
 #ifdef HAVE_SPACE_PROM
-    if (strncmp(argp, "prom", 5) == 0) {
+    if (strcmp(argp, "prom") == 0) {
         *space = SPACE_PROM;
         if (strchr(argp, ':') != NULL) {
             argp += 6;
@@ -278,10 +365,10 @@ parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr)
             }
             argp = **arg;
         }
-    }
+    } else
 #endif
 #ifdef HAVE_SPACE_FILE
-    if (strncmp(argp, "file", 4) == 0) {
+    if (strcmp(argp, "file") == 0) {
         int len;
         *space = SPACE_FILE;
         if (strchr(argp, ':') != NULL) {
@@ -320,14 +407,127 @@ parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr)
             }
             argp = **arg;
         }
-    }
+    } else
 #endif
+#ifdef HAVE_SPACE_FLASH
+    if (strcmp(argp, "flash") == 0) {
+        *space = SPACE_FLASH;
+        if (strchr(argp, ':') != NULL) {
+            argp += 6;
+        } else {
+            (*arg)++;
+            (*argc)--;
+            if (*argc < 1) {
+                printf("<addr> argument required\n");
+                return (RC_USER_HELP);
+            }
+            argp = **arg;
+        }
+    } else
+#endif
+#ifdef HAVE_SPACE_I2C
+    if (strcmp(argp, "i2c") == 0) {
+        int    count;
+        uint   i_bus;
+        uint   i_dev;
+        uint   i_s      = 0;
+        uint   i_e      = 0;
+        uint   i_o      = 0;
+        bool_t is_pec   = FALSE;
+        bool_t is_block = FALSE;
 
+        *space = SPACE_I2C;
+        (*arg)++;
+        (*argc)--;
+
+        if ((*argc >= 1) && (strcasecmp(**arg, "pec") == 0)) {
+            is_pec = TRUE;
+            (*arg)++;
+            (*argc)--;
+        }
+        if ((*argc >= 1) && (strcasecmp(**arg, "block") == 0)) {
+            is_block = TRUE;
+            (*arg)++;
+            (*argc)--;
+        }
+        if ((*argc >= 1) && (strcasecmp(**arg, "pec") == 0)) {
+            is_pec = TRUE;
+            (*arg)++;
+            (*argc)--;
+        }
+        if (*argc == 0) {
+            warnx("Address required");
+            return (RC_BAD_PARAM);
+        }
+        argp = **arg;
+
+        pos = 0;
+        if (i2c_bus_count > 1) {
+            count = sscanf(argp, "%n%x%n.%n%x%n.%n%n%x%n%n", &pos, &i_bus, &pos,
+                           &pos, &i_dev, &pos, &pos, &i_s, &i_o, &i_e, &pos);
+            if ((count < 2) || (argp[pos] != '\0')) {
+                warnx("Invalid I2C device \"%s\" -- "
+                      "expected <bus>.<dev>[.<offset>]", argp);
+                return (RC_BAD_PARAM);
+            }
+        } else {
+            i_bus = 0;
+            count = sscanf(argp, "%n%x%n.%n%n%x%n%n",
+                           &pos, &i_dev, &pos, &pos, &i_s, &i_o, &i_e, &pos);
+            count++;  // Fake bus
+            if ((count < 2) || (argp[pos] != '\0')) {
+                warnx("Invalid I2C device \"%s\" -- "
+                      "expected <dev>[.<offset>]", argp);
+                return (RC_BAD_PARAM);
+            }
+        }
+        if (count < 3) {
+            /* Quick read from device (no offset provided) */
+            *addr = ((uint64_t) i_bus << 48) |
+                    ((uint64_t) i_dev << 32) |
+                    ((uint64_t) I2C_FLAG_NONE << 32);
+        } else {
+            /* Addressed read from device */
+            *addr = ((uint64_t) i_bus << 48) |
+                    ((uint64_t) i_dev << 32) |
+                    i_o;
+            if (i_e - i_s > 2)
+                *addr |= ((uint64_t) I2C_FLAG_16BIT << 32); // 16-bit addressing
+        }
+        /* In the future, make the following two optional */
+        *addr |= ((uint64_t) I2C_FLAG_NO_RETRY << 32);
+        *addr |= ((uint64_t) I2C_FLAG_NO_CHECK << 32);
+
+        argp += pos;
+
+        if (is_block)
+            *addr |= ((uint64_t) I2C_FLAG_BLOCK << 32); // Block mode transfer
+        if (is_pec)
+            *addr |= ((uint64_t) I2C_FLAG_PEC << 32);   // Packet Error Check
+        (*arg)++;
+        (*argc)--;
+        return (RC_SUCCESS);
+    } else
+#endif
+    { }
+
+#ifdef AMIGA
+    {
+        long int val;
+        if ((sscanf(argp, "%lx%n", &val, &pos) != 1) ||
+            ((argp[pos] != '\0') && (argp[pos] != ' '))) {
+            printf("Invalid address \"%s\"\n", argp);
+            return (RC_FAILURE);
+        }
+        x = val;
+    }
+#else
     if ((sscanf(argp, "%llx%n", &x, &pos) != 1) ||
         ((argp[pos] != '\0') && (argp[pos] != ' '))) {
         printf("Invalid address \"%s\"\n", argp);
         return (RC_FAILURE);
     }
+#endif
     *addr = x;
     (*arg)++;
     (*argc)--;
@@ -1115,7 +1315,7 @@ cmd_delay(int argc, char * const *argv)
     int  pos   = 0;
     int  count;
     char *ptr;
-    char  restore = 0;
+    char  restore = '\0';
 
     if (argc <= 1) {
         printf("This command requires an argument: <time>\n");
@@ -1633,17 +1833,20 @@ cmd_version(int argc, char * const *argv)
 {
     extern const char RomID[];
     printf("%s\n", RomID + 6);
+//  printf("%s\n", version_str);
     return (RC_SUCCESS);
 }
 
+#ifdef EMBEDDED_CMD
 rc_t
 cmd_what(int argc, char * const *argv)
 {
     serial_replay_output();
     return (RC_SUCCESS);
 }
+#endif
 
-#ifdef AMIGA
+#ifdef AMIGAOS
 /* XXX: this should go in cmds_amiga.c */
 #include <time.h>
 #include <clib/timer_protos.h>

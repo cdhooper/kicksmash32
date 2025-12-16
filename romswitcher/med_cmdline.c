@@ -65,14 +65,19 @@ static const cmd_t cmd_list[] = {
     { cmd_time,    "time",    2, cmd_time_help, " cmd <cmd>",
                         "measure command execution time" },
     { cmd_reset,   "reset",   0, cmd_reset_help, "", "reset Amiga" },
+#ifndef EMBEDDED_CMD
     { cmd_what,    "what",    0, NULL, "", "show recent output" },
+#endif
     { cmd_version, "version", 1, NULL, "", "show version" },
 };
 
 static const char *do_not_eval_cmds[] = {
+    "history",
 #ifdef EMBEDDED_CMD
     "pld",
+    "set",
 #endif
+    "time",
 };
 
 static uint
@@ -121,14 +126,32 @@ cmd_help(int argc, char * const *argv)
     }
     for (arg = 1; arg < argc; arg++) {
         bool_t matched = FALSE;
+        int arglen = strlen(argv[arg]);
         for (cur = 0; cur < ARRAY_SIZE(cmd_list); cur++) {
             int         cl_len  = cmd_list[cur].cl_len;
             const char *cl_name = cmd_list[cur].cl_name;
 
+            if ((cl_len < arglen) && (cl_len != 0))
+                cl_len = arglen;
             if ((strcmp(argv[arg], cl_name) == 0) ||
                 ((cl_len != 0) && (strncmp(argv[arg], cl_name, cl_len) == 0))) {
-                if (cmd_list[cur].cl_help_desc == NULL)
-                    continue;  // hidden command
+                if (cmd_list[cur].cl_help_desc == NULL) {
+                    /* Hidden command */
+                    size_t ccur;
+                    for (ccur = 0; ccur < ARRAY_SIZE(cmd_list); ccur++) {
+                        if (cur == ccur)
+                            continue;  // skip this command
+                        if (cmd_list[cur].cl_func == cmd_list[ccur].cl_func) {
+                            printf("%s is an alias for %s\n",
+                                   cl_name, cmd_list[ccur].cl_name);
+                            cur = ccur;
+                            goto show_alias;
+                        }
+                    }
+                    printf("%s is a hidden command\n", cl_name);
+                    return (RC_SUCCESS);
+                }
+show_alias:
                 printf("%s%s - %s\n", cl_name,
                        cmd_list[cur].cl_help_args, cmd_list[cur].cl_help_desc);
                 if (cmd_list[cur].cl_help_long != NULL)
@@ -728,8 +751,16 @@ invalid_arg1:
                     int pocket_need;
                     int pocket_len = epos - spos + 1;
                     char echar = str[epos];
+#ifdef _DCC
+                    /* DICE does not have snprintf */
+                    char temp_buf[32];
+                    pocket_need = sprintf(temp_buf, "%llx", result);
+                    if (pocket_len >= pocket_need)
+                        pocket_need = sprintf(str + spos, "%llx", result);
+#else
                     pocket_need = snprintf(str + spos, pocket_len,
                                            "%llx", result);
+#endif
                     pocket_need++;  /* Account for '\0' */
                     str[epos] = echar;  /* replace '\0' with original */
 #ifdef DEBUG_EVAL

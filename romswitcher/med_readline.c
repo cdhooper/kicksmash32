@@ -96,7 +96,7 @@ int                   history_base;
 static char          *history_cur;
 static char           history_buf[HISTORY_MAX_CHARS];
 static uint8_t        history_cur_line;
-static const char    *input_line_prompt;
+static const char    *input_line_prompt = "";
 static input_mode_t   input_mode = INPUT_MODE_NORMAL;
 static uint           input_pos;
 static uint8_t        input_need_prompt;
@@ -256,7 +256,9 @@ input_show_prompt(const char *prompt)
 {
     printf("%s%s", prompt, input_buf);
     putchars(KEY_BACKSPACE, strlen(input_buf) - input_pos);
+#ifndef EMBEDDED_CMD
     fflush(stdout);
+#endif
 }
 
 int
@@ -494,7 +496,7 @@ redraw_prompt:
             /* ESC initiates an Escape sequence */
             input_mode = INPUT_MODE_ESC;
             break;
-        case KEY_AMIGA_ESC:
+        case KEY_AMIGA_ESC:  // Control Sequence Initiator (CSI)
             /* Amiga ESC initiates an Escape [ sequence */
             input_mode = INPUT_MODE_BRACKET;
             break;
@@ -634,12 +636,13 @@ history_get(int line_num)
     return (&cur);
 }
 
+#if 0
 HISTORY_STATE *
 history_get_history_state(void)
 {
     HISTORY_STATE *state = malloc(sizeof (*state));
     if (state == NULL)
-        errx(EXIT_FAILURE, "no memory");
+        err(EXIT_FAILURE, "no memory");
 
     state->history_cur       = history_cur;
     state->history_cur_line  = history_cur_line;
@@ -654,6 +657,7 @@ history_set_history_state(const HISTORY_STATE *state)
     history_cur_line = state->history_cur_line;
     memcpy(history_buf, state->history_buf, sizeof (history_buf));
 }
+#endif
 
 int
 history_expand(const char *line, char **expansion)
