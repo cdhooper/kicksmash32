@@ -3147,7 +3147,8 @@ find_mx_programmer(void)
             }
             continue;
         }
-        if (strstr(buf, "MX29F1615") != NULL) {
+        if ((strstr(buf, "MX29F1615") != NULL) ||
+            (strstr(buf, "KickSmash") != NULL)) {
             saw_programmer = TRUE;
         }
     }
@@ -4792,11 +4793,15 @@ reply_open_fail:
         /* File is opened for read; attempt to figure out file type */
         if (hm_mode & HM_MODE_NOFOLLOW) {
             if (lstat(host_path, &st) != 0) {
+                if (hm_mode & HM_MODE_CREATE)
+                    goto could_not_stat;
                 fsprintf("fopen(%s) lstat fail errno=%d\n", host_path, errno);
                 goto reply_open_fail;
             }
         } else {
             if (stat(host_path, &st) != 0) {
+                if (hm_mode & HM_MODE_CREATE)
+                    goto could_not_stat;
                 fsprintf("fopen(%s) stat fail errno=%d\n", host_path, errno);
                 goto reply_open_fail;
             }
@@ -4805,6 +4810,7 @@ reply_open_fail:
         hm->hm_type = SWAP16(hm_type);
     }
 
+could_not_stat:
     if ((hm_mode & HM_MODE_LINK) ||
         (hm_mode & HM_MODE_DIR)) {
         /*

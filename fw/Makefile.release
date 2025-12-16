@@ -24,6 +24,7 @@ $(UDEV_FILE_PATHS) &:
 	sudo udevadm control --reload
 else
 $(UDEV_FILE_PATHS) &:
+	@echo $@
 endif
 
 # Write STM32 flash using DFU mode

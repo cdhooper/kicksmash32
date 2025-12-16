@@ -44,6 +44,7 @@ And tell it to manage KickSmash serial:
 
 If you have wget installed, you can run the wdikicksmash.bat file in the
 sw directory to do both.
+    wget https://raw.githubusercontent.com/cdhooper/kicksmash32/refs/heads/main/sw/wdikicksmash.bat
 
 After installing the above, you will need to plug in your KickSmash board
 again.
@@ -148,3 +149,19 @@ might help you get started with automating programming:
 
     sw\hostsmash_win64.exe -d com3 -w diagrom.rom -b 2 -s 3210 -y
     sw\hostsmash_win64.exe -d com3 -t "prom bank name 2 DiagROMV2-Daily"
+
+-------------------------------------------------------------------
+
+The following is recommended for Windows 11:
+
+1. dfu-util-0.11-binaries
+    https://sourceforge.net/projects/dfu-util/
+2. WDI-Simple driver
+    https://github.com/rogerclarkmelbourne/Arduino_STM32/tree/master/drivers/win
+3. ZadigUSB "Fix USB Unknown Driver with Zadig"
+    If you have the STMCubeprogrammer installed, you may not need ZadigUSB.
+    if you're running Win11 24H. You might still need it for Win11 25H.
+    https://zadig.akeo.ie/
+
+If you are running Windows XP, you might try an older release of Zadig:
+    https://github.com/pbatard/libwdi/releases/download/v1.2.5/zadig_xp-2.2.exe
