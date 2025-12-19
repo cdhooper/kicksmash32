@@ -46,7 +46,12 @@
 
 #ifdef AMIGA
 #define IS_BIG_ENDIAN
+#endif
+
+#ifndef BUILD_DATE
 #define BUILD_DATE __DATE__
+#endif
+#ifndef BUILD_DATE
 #define BUILD_TIME __TIME__
 #endif
 
@@ -54,7 +59,7 @@
 static int
 input_break_pending(void)
 {
-#ifdef AMIGA
+#ifdef AMIGAOS
     chkabort();  /* Handle ^C */
 #endif
     return (0);
@@ -78,6 +83,15 @@ const char cmd_c_help[] =
 #endif
 #ifdef HAVE_SPACE_FLASH
 " flash"
+#endif
+#ifdef HAVE_SPACE_I2C
+" i2c"
+#endif
+#ifdef HAVE_SPACE_PCI
+" pci"
+#endif
+#ifdef HAVE_SPACE_PHYS
+" phys"
 #endif
 #ifdef HAVE_SPACE_PROM
 " prom"
@@ -121,6 +135,15 @@ const char cmd_d_help[] =
 #endif
 #ifdef HAVE_SPACE_FLASH
 " flash"
+#endif
+#ifdef HAVE_SPACE_I2C
+" i2c"
+#endif
+#ifdef HAVE_SPACE_PCI
+" pci"
+#endif
+#ifdef HAVE_SPACE_PHYS
+" phys"
 #endif
 #ifdef HAVE_SPACE_PROM
 " prom"
@@ -212,6 +235,8 @@ usleep(useconds_t us)
 #define SPACE_PROM   3
 #define SPACE_FLASH  4
 #define SPACE_I2C    5
+#define SPACE_PHYS   6
+#define SPACE_PCI    7
 
 static rc_t
 data_read(uint64_t space, uint64_t addr, uint width, void *buf)
@@ -240,6 +265,20 @@ data_read(uint64_t space, uint64_t addr, uint width, void *buf)
             return (i2c_read(addr >> 48, (uint16_t) (addr >> 32),
                              (uint32_t) addr, width, buf));
         }
+#endif
+#ifdef HAVE_SPACE_PCI
+        case SPACE_PCI:
+            /*
+             * Parameters: bus, dev, func, offset, width, buf
+             */
+            return (pci_read((uint8_t) (addr >> 24),
+                             ((uint8_t) (addr >> 19)) & 0x1f,
+                             ((uint8_t) (addr >> 16)) & 7, (uint16_t) addr,
+                             width, buf));
+#endif
+#ifdef HAVE_SPACE_PHYS
+        case SPACE_PHYS:
+            return (phys_mem_read(addr, width, buf));
 #endif
         default:
             printf("Internal error: Unknown space %x\n", (uint8_t) space);
@@ -271,6 +310,17 @@ data_write(uint64_t space, uint64_t addr, uint width, void *buf)
             return (i2c_write(addr >> 48, (uint16_t) (addr >> 32),
                               (uint32_t) addr, width, buf));
         }
+#endif
+#ifdef HAVE_SPACE_PCI
+        case SPACE_PCI:
+            return (pci_write((uint8_t) (addr >> 24),
+                              ((uint8_t) (addr >> 19)) & 0x1f,
+                              ((uint8_t) (addr >> 16)) & 7, (uint16_t) addr,
+                              width, buf));
+#endif
+#ifdef HAVE_SPACE_PHYS
+        case SPACE_PHYS:
+            return (phys_mem_write(addr, width, buf));
 #endif
         default:
             printf("Internal error: Unknown space %x\n", (uint8_t) space);
@@ -334,6 +384,28 @@ print_addr(uint64_t space, uint64_t addr)
             }
             break;
 #endif
+#ifdef HAVE_SPACE_PCI
+        case SPACE_PCI: {
+            /*
+             * Parameters: bus, dev, func, offset, width, buf
+             */
+            uint p_bus  = (uint8_t) (addr >> 24);
+            uint p_dev  = ((uint8_t) (addr >> 19)) & 0x1f;
+            uint p_func = ((uint8_t) (addr >> 16)) & 0x7;
+            uint p_off  = (uint16_t) addr;
+            printf("%x.%x.%x.%02x", p_bus, p_dev, p_func, p_off);
+            break;
+        }
+#endif
+#ifdef HAVE_SPACE_PHYS
+        case SPACE_PHYS: {
+            int awidth = 16;
+
+            if ((addr >> 32) == 0)
+                awidth = 8;
+            printf("phys %0*llx", awidth, (long long)addr);
+        }
+#endif
     }
 }
 
@@ -375,75 +447,49 @@ parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr)
 #ifdef HAVE_SPACE_PROM
     if (strcmp(argp, "prom") == 0) {
         *space = SPACE_PROM;
-        if (strchr(argp, ':') != NULL) {
-            argp += 6;
-        } else {
-            (*arg)++;
-            (*argc)--;
-            if (*argc < 1) {
-                printf("<addr> argument required\n");
-                return (RC_USER_HELP);
-            }
-            argp = **arg;
+        (*arg)++;
+        (*argc)--;
+        if (*argc < 1) {
+            printf("<addr> argument required\n");
+            return (RC_USER_HELP);
         }
+        argp = **arg;
     } else
 #endif
 #ifdef HAVE_SPACE_FILE
     if (strcmp(argp, "file") == 0) {
         int len;
         *space = SPACE_FILE;
-        if (strchr(argp, ':') != NULL) {
-            argp += 5;
-            len = space_add_filename(space, argp);
-            if (len == 0)
-                return (RC_FAILURE);
-            argp += len + 1;
-            if (*argp == '\0') {
-                /* Try next argument */
-                (*arg)++;
-                (*argc)--;
-                if (*argc < 1) {
-                    printf("<addr> argument required\n");
-                    return (RC_USER_HELP);
-                }
-                argp = **arg;
-            }
-        } else {
-            (*arg)++;
-            (*argc)--;
-            if (*argc < 1) {
-                printf("<filename> argument required\n");
-                return (RC_USER_HELP);
-            }
-            argp = **arg;
-            len = space_add_filename(space, argp);
-            if (len == 0)
-                return (RC_FAILURE);
-
-            (*arg)++;
-            (*argc)--;
-            if (*argc < 1) {
-                printf("<addr> argument required\n");
-                return (RC_USER_HELP);
-            }
-            argp = **arg;
+        (*arg)++;
+        (*argc)--;
+        if (*argc < 1) {
+            printf("<filename> argument required\n");
+            return (RC_USER_HELP);
         }
+        argp = **arg;
+        len = space_add_filename(space, argp);
+        if (len == 0)
+            return (RC_FAILURE);
+
+        (*arg)++;
+        (*argc)--;
+        if (*argc < 1) {
+            printf("<addr> argument required\n");
+            return (RC_USER_HELP);
+        }
+        argp = **arg;
     } else
 #endif
 #ifdef HAVE_SPACE_FLASH
     if (strcmp(argp, "flash") == 0) {
         *space = SPACE_FLASH;
-        if (strchr(argp, ':') != NULL) {
-            argp += 6;
-        } else {
-            (*arg)++;
-            (*argc)--;
-            if (*argc < 1) {
-                printf("<addr> argument required\n");
-                return (RC_USER_HELP);
-            }
-            argp = **arg;
+        (*arg)++;
+        (*argc)--;
+        if (*argc < 1) {
+            printf("<addr> argument required\n");
+            return (RC_USER_HELP);
         }
+        argp = **arg;
     } else
 #endif
 #ifdef HAVE_SPACE_I2C
@@ -530,11 +576,56 @@ parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr)
         return (RC_SUCCESS);
     } else
 #endif
+#ifdef HAVE_SPACE_PCI
+    if (strcmp(argp, "pci") == 0) {
+        int    count;
+        uint   p_bus;
+        uint   p_dev;
+        uint   p_func;
+        uint   p_off;
+        *space = SPACE_PCI;
+
+        (*arg)++;
+        (*argc)--;
+        argp = **arg;
+        pos = 0;
+        count = sscanf(argp, "%n%x%n.%n%x%n.%n%x%n.%n%x%n", &pos, &p_bus, &pos,
+                       &pos, &p_dev, &pos,
+                       &pos, &p_func, &pos,
+                       &pos, &p_off, &pos);
+        if ((count < 3) || (argp[pos] != '\0')) {
+            printf("Invalid PCI device \"%s\" -- "
+                   "expected <bus>.<dev>.<func>[.<offset>]", argp);
+            printf("%*s^\n", pos, "");
+            return (RC_BAD_PARAM);
+        }
+        if (count == 3)
+            p_off = 0;
+        *addr = (p_bus << 24) | (p_dev << 19) | (p_func << 16) | p_off;
+        (*arg)++;
+        (*argc)--;
+        return (RC_SUCCESS);
+    } else
+#endif
+#ifdef HAVE_SPACE_PHYS
+    if ((strcmp(argp, "phys") == 0) ||
+        (strcmp(argp, "pa") == 0)) {
+        *space = SPACE_PHYS;
+        (*arg)++;
+        (*argc)--;
+        if (*argc < 1) {
+            printf("<addr> argument required\n");
+            return (RC_USER_HELP);
+        }
+        argp = **arg;
+    } else
+#endif
     { }
 
+    pos = 0;
 #ifdef AMIGA
     {
-        long int val;
+        unsigned long val;
         if ((sscanf(argp, "%lx%n", &val, &pos) != 1) ||
             ((argp[pos] != '\0') && (argp[pos] != ' '))) {
             printf("Invalid address \"%s\"\n", argp);
@@ -1865,8 +1956,34 @@ cmd_what(int argc, char * const *argv)
 }
 #endif
 
-#ifdef AMIGA
-/* XXX: this should go in cmds_amiga.c */
+#ifdef AMIGA_LIBNIX
+#define UNIXOFFSET 252460800  /* seconds from 70 to 78 */
+
+int
+_gettimeofday(struct timeval *tv, void *tz)
+{
+    struct DateStamp ds;
+
+    DateStamp(&ds);
+    tv->tv_sec = (long) (UNIXOFFSET + ds.ds_Days * (60 * 60 * 24) +
+                        ds.ds_Minute * 60 + ds.ds_Tick / TICKS_PER_SECOND);
+    tv->tv_usec = (long) (ds.ds_Tick%TICKS_PER_SECOND) *
+                         (1000000 / TICKS_PER_SECOND);
+    return (0);
+}
+
+int isatty(int fd)
+{
+    if (fd <= 2) {
+        ULONG ihandle = (fd == 0) ? Input() : Output();
+        if (IsInteractive(ihandle))
+            return (1);
+    }
+    return (0);
+}
+#endif
+
+#ifdef _DCC
 #include <time.h>
 #include <clib/timer_protos.h>
 #define TICKS_PER_MINUTE (TICKS_PER_SECOND * 60)
@@ -1916,8 +2033,7 @@ cmd_time(int argc, char * const *argv)
 
     return (rc);
 }
-#elif !defined(EMBEDDED_CMD)  /* UNIX */
-/* XXX: this should go in cmds_unix.c */
+#elif !defined(EMBEDDED_CMD)  /* UNIX or AmigaOS */
 #include <sys/time.h>
 
 static uint64_t
@@ -1959,7 +2075,7 @@ cmd_time(int argc, char * const *argv)
     } else if (strncmp(argv[1], "now", 1) == 0) {
         struct timeval now;
         gettimeofday(&now, &tz);
-        printf("now=%lu.%06lu sec.usec\n", now.tv_sec, now.tv_usec);
+        printf("now=%lu.%06u sec.usec\n", now.tv_sec, (uint)now.tv_usec);
         rc = RC_SUCCESS;
     } else {
         printf("Unknown argument %s\n", argv[1]);

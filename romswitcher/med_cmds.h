@@ -29,6 +29,8 @@ rc_t cmd_what(int argc, char * const *argv);
 rc_t parse_value(const char *arg, uint8_t *value, uint width);
 rc_t parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr);
 
+char const *skip(const char *str, const char *skip);
+
 void print_addr(uint64_t space, uint64_t addr);
 
 extern const char cmd_c_help[];

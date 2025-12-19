@@ -16,13 +16,21 @@
 #include "util.h"
 #include "cache.h"
 #else
+#ifndef _DCC
 #include <devices/cd.h>
 #include <inline/timer.h>
 #include <inline/exec.h>
 #include <inline/dos.h>
 #endif
+#endif
 
 #define BIT(x) (1U << (x))
+
+#ifdef _DCC
+#define ASM_NOP
+#else
+#define ASM_NOP __asm volatile("nop");
+#endif
 
 #ifdef STANDALONE
 /* Standalone is always in supervisor state */
@@ -30,7 +38,7 @@
 #define SUPERVISOR_STATE_EXIT()
 #else
 #define SUPERVISOR_STATE_ENTER()    { \
-                                      APTR old_stack = SuperState()
+                                      APTR old_stack = (APTR) SuperState()
 #define SUPERVISOR_STATE_EXIT()       UserState(old_stack); \
                                     }
 #endif
@@ -59,7 +67,7 @@
             } else if ((cpu_type == 68040) || (cpu_type == 68060)) { \
                 mmu_set_tc_040(oldmmustate); \
             } \
-            __asm volatile("nop"); \
+            ASM_NOP; \
         }
 
 #define CACHE_FLUSH() \
@@ -72,7 +80,7 @@
                 cpu_cache_flush_040(); \
                 break; \
         } \
-        __asm volatile("nop");
+        ASM_NOP;
 
 #define CACHE_INVALIDATE() \
         switch (cpu_type) { \
@@ -84,7 +92,7 @@
                 cpu_cache_invalidate_040(); \
                 break; \
         } \
-        __asm volatile("nop");
+        ASM_NOP;
 
 #define MMU_FLUSH() \
         switch (cpu_type) { \
@@ -129,13 +137,16 @@
 void cpu_control_init(void);
 void cia_spin(unsigned int ticks);
 
-__attribute__ ((noinline)) uint32_t mmu_get_tc_030(void);
-__attribute__ ((noinline)) uint32_t mmu_get_tc_040(void);
-__attribute__ ((noinline)) void mmu_set_tc_030(register uint32_t tc asm("%d0"));
-__attribute__ ((noinline)) void mmu_set_tc_040(register uint32_t tc asm("%d0"));
+#ifndef _DCC
+#define NO_INLINE __attribute__ ((noinline))
+#define OK_UNUSED __attribute__ ((unused))
 
-__attribute__((unused))
-static inline uint32_t
+NO_INLINE uint32_t mmu_get_tc_030(void);
+NO_INLINE uint32_t mmu_get_tc_040(void);
+NO_INLINE void mmu_set_tc_030(register uint32_t tc asm("%d0"));
+NO_INLINE void mmu_set_tc_040(register uint32_t tc asm("%d0"));
+
+OK_UNUSED static inline uint32_t
 cpu_get_cacr(void)
 {
     uint32_t value;
@@ -143,15 +154,13 @@ cpu_get_cacr(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_cacr(uint32_t value)
 {
     __asm volatile("movec %0, cacr" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 cpu_get_dtt0(void)
 {
     uint32_t value;
@@ -159,15 +168,13 @@ cpu_get_dtt0(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_dtt0(uint32_t value)
 {
     __asm volatile("movec %0, dtt0" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 cpu_get_dtt1(void)
 {
     uint32_t value;
@@ -175,15 +182,13 @@ cpu_get_dtt1(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_dtt1(uint32_t value)
 {
     __asm volatile("movec %0, dtt1" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 cpu_get_itt0(void)
 {
     uint32_t value;
@@ -191,15 +196,13 @@ cpu_get_itt0(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_itt0(uint32_t value)
 {
     __asm volatile("movec %0, itt0" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 cpu_get_itt1(void)
 {
     uint32_t value;
@@ -207,15 +210,13 @@ cpu_get_itt1(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_itt1(uint32_t value)
 {
     __asm volatile("movec %0, itt1" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 cpu_get_pcr(void)
 {
     uint32_t value;
@@ -223,15 +224,13 @@ cpu_get_pcr(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_pcr(uint32_t value)
 {
     __asm volatile("movec %0, pcr" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint16_t
+OK_UNUSED static inline uint16_t
 cpu_get_sr(void)
 {
     uint16_t value;
@@ -239,15 +238,13 @@ cpu_get_sr(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_sr(uint16_t value)
 {
     __asm volatile("move.w %0, sr" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 cpu_get_tc(void)
 {
     uint32_t value;
@@ -255,15 +252,13 @@ cpu_get_tc(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_tc(uint32_t value)
 {
     __asm volatile("movec %0, tc" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 cpu_get_tt0(void)
 {
     uint32_t value;
@@ -280,8 +275,7 @@ cpu_get_tt0(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_tt0(uint32_t value)
 {
     __asm__ __volatile__("move.l %0,-(sp) \n\t"
@@ -290,8 +284,7 @@ cpu_set_tt0(uint32_t value)
                          : "=d" (value));
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 cpu_get_tt1(void)
 {
     uint32_t value;
@@ -308,8 +301,7 @@ cpu_get_tt1(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_tt1(uint32_t value)
 {
     __asm__ __volatile__("move.l %0,-(sp) \n\t"
@@ -318,8 +310,7 @@ cpu_set_tt1(uint32_t value)
                          : "=d" (value));
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 cpu_get_vbr(void)
 {
     uint32_t value;
@@ -327,15 +318,13 @@ cpu_get_vbr(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_set_vbr(uint32_t value)
 {
     __asm volatile("movec %0, vbr" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 fpu_get_fpcr(void)
 {
     uint32_t value;
@@ -343,15 +332,13 @@ fpu_get_fpcr(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 fpu_set_fpcr(uint32_t value)
 {
     __asm volatile("fmove.l %0, fpcr" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline uint32_t
+OK_UNUSED static inline uint32_t
 fpu_get_fpsr(void)
 {
     uint32_t value;
@@ -359,15 +346,13 @@ fpu_get_fpsr(void)
     return (value);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 fpu_set_fpsr(uint32_t value)
 {
     __asm volatile("fmove.l %0, fpsr" :: "d" (value):);
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_cache_flush_040(void)
 {
     /* Flush Instruction and Data Cache: 0xf4f8  cpusha %bc */
@@ -375,8 +360,7 @@ cpu_cache_flush_040(void)
                    "cpusha %bc");
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_cache_flush_040_data(void)
 {
     /* Flush Instruction and Data Cache: 0xf478  cpusha %dc */
@@ -384,8 +368,7 @@ cpu_cache_flush_040_data(void)
                    ".word 0xf478");
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_cache_flush_040_inst(void)
 {
     /* Flush Instruction Cache: 0xf4b8  cpusha %ic */
@@ -393,8 +376,7 @@ cpu_cache_flush_040_inst(void)
                    ".word 0xf4b8");
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_cache_invalidate_040(void)
 {
     /* Invalidate Instruction and Data Cache: 0xf4d8  cinva %bc */
@@ -402,8 +384,7 @@ cpu_cache_invalidate_040(void)
                    "cinva %bc");
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_cache_invalidate_040_inst(void)
 {
     /* Invalidate Instruction Cache: 0xf498  cinva %ic */
@@ -411,8 +392,7 @@ cpu_cache_invalidate_040_inst(void)
                    "cinva %ic");
 }
 
-__attribute__((unused))
-static inline void
+OK_UNUSED static inline void
 cpu_cache_invalidate_040_data(void)
 {
     /* Invalidate Data Cache: 0xf458  cinva %dc */
@@ -420,7 +400,7 @@ cpu_cache_invalidate_040_data(void)
                    "cinva %dc");
 }
 
-static __inline void __attribute__((__unused__))
+OK_UNUSED static inline void
 flush_tlb_030(void)
 {
     /* Using exact opcode because 68030 pflusha differs from 68040 pflusha */
@@ -428,20 +408,122 @@ flush_tlb_030(void)
                    ".word 0x2400");
 }
 
-static __inline void __attribute__((__unused__))
+OK_UNUSED static inline void
 flush_tlb_040(void)  // Also 68060
 {
     /* Using exact opcode because 68040 pflusha differs from 68030 pflusha */
     __asm volatile(".word 0xf518");  // 68040 pflusha
 }
 
+/*
+ * void mem_copy8(void *dst, void *src)
+ *           Copy 8 bytes from src to dst address
+ */
+OK_UNUSED static inline void
+mem_copy8(void *dst, void *src)
+{
+    __asm("movem.l (%1),d0-d1 \n"
+          "movem.l d0-d1,(%0) \n" :: "a" (dst), "a" (src) :);
+}
+
+/*
+ * void mem_copy16(void *dst, void *src)
+ *           Copy 16 bytes from src to dst address
+ */
+OK_UNUSED static inline void
+mem_copy16(void *dst, void *src)
+{
+    __asm("movem.l (%1),d0-d3 \n"
+          "movem.l d0-d3,(%0) \n"
+          :: "a" (dst), "a" (src) : "d0", "d1", "d2", "d3");
+}
+
+/*
+ * void mem_copy32(void *dst, void *src)
+ *           Copy 32 bytes from src to dst address
+ */
+OK_UNUSED static inline void
+mem_copy32(void *dst, void *src)
+{
+    __asm("movem.l (%1),d0-d7 \n"
+          "movem.l d0-d7,(%0) \n"
+          :: "a" (dst), "a" (src)
+          : "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7");
+}
+
+#ifdef __VBCC__
+static uint16_t swap16(__reg("d0")uint16_t) = "\trol.w\t#8,d0\n";
+static uint32_t swap32(__reg("d0")uint32_t) = "\trol.w\t#8,d0\n\tswap\td0\n\trol.w\t#8,d0\n";
+#else
+OK_UNUSED static inline uint16_t
+swap16(uint16_t val)
+{
+    __asm__("ror.w #8, %0"
+            : "+d" (val)  // Output: val is read / written (+) in a D register
+            :: "cc");     // Clobber: Condition codes are affected
+    return (val);
+}
+
+OK_UNUSED static inline uint32_t
+swap32(uint32_t val)
+{
+    __asm__("ror.w #8, %0\n\t"  // Rotate right by 8 bits (ABCD -> DABC)
+            "swap %0\n\t"       // Swap 16-bit halves     (DABC -> BCDA)
+            "ror.w #8, %0\n\t"  // Rotate right by 8 bits (BCDA -> ABCD)
+            : "=d" (val)        // Output: 'val' is placed in a data register
+            : "0" (val) :);     // Input: 'val'; "0" is same register as output
+    return (val);
+}
+#endif /* !__VBCC__ */
+
+#endif  /* !_DCC */
+
+#ifdef _DCC
+uint32_t cpu_get_cacr(void);
+void     cpu_set_cacr(uint32_t value);
+uint32_t cpu_get_dtt0(void);
+void     cpu_set_dtt0(uint32_t value);
+uint32_t cpu_get_dtt1(void);
+void     cpu_set_dtt1(uint32_t value);
+uint32_t cpu_get_itt0(void);
+void     cpu_set_itt0(uint32_t value);
+uint32_t cpu_get_itt1(void);
+void     cpu_set_itt1(uint32_t value);
+uint32_t cpu_get_pcr(void);
+void     cpu_set_pcr(uint32_t value);
+uint16_t cpu_get_sr(void);
+void     cpu_set_sr(uint16_t value);
+uint32_t cpu_get_tc(void);
+void     cpu_set_tc(uint32_t value);
+uint32_t cpu_get_tt0(void);
+void     cpu_set_tt0(uint32_t value);
+uint32_t cpu_get_tt1(void);
+void     cpu_set_tt1(uint32_t value);
+uint32_t cpu_get_vbr(void);
+void     cpu_set_vbr(uint32_t value);
+uint32_t fpu_get_fpsr(void);
+void     fpu_set_fpsr(uint32_t value);
+void     cpu_cache_flush_040(void);
+void     cpu_cache_flush_040_data(void);
+void     cpu_cache_flush_040_inst(void);
+void     cpu_cache_invalidate_040(void);
+void     cpu_cache_invalidate_040_inst(void);
+void     cpu_cache_invalidate_040_data(void);
+void     flush_tlb_030(void);
+void     flush_tlb_040(void);
+void     mem_copy8(void *dst, void *src);
+void     mem_copy16(void *dst, void *src);
+void     mem_copy32(void *dst, void *src);
+uint16_t swap16(uint16_t value);
+uint32_t swap32(uint32_t value);
+#else
+#endif
+
 void cpu_cache_flush(void);
 
 extern unsigned int cpu_type;
 extern unsigned int irq_disabled;
 
-#ifndef _DCC
 extern struct ExecBase *SysBase;
-#endif
 
 #endif /* _CPU_CONTROL_H */

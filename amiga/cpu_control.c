@@ -23,6 +23,12 @@
 #define CIAA_TBLO        ADDR8(0x00bfe601)
 #define CIAA_TBHI        ADDR8(0x00bfe701)
 
+#ifdef _DCC
+#define ASM_NOP
+#else
+#define ASM_NOP __asm volatile("nop");
+#endif
+
 unsigned int irq_disabled = 0;
 unsigned int cpu_type = 0;
 
@@ -63,8 +69,8 @@ cia_spin(unsigned int ticks)
             break;
         ticks -= diff;
         start = now;
-        __asm__ __volatile__("nop");
-        __asm__ __volatile__("nop");
+        ASM_NOP;
+        ASM_NOP;
     }
 }
 
@@ -144,13 +150,13 @@ get_cpu(void)
 }
 #endif
 
+#ifndef _DCC
 /*
  * mmu_get_tc_030
  * --------------
  * This function only works on the 68030.
  * 68040 and 68060 have different MMU instructions.
  */
-
 __attribute__ ((noinline)) uint32_t
 mmu_get_tc_030(void)
 {
@@ -203,57 +209,7 @@ mmu_set_tc_040(register uint32_t tc asm("%d0"))
                          "rts \n\t"
                          : "=d" (tc));
 }
-
-#if 0
-__attribute__ ((noinline)) uint32_t
-cpu_get_cacr(void)
-{
-    register uint32_t result;
-    __asm__ __volatile__("subq.l #4,sp \n\t"
-                         ".long 0xf0174200 \n\t"  // pmove tc,(sp)
-                         "move.l (sp)+,d0"
-                         : "=d" (result));
-    return (result);
-}
 #endif
-
-#if 0
-static inline uint32_t
-cpu_get_cacr(void)
-{
-    uint32_t cacr;
-    __asm volatile("movec.l cacr, %0" : "=r" (cacr)::);
-    return (cacr);
-}
-
-static inline void
-cpu_set_cacr(uint32_t cacr)
-{
-    __asm volatile("movec.l %0, cacr" :: "r" (cacr):);
-}
-
-static void
-cpu_cache_flush_040_both(void)
-{
-    __asm volatile("nop\n\t"
-                   "cpusha %bc");
-}
-
-void
-cpu_cache_flush(void)
-{
-    switch (cpu_type) {
-        case 68030:
-            cpu_set_cacr(cpu_get_cacr() | CACRF_ClearD);
-            break;
-        case 68040:
-        case 68060:
-            cpu_cache_flush_040_both();
-            break;
-    }
-}
-#endif
-
 
 void
 cpu_control_init(void)
