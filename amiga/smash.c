@@ -14,7 +14,7 @@
  * THE AUTHOR ASSUMES NO LIABILITY FOR ANY DAMAGE ARISING OUT OF THE USE
  * OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
  */
-const char *version = "\0$VER: smash "VERSION" ("BUILD_DATE") © Chris Hooper";
+const char *version = "\0$VER: smash "VERSION" ("BUILD_DATE") \xA9 Chris Hooper";
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1639,9 +1639,9 @@ fail_msg_state_get:
     }
     Permit();
 
-fail_msg_state:
     /* KS_CMD_MSG_INFO */
     smash_msg_info_t msginfo;
+fail_msg_state:
     rc = send_cmd(KS_CMD_MSG_INFO, NULL, 0, &msginfo, sizeof (msginfo), NULL);
     if (rc != 0) {
         printf("FAIL: MSG_INFO (%s)\n", smash_err(rc));

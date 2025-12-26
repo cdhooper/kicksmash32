@@ -30,7 +30,7 @@
 
 #define DIRBUF_SIZE 2000
 
-const char *version = "\0$VER: smashfs "VERSION" ("BUILD_DATE") � Chris Hooper";
+const char *version = "\0$VER: smashfs "VERSION" ("BUILD_DATE") \xA9 Chris Hooper";
 
 BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
 
