@@ -1193,6 +1193,7 @@ ee_test(void)
     uint32_t part1;
     uint32_t part2;
     uint32_t val;
+    uint64_t zerodata;
     uint pos;
     int rc = 0;
 
@@ -1308,6 +1309,21 @@ ee_test(void)
     }
     if (rc != 0)
         printf("\n");
+
+    /*
+     * Put the flash in CFI Query mode. In this mode, the first
+     * 0x400 bytes should not shadow address 0x0. This allows code
+     * to test A1-A8. Maybe A1-A7 on some flash parts.
+     */
+    ee_cmd(0x55, 0x98);
+    ee_read(0, &zerodata, sizeof (zerodata));
+    for (pos = 1; pos < 8; pos++) {
+        uint64_t data;
+        ee_read(BIT(pos), &data, sizeof (data));
+        if (data == zerodata) {
+            printf("FAIL: CFI wrap at A%x\n", pos);
+        }
+    }
 
     ee_read_mode();
     return (rc);

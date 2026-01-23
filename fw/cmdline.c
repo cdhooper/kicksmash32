@@ -111,6 +111,9 @@ static const char *do_not_eval_cmds[] = {
     "history",
 #ifdef EMBEDDED_CMD
     "pld",
+#ifdef HAVE_SPACE_PROM
+    "prom",
+#endif
     "set",
 #endif
     "time",

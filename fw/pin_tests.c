@@ -603,6 +603,96 @@ pin_test_oewe(uint verbose)
 }
 
 /*
+ * pin_test_flash_data
+ * -------------------
+ * Verify connection between STM32 and flash through the data pins.
+ */
+static uint
+pin_test_flash_data(uint verbose)
+{
+    uint32_t data;
+    uint     pin;
+    uint     errs = 0;
+    uint32_t floating = 0xffffffff;
+
+    /* Set Flash to not drive data lines */
+    gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+
+    /* Pull up data lines */
+    gpio_setmode(FLASH_D0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    gpio_setmode(FLASH_D16_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    gpio_setv(FLASH_D0_PORT, 0xffff, 1);
+    gpio_setv(FLASH_D16_PORT, 0xffff, 1);
+    timer_delay_msec(1);
+
+    data = gpio_get(FLASH_D0_PORT, 0xffff) |
+           (gpio_get(FLASH_D16_PORT, 0xffff) << 16);
+    if (data != 0xffffffff) {
+        printf("FAIL: Data stuck low:");
+        for (pin = 0; pin < 32; pin++)
+            if ((data & BIT(pin)) == 0)
+                printf(" D%u", pin);
+        printf("\n");
+        errs++;
+    }
+
+    /* Pull down data lines */
+    gpio_setv(FLASH_D0_PORT, 0xffff, 0);
+    gpio_setv(FLASH_D16_PORT, 0xffff, 0);
+    timer_delay_msec(1);
+
+    data = gpio_get(FLASH_D0_PORT, 0xffff) |
+           (gpio_get(FLASH_D16_PORT, 0xffff) << 16);
+    if (data != 0x00000000) {
+        printf("FAIL: Data stuck high:");
+        for (pin = 0; pin < 32; pin++)
+            if ((data & BIT(pin)) != 0)
+                printf(" D%u", pin);
+        printf("\n");
+        errs++;
+    }
+
+    if (errs)
+        return (1);
+
+    /* Set Flash to drive data lines */
+    gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 0);
+
+    data = gpio_get(FLASH_D0_PORT, 0xffff) |
+           (gpio_get(FLASH_D16_PORT, 0xffff) << 16);
+
+    /* Any bits which are 1 are not floating */
+    floating &= ~data;
+
+    /* Pull up data lines */
+    gpio_setv(FLASH_D0_PORT, 0xffff, 1);
+    gpio_setv(FLASH_D16_PORT, 0xffff, 1);
+    timer_delay_msec(1);
+
+    data = gpio_get(FLASH_D0_PORT, 0xffff) |
+           (gpio_get(FLASH_D16_PORT, 0xffff) << 16);
+
+    /* Any bits which are 0 are not floating */
+    floating &= data;
+
+    /* Stop Flash from driving data lines */
+    gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    if (floating) {
+        printf("FAIL: Data from flash floating:");
+        for (pin = 0; pin < 32; pin++)
+            if ((floating & BIT(pin)) != 0)
+                printf(" D%u", pin);
+        printf("\n");
+        errs++;
+    }
+
+    return (errs);
+}
+
+/*
  * pin_tests
  * ---------
  * Performs stand-alone board pin tests.
@@ -879,6 +969,9 @@ pin_tests(uint verbose)
 
     /* Test OE, WE, and OEWE interaction */
     fail += pin_test_oewe(verbose);
+
+    /* Test Flash D* pins */
+    fail += pin_test_flash_data(verbose);
 
     if (fail)
         return (RC_FAILURE);
