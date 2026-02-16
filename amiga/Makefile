@@ -45,6 +45,7 @@ LDFLAGS_SMASH = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -m
 LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -lgcc -lamiga -lc -noixemul
 LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -mcrt=clib2 -lgcc -lc -lamiga
 
+OS   := $(shell uname -s)
 NOW  := $(shell date +%s)
 ifeq ($(OS),Darwin)
 DATE := $(shell date -j -f %s $(NOW)  '+%Y-%m-%d')

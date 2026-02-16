@@ -73,6 +73,7 @@ DEHUNK   := $(OBJDIR)/dehunk
 #LDFLAGS += -g
 #CFLAGS  += -g
 
+OS   := $(shell uname -s)
 NOW  := $(shell date +%s)
 ifeq ($(OS),Darwin)
 DATE := $(shell date -j -f %s $(NOW)  '+%Y-%m-%d')
