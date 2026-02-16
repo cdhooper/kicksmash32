@@ -30,11 +30,15 @@ running on the TF.
     a flat head screwdriver, be very careful to not damage traces on your
     motherboard. Pry against the socket, not the motherboard.
 
-4. Set your ROM speed jumper to the slowest setting
-    A3000: J151 and J152 should be set to 1-2 (25 MHz operation)
-    A3000T: J151 and J152 should be set to 1-2 (25 MHz operation)
-    A4000: J151 should be set to 1-2 (ROMSPEED 200ns)
-    A4000T: J151 should be removed (200ns)
+4. Set your ROM speed jumper to the slowest setting (highest ns)
+    A3000:   J151 and J152 should be set to 1-2 (25 MHz operation)
+    A3000T:  J151 and J152 should be set to 1-2 (25 MHz operation)
+    A4000:   J151 should be set to 1-2 (ROMSPEED 200ns)
+    A4000CR: J151 should be set to 1-2 (ROMSPEED 200ns)
+             On the bottom of the PCB, you might also need to bodge the
+             right side of R151 to the right side of R173.
+    A4000T:  J151 should be removed (200ns)
+    AA3000+: J120 and J121 should be set to 1-2 (25 MHz)
 
 4. Install KickSmash in place of the ROMs
     The USB connector of KickSmash should face the same side of the ROM

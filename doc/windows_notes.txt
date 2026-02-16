@@ -165,3 +165,9 @@ The following is recommended for Windows 11:
 
 If you are running Windows XP, you might try an older release of Zadig:
     https://github.com/pbatard/libwdi/releases/download/v1.2.5/zadig_xp-2.2.exe
+
+-------------------------------------------------------------------
+
+To keep the same Windows COM port across multiple Kicksmash boards, run
+the following command:
+    REG ADD "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\COM Name Arbiter" /v ComDB /t REG_BINARY /d 0206 /f
