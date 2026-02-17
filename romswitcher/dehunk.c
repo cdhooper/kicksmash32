@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <sys/stat.h>
 #include <err.h>
 
@@ -131,7 +132,7 @@ usage(void)
             "-v  verbose output\n");
 }
 
-uint
+int
 main(int argc, char *argv[])
 {
     int arg;
@@ -330,4 +331,5 @@ main(int argc, char *argv[])
 fail_read:
     free(buf);
     fclose(ifp);
+    return (0);
 }
