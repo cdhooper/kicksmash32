@@ -547,6 +547,99 @@ gadget_draw_button(Gadget *gad, uint activated)
     gadget_draw_bounding_box(gad, BBFT_BUTTON, activated);
 }
 
+/*
+ * capsule_inset() computes the horizontal inset for a circle of radius r
+ * at vertical distance d from center, using integer math only.
+ * Returns r - floor(sqrt(r*r - d*d)).
+ */
+static uint
+capsule_inset(uint r, uint d)
+{
+    uint target, s;
+
+    if (d >= r)
+        return (r);
+    if (d == 0)
+        return (0);
+    target = r * r - d * d;
+    s = 0;
+    while ((s + 1) * (s + 1) <= target)
+        s++;
+    return (r - s);
+}
+
+/*
+ * capsule_row_inset() computes the horizontal inset for a capsule (stadium)
+ * shape at a given row. The capsule has semicircular ends of radius r on the
+ * left and right, connected by flat top and bottom edges.
+ */
+static uint
+capsule_row_inset(uint r, uint h, uint row)
+{
+    uint top_dist   = (row <= r) ? (r - row) : (row - r);
+    uint top_inset  = capsule_inset(r, top_dist);
+    uint bot_center = h - r;
+    uint bot_dist   = (row >= bot_center) ? (row - bot_center) :
+                                            (bot_center - row);
+    uint bot_inset  = capsule_inset(r, bot_dist);
+
+    return (top_inset < bot_inset) ? top_inset : bot_inset;
+}
+
+/*
+ * draw_mx_capsule() draws a single Amiga-style MX radio button as a
+ * capsule/stadium shape with 3D beveled outline. The upper outline uses
+ * pen 2 (bright/white) and the lower outline uses pen 1 (dark/black),
+ * giving the classic Amiga raised look.
+ */
+static void
+draw_mx_capsule(uint x, uint y, uint w, uint h, uint fill_pen)
+{
+    uint r = h / 2;
+    uint mid = h / 2;
+    uint row;
+
+    /* Fill capsule interior with gray background */
+    for (row = 0; row <= h; row++) {
+        uint inset = capsule_row_inset(r, h, row);
+        if (inset * 2 <= w)
+            fill_rect(0, x + inset, y + row,
+                      x + w - inset, y + row);
+    }
+
+    /* Fill selection dot inset by 2 pixels top/bottom, 3 pixels sides */
+    for (row = 2; row <= h - 2; row++) {
+        uint inset = capsule_row_inset(r, h, row) + 3;
+        if (inset * 2 <= w)
+            fill_rect(fill_pen, x + inset + 1, y + row,
+                      x + w - inset, y + row);
+    }
+
+    /* Draw 3D beveled outline */
+    /* Top horizontal edge (pen 2 = bright) */
+    {
+        uint inset = capsule_row_inset(r, h, 0);
+        if (inset * 2 <= w)
+            draw_line(2, x + inset, y, x + w - inset, y);
+    }
+    /* Bottom horizontal edge (pen 1 = dark) */
+    {
+        uint inset = capsule_row_inset(r, h, h);
+        if (inset * 2 <= w)
+            draw_line(1, x + inset, y + h, x + w - inset, y + h);
+    }
+    /* Left and right curved/straight edge segments */
+    for (row = 0; row < h; row++) {
+        uint inset1 = capsule_row_inset(r, h, row);
+        uint inset2 = capsule_row_inset(r, h, row + 1);
+
+        draw_line(2, x + inset1, y + row,
+                      x + inset2, y + row + 1);       /* Left = bright */
+        draw_line(1, x + w - inset1, y + row,
+                      x + w - inset2, y + row + 1);   /* Right = dark */
+    }
+}
+
 static void
 gadget_update_mx(Gadget *gad)
 {
@@ -573,8 +666,7 @@ gadget_update_mx(Gadget *gad)
         ydist = FONT_HEIGHT;
     for (cur = 0; cur < mx->mx_count; cur++) {
         uint fill_pen = (mx->mx_seldisplay == cur) ? 3 : 0;
-        draw_rect(1, x, y, x + w, y + h);
-        fill_rect(fill_pen, x + 1, y + 1, x + w - 1, y + h - 1);
+        draw_mx_capsule(x, y, w, h, fill_pen);
         y += ydist;
     }
 
