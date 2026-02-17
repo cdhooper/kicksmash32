@@ -2,6 +2,11 @@
 # Makefile to build AmigaOS/68k tools using Bebbo's GCC cross-compiler.
 #
 
+# Cross-compiler toolchain prefix (where bin/, lib/, m68k-amigaos/ live)
+AMIGA_GCC ?= /opt/amiga13
+# NDK include path
+AMIGA_NDK ?= /opt/amiga
+
 PROGROM	 := switcher.rom
 PROG     := switcher
 
@@ -23,10 +28,12 @@ ADDOBJS  :=
 #OBJS    := $(SRCS:%.c=$(OBJDIR)/%.o)
 MED_OBJS := $(MED_SRCS:%.c=$(OBJDIR)/%.o)
 
-CC      := m68k-amigaos-gcc
-LD      := m68k-amigaos-ld
-OBJCOPY := m68k-amigaos-objcopy
-OBJDUMP := m68k-amigaos-objdump
+HOSTCC  := cc
+CC      := $(AMIGA_GCC)/bin/m68k-amigaos-gcc
+LD      := $(AMIGA_GCC)/bin/m68k-amigaos-ld
+OBJCOPY := $(AMIGA_GCC)/bin/m68k-amigaos-objcopy
+OBJDUMP := $(AMIGA_GCC)/bin/m68k-amigaos-objdump
+GCC_VER := $(shell $(CC) -dumpversion 2>/dev/null)
 CFLAGS  := -Wall -Wextra -Wno-pointer-sign -Wno-format -Wno-strict-aliasing
 CFLAGS  += -Wno-sign-compare -fomit-frame-pointer
 CFLAGS  += -fno-delete-null-pointer-checks
@@ -39,25 +46,25 @@ CFLAGS  += -I. -I$(FW) -I$(AM)
 #LDFLAGS += -lgcc -lc -lamiga -Xlinker --verbose -Trom.ld -mcrt=clib2 -fbaserel
 LDFLAGS := --nostdlib \
 	   --amiga-databss-together \
-	   -L/opt/amiga13/lib \
-	   -L/opt/amiga13/lib/gcc \
-	   -L/opt/amiga13/lib/gcc/m68k-amigaos/13.2.0 \
-	   -L/opt/amiga13/lib/gcc/m68k-amigaos/13.2.0/libb \
-	   -L/opt/amiga13/m68k-amigaos/lib \
-	   -L/opt/amiga13/m68k-amigaos/lib/libb \
+	   -L$(AMIGA_GCC)/lib \
+	   -L$(AMIGA_GCC)/lib/gcc \
+	   -L$(AMIGA_GCC)/lib/gcc/m68k-amigaos/$(GCC_VER) \
+	   -L$(AMIGA_GCC)/lib/gcc/m68k-amigaos/$(GCC_VER)/libb \
+	   -L$(AMIGA_GCC)/m68k-amigaos/lib \
+	   -L$(AMIGA_GCC)/m68k-amigaos/lib/libb \
 
-#	   -L/opt/amiga13/m68k-amigaos/clib2/lib \
-#	   -L/opt/amiga13/m68k-amigaos/clib2/lib/libb
+#	   -L$(AMIGA_GCC)/m68k-amigaos/clib2/lib \
+#	   -L$(AMIGA_GCC)/m68k-amigaos/clib2/lib/libb
 LDFLAGS += -lgcc -lc --verbose
-#	   -L/opt/amiga13/m68k-amigaos/libnix/lib \
-#	   -L/opt/amiga13/m68k-amigaos/libnix/lib/libb
+#	   -L$(AMIGA_GCC)/m68k-amigaos/libnix/lib \
+#	   -L$(AMIGA_GCC)/m68k-amigaos/libnix/lib/libb
 #LDFLAGS += -lgcc -lnix4 --verbose
 
 VERSION := $(shell awk '/Version/{print $$2}' ../fw/version.c)
 CFLAGS += -DVERSION=\"$(VERSION)\"
 PROGVER := $(PROG)_$(VERSION)
 
-NDK_PATH := /opt/amiga/m68k-amigaos/ndk-include
+NDK_PATH := $(AMIGA_NDK)/m68k-amigaos/ndk-include
 VASM     := vasmm68k_mot
 
 CFLAGS  += -Os
@@ -98,8 +105,8 @@ QUIET   :=
 VERBOSE := -v
 endif
 
-ifeq (, $(shell which $(CC) 2>/dev/null ))
-$(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga13/bin")
+ifeq (, $(wildcard $(CC)))
+$(error "No $(CC) found: set AMIGA_GCC to your toolchain prefix")
 endif
 
 all: $(PROGROM)
@@ -162,7 +169,7 @@ $(PROGROM): $(PROG) $(DEHUNK)
 	$(QUIET)$(DEHUNK) $(PROG) $@ $(VERBOSE)
 
 $(DEHUNK): dehunk.c
-	cc -o $@ $?
+	$(HOSTCC) -o $@ $?
 
 $(OBJDIR):
 	mkdir -p $@
