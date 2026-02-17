@@ -110,7 +110,7 @@ skip_symbols(uint32_t *cur, uint32_t *bufend)
 }
 
 static uint32_t *
-skip_debug(uint32_t *cur, uint32_t *bufend)
+skip_debug(uint32_t *cur, uint32_t *bufend __attribute__((unused)))
 {
     uint32_t size;
     hunk_debug_t *hdr = (hunk_debug_t *) cur;
@@ -193,7 +193,7 @@ main(int argc, char *argv[])
     if (stat(infile, &st) != 0)
         err(EXIT_FAILURE, "stat(%s) fail", infile);
 
-    DPRINTF("size %u\n", st.st_size);
+    DPRINTF("size %lld\n", (long long) st.st_size);
     filesize = st.st_size;
 
     buf = malloc(filesize);
@@ -210,7 +210,7 @@ main(int argc, char *argv[])
     DPRINTF("%u %x\n", SWAP32(buf[0]), buf[0]);
     if (buf[0] != SWAP32(HUNK_HEADER)) {
         errx(EXIT_FAILURE, "Failed to find hunk header %u at offset 0; "
-             "got 0x08x\n", SWAP32(buf[0]), HUNK_HEADER);
+             "got 0x%08x\n", SWAP32(buf[0]), HUNK_HEADER);
     }
 
     /*
@@ -238,8 +238,6 @@ main(int argc, char *argv[])
      *           ^^start of ROM
      */
     hh = (hunk_header_t *) (buf + 1);
-    uint hsize;
-    uint hunknum;
     DPRINTF("Header table_size=%u first_hunk=%u last_hunk=%u\n",
             SWAP32(hh->hh_table_size),
             SWAP32(hh->hh_first_hunk), SWAP32(hh->hh_last_hunk));
@@ -252,9 +250,7 @@ main(int argc, char *argv[])
     bufend = (uint32_t *) ((uintptr_t) buf + filesize);
     if ((ofp = fopen(outfile, "w")) == NULL)
         err(EXIT_FAILURE, "fopen(%s) for output fail", infile);
-    hunknum = 0;
     while (cur < bufend) {
-        uint32_t      hsize = SWAP32(hh->hh_sizes[hunknum]);
         uint          hunktype = SWAP32(*cur);
         const char   *hunkname;
         hunk_data_t  *hdata;
@@ -271,8 +267,8 @@ main(int argc, char *argv[])
                 lwords = SWAP32(hcode->hc_size);
                 data = (uint32_t *) &(hcode->hc_data[0]);
                 if (fwrite(data, lwords * sizeof (uint32_t), 1, ofp) != 1) {
-                    err(EXIT_FAILURE, "Failed to write %u bytes\n",
-                        lwords * sizeof (uint32_t));
+                    err(EXIT_FAILURE, "Failed to write %lu bytes\n",
+                        (unsigned long) (lwords * sizeof (uint32_t)));
                 }
                 cur = data + lwords;
                 break;
@@ -282,8 +278,8 @@ main(int argc, char *argv[])
                 lwords = SWAP32(hdata->hd_size);
                 data = (uint32_t *) &(hdata->hd_data[0]);
                 if (fwrite(data, lwords * sizeof (uint32_t), 1, ofp) != 1) {
-                    err(EXIT_FAILURE, "Failed to write %u bytes\n",
-                        lwords * sizeof (uint32_t));
+                    err(EXIT_FAILURE, "Failed to write %lu bytes\n",
+                        (unsigned long) (lwords * sizeof (uint32_t)));
                 }
                 cur = data + lwords;
                 break;
@@ -312,23 +308,22 @@ main(int argc, char *argv[])
                 cur++;
                 break;
             default:
-                fprintf(stderr, "\nUnknown Hunk type %u (0x%x) at 0x%x\n",
+                fprintf(stderr, "\nUnknown Hunk type %u (0x%x) at 0x%lx\n",
                         hunktype, hunktype,
-                        (uintptr_t) cur - (uintptr_t) buf);
+                        (unsigned long) ((uintptr_t) cur - (uintptr_t) buf));
                 fprintf(stderr, "[%08x %08x %08x %08x]\n",
                         SWAP32(cur[0]), SWAP32(cur[1]), SWAP32(cur[2]),
                         SWAP32(cur[3]));
                 exit(1);
         }
         if (show) {
-            DPRINTF("%-6s (%u) len=%u\n", hunkname, hunktype,
-                    lwords * sizeof (uint32_t));
+            DPRINTF("%-6s (%u) len=%lu\n", hunkname, hunktype,
+                    (unsigned long) (lwords * sizeof (uint32_t)));
         }
     }
 
     if (ofp != stdout)
         fclose(ofp);
-fail_read:
     free(buf);
     fclose(ifp);
     return (0);
