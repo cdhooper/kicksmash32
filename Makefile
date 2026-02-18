@@ -97,4 +97,9 @@ endif
 $(RELEASE_DIRS):
 	mkdir -p $@
 
+# Suppress make's built-in implicit rules for amiga binaries so they don't get
+# rebuilt with the host compiler (cc) instead of the cross-compiler.
+# These are built by the amiga sub-make via build-amiga.
+amiga/smash amiga/smashftp amiga/romswitch: ;
+
 .PHONY: build-sw build-fw build-amiga clean-sw clean-fw clean-amiga all clean release populating
