@@ -596,7 +596,6 @@ static void
 draw_mx_capsule(uint x, uint y, uint w, uint h, uint fill_pen)
 {
     uint r = h / 2;
-    uint mid = h / 2;
     uint row;
 
     /* Fill capsule interior with gray background */
