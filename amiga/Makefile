@@ -192,6 +192,7 @@ adf:
 	xdftool $(DISK) write smash kicksmash/smash
 	xdftool $(DISK) write smashfs kicksmash/smashfs
 	xdftool $(DISK) write smashfsrom kicksmash/smashfsrom
+	xdftool $(DISK) write smashfsrom_d kicksmash/smashfsrom_d
 	xdftool $(DISK) write smashftp kicksmash/smashftp
 	xdftool $(DISK) boot install
 
