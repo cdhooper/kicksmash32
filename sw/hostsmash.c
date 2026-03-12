@@ -102,6 +102,7 @@ static const struct option long_opts[] = {
     { "swap",     required_argument, NULL, 's' },
     { "term",     no_argument,       NULL, 't' },
     { "verify",   no_argument,       NULL, 'v' },
+    { "version",  no_argument,       NULL, 'V' },
     { "write",    no_argument,       NULL, 'w' },
     { "yes",      no_argument,       NULL, 'y' },
     { NULL,       no_argument,       NULL,  0  }
@@ -110,6 +111,7 @@ static const struct option long_opts[] = {
 static char short_opts[] = {
     ':',         // Missing argument
     'A',         // --all
+    'V',         // --version
     'a', ':',    // --addr <addr>
     'b', ':',    // --bank <num>
     'c', ':',    // --clock [show|set]
@@ -135,6 +137,7 @@ static char short_opts[] = {
 static const char usage_text[] =
 "hostsmash <opts> <dev>\n"
 "    -A --all                show all verify miscompares\n"
+"    -V --version            display version\n"
 "    -a --addr <addr>        starting EEPROM address\n"
 "    -b --bank <num>         starting EEPROM address as multiple of file size\n"
 "    -c --clock [show|set]   show or set Kicksmash time of day clock\n"
@@ -558,6 +561,12 @@ atou(const char *str)
     return (value);
 }
 
+static void
+print_version(FILE *fp)
+{
+    fprintf(fp, "hostsmash "VERSION" built "BUILD_DATE" "BUILD_TIME"\n");
+}
+
 /*
  * usage() displays command usage.
  *
@@ -567,7 +576,8 @@ atou(const char *str)
 static void
 usage(FILE *fp)
 {
-    fprintf(fp, "\nhostsmash "VERSION" built "BUILD_DATE" "BUILD_TIME"\n");
+    fprintf(fp, "\n");
+    print_version(fp);
     (void) fputs(usage_text, fp);
 }
 
@@ -6957,6 +6967,10 @@ errx(EXIT_FAILURE, "how did we get here?");
                 if (mode & (MODE_ID | MODE_READ | MODE_TERM))
                     errx(EXIT_FAILURE, "Only one of -irtv may be specified");
                 mode |= MODE_VERIFY;
+                break;
+            case 'V':
+                print_version(stdout);
+                exit(EXIT_SUCCESS);
                 break;
             case 'y':
                 force_yes = TRUE;
