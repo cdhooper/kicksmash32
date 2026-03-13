@@ -3,7 +3,7 @@
 #
 
 # Cross-compiler toolchain prefix (where bin/, lib/, m68k-amigaos/ live)
-AMIGA_GCC ?= /opt/amiga13
+AMIGA_GCC ?= /opt/amiga
 # NDK include path
 AMIGA_NDK ?= /opt/amiga
 
