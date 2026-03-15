@@ -26,6 +26,7 @@ rev4/
 rev5/
 rev7_1200/
 rev7_4kcr
+rev8_4kcr
 photos
 fw/libopencm3/
 fw/stutils/
@@ -44,6 +45,8 @@ sw/hostsmash.exe
 sw/hostsmash.macos
 sw/crcit
 sw/crcit.exe
+sw/crcit.macos
+sw/crcit.linux
 romswitcher/switcher.rom
 romswitcher/switcher
 romswitcher/unused/
