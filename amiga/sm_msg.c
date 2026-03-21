@@ -467,6 +467,7 @@ static const char *const msg_status_s[] = {
     "Msg Program/erase timeout",        // MSG_STATUS_PRG_TMOUT
     "Msg Program/erase failure",        // MSG_STATUS_PRG_FAIL
     "Msg Insufficient memory",          // MSG_STATUS_NO_MEM
+    "Msg Data mismatch",                // MSG_STATUS_MISMATCH
 };
 STATIC_ASSERT(ARRAY_SIZE(msg_status_s) ==
               (MSG_STATUS_FAIL - MSG_STATUS_LAST_ENTRY));

@@ -22,7 +22,8 @@
 #define MSG_STATUS_PRG_TMOUT  0xfffffff5  // -11 Programming timeout
 #define MSG_STATUS_PRG_FAIL   0xfffffff4  // -12 Programming failure
 #define MSG_STATUS_NO_MEM     0xfffffff3  // -13 No memory available
-#define MSG_STATUS_LAST_ENTRY 0xfffffff2  // Fake ent: must always be last - 1
+#define MSG_STATUS_MISMATCH   0xfffffff2  // -14 Data mismatch
+#define MSG_STATUS_LAST_ENTRY 0xfffffff1  // Fake ent: must always be last - 1
 
 #define DUMP_VALUE_UNASSIGNED 0xffffffff
 

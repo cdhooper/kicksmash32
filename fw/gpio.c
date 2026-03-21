@@ -313,6 +313,7 @@ static const gpio_names_t gpio_names[] = {
     { "SOCKET_D31", GPIO_B, 12 },
     { "LED",        GPIO_B, 8 },
     { "KBRST",      GPIO_B, 4 },
+    { "BOOT0",      GPIO_B, 5 },
     { "A0",         GPIO_C, 0 },
     { "A1",         GPIO_C, 1 },
     { "A2",         GPIO_C, 2 },

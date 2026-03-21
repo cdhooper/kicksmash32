@@ -75,13 +75,25 @@ static const struct rcc_clock_scale rcc_clock_config = {
     .prediv1_source   = RCC_CFGR2_PREDIV1SRC_HSE_CLK,  // 8 MHz
     .prediv1          = RCC_CFGR2_PREDIV_NODIV,        // 8 / 1 = 8 MHz
     .pll_source       = RCC_CFGR_PLLSRC_PREDIV1_CLK,   // 8 / 1 = 8 MHz
+#ifdef OVERCLOCK_NO_USB
+    .pll_mul          = RCC_CFGR_PLLMUL_PLL_CLK_MUL12, // 12 * 8 = 96 MHz
+
+    .hpre             = RCC_CFGR_HPRE_NODIV,           // 96 / 1 = 96 MHz Core
+    .ppre1            = RCC_CFGR_PPRE_DIV2,            // 96 / 2 = 48 MHz APB1
+    .ppre2            = RCC_CFGR_PPRE_NODIV,           // 96 / 1 = 96 MHz APB2
+    .adcpre           = RCC_CFGR_ADCPRE_DIV8,          // 96 / 8 = 12 MHz ADC
+    .usbpre           = RCC_CFGR_USBPRE_PLL_VCO_CLK_DIV2, // 96 * 2 / 2 = 96 MHz
+    /* XXX: For GD32, also set bit 23 to configure CK_PLL / 2 */
+#else
+    /* Maximum clock that supports USB */
     .pll_mul          = RCC_CFGR_PLLMUL_PLL_CLK_MUL9,  // 9 * 8 = 72 MHz
 
     .hpre             = RCC_CFGR_HPRE_NODIV,           // 72 / 1 = 72 MHz Core
     .ppre1            = RCC_CFGR_PPRE_DIV2,            // 72 / 2 = 36 MHz APB1
     .ppre2            = RCC_CFGR_PPRE_NODIV,           // 72 / 1 = 72 MHz APB2
-    .adcpre           = RCC_CFGR_ADCPRE_DIV6,          // 72 / 6 = 12 MHz ADC
+    .adcpre           = RCC_CFGR_ADCPRE_DIV8,          // 72 / 8 = 9 MHz ADC
     .usbpre           = RCC_CFGR_USBPRE_PLL_VCO_CLK_DIV3, // 72 * 2 / 3 = 48 MHz
+#endif
 
     .flash_waitstates = 2,
     .ahb_frequency    = 72000000,

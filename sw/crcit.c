@@ -87,10 +87,10 @@ main(int argc, char *argv[])
                 /* Bottom half of CRC */
                 crc_rx |= v;
                 if (crc_rx != crc) {
-                    printf("cmd=%x l=%04x CRC %08x != calc %08x\n",
+                    printf("cmd=%x l=%04x CRC %08x != calc %08x FAIL\n",
                            cmd, cmd_len, crc_rx, crc);
                 } else {
-                    printf("CRC %08x good\n", crc_rx);
+                    printf("cmd=%x l=%x CRC %08x good\n", cmd, cmd_len, crc_rx);
                 }
                 magic_pos = 0;
                 break;

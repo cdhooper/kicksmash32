@@ -524,10 +524,17 @@ config_tim5_ch1_dma(bool verbose)
                &GPIO_IDR(SOCKET_A16_PORT),
                buffer_rxd, ADDR_BUF_COUNT);
 #else
+#undef DMA_DEBUG
+#ifdef DMA_DEBUG
+    /* DMA from local variable to GPIO B, alternating PB5 low and high */
+    static uint16_t values[2] = { BIT(5), 0 };
+    config_dma(DMA2, DMA_CHANNEL5, 1, 16, &GPIO_ODR(BOOT0_PORT), values, 2);
+#else
     /* DMA from address GPIOs A0-A15 to memory */
     config_dma(DMA2, DMA_CHANNEL5, 0, 16,
                &GPIO_IDR(SOCKET_A0_PORT),
                buffer_rxa_lo, ADDR_BUF_COUNT);
+#endif
 #endif
 
     /* Set up TIM5 CH1 to trigger DMA based on external PA0 pin */
@@ -629,11 +636,15 @@ config_tim2_ch1_dma(bool verbose)
     /* Enable capture compare CC1 DMA and interrupt */
     timer_enable_irq(TIM2, TIM_DIER_CC1DE | TIM_DIER_CC1IE);
 #else
-    /* Enable capture compare interrupt */
+    /* Enable capture compare CC1 DMA */
     timer_enable_irq(TIM2, TIM_DIER_CC1DE);
 #endif
 
     timer_set_dma_on_compare_event(TIM2);  // DMA on CCx event occurs
+#define DISABLE_TIM2_DMA
+#ifdef DISABLE_TIM2_DMA
+    dma_disable_channel(DMA1, DMA_CHANNEL5);
+#endif
 }
 
 static void
@@ -650,6 +661,9 @@ configure_oe_capture_rx(bool verbose)
      * does not have DFU, so it might be a remarked STM32F103 or something
      * else.
      */
+#ifdef DISABLE_TIM2_DMA
+    dma_disable_channel(DMA1, DMA_CHANNEL5);  // TIM2
+#endif
     TIM_CCER(LOG_DMA_TIMER) |= TIM_CCER_CC1E;  // timer_enable_oc_output()
 }
 
@@ -2948,4 +2962,8 @@ msg_init(void)
 
     capture_mode = CAPTURE_ADDR;
     configure_oe_capture_rx(true);
+#ifdef DMA_DEBUG
+    gpio_setv(BOOT0_PORT, BOOT0_PIN, 0);
+    gpio_setmode(BOOT0_PORT, BOOT0_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
+#endif
 }

@@ -581,6 +581,16 @@ usage(FILE *fp)
     (void) fputs(usage_text, fp);
 }
 
+static bool
+is_printable_ascii(uint8_t ch)
+{
+    if (ch >= ' ' && ch <= '~')
+        return (true);
+    if (ch == '\t' || ch == '\r' || ch == '\n')
+        return (true);
+    return (false);
+}
+
 static char
 printable_ascii(uint8_t ch)
 {
@@ -3713,7 +3723,10 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
             case 7:  // Magic
                 if (ch != sm_magic_b[pos]) {
                     pos = 0;
-                    printf("[%02x %c]", ch, printable_ascii(ch));
+                    if (debug_msg || !is_printable_ascii(ch))
+                        printf("[%02x %c]", ch, printable_ascii(ch));
+                    else
+                        putchar(ch);
                 } else {
                     pos++;
                 }

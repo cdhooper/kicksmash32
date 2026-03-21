@@ -31,6 +31,8 @@
 #define FLASH_RP_PIN            GPIO1       // RP# Reset / Program
 #define KBRST_PORT          GPIOB
 #define KBRST_PIN               GPIO4
+#define BOOT0_PORT          GPIOB
+#define BOOT0_PIN               GPIO5
 #define LED_POWER_PORT      GPIOB
 #define LED_POWER_PIN           GPIO8
 #define FLASH_OEWE_PORT     GPIOB

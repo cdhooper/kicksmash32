@@ -31,6 +31,7 @@ const char *version = "\0$VER: smash "VERSION" ("BUILD_DATE") \xA9 Chris Hooper"
 #include "cpu_control.h"
 
 static int flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode);
+static int flash_read_mode(uint expect_rom_signature);
 
 /*
  * gcc clib2 headers are bad (for example, no stdint definitions) and are
@@ -73,7 +74,10 @@ static struct    timerequest TimeRequest;
 #define AMIGA_PPORT_DIR  0x00bfe301  /* Amiga parallel port dir register */
 #define AMIGA_PPORT_DATA 0x00bfe101  /* Amiga parallel port data reg. */
 
-#define CIAA_PRA         ADDR8(0x00bfe001)
+#define CIAA_PRA         VADDR8(0x00bfe001)
+#define CIAA_TBLO        VADDR8(0x00bfe601)
+#define CIAA_TBHI        VADDR8(0x00bfe701)
+
 #define CIAA_PRA_OVERLAY BIT(0)
 #define CIAA_PRA_LED     BIT(1)
 
@@ -99,7 +103,7 @@ static const char cmd_options[] =
     "   quiet         minimize test output\n"
     "   set <n> <v>   set KickSmash value <n>=\"name\" and <v> is string (-s)\n"
     "   sr <addr>     spin loop reading address (-x)\n"
-    "   srr <addr>    spin loop reading address with ROM OVL set (-y)\n"
+    "   srr <addr>    spin loop reading address with ROM OVL set (-Y)\n"
     "   term          open Kicksmash firmware terminal [-T]\n"
     "   test[0123456] do interface test (-t)\n";
 
@@ -134,6 +138,7 @@ static const char cmd_write_options[] =
     "smash write options\n"
     "   addr <hex>   starting address (-a)\n"
     "   bank <num>   flash bank on which to operate (-b)\n"
+    "   cons         conservative flash write timing mode (-C)\n"
 //  "   dump         save hex/ASCII instead of binary (-d)\n"
     "   file <name>  file from which to read (-f)\n"
     "   len <hex>    length to program in bytes (-l)\n"
@@ -164,6 +169,8 @@ typedef struct {
 long_to_short_t long_to_short_main[] = {
     { "-b", "bank" },
     { "-c", "clock" },
+    { "-C", "cons" },
+    { "-C", "conservative" },
     { "-d", "debug" },
     { "-e", "erase" },
     { "-i", "inquiry" },
@@ -178,8 +185,8 @@ long_to_short_t long_to_short_main[] = {
     { "-T", "term" },
     { "-v", "verify" },
     { "-w", "write" },
-    { "-x", "sr" },   // spinread
-    { "-y", "srr" },  // spinreadrom
+    { "-X", "sr" },   // spinread
+    { "-Y", "srr" },  // spinreadrom
 };
 
 long_to_short_t long_to_short_bank[] = {
@@ -219,6 +226,8 @@ long_to_short_t long_to_short_erase[] = {
 long_to_short_t long_to_short_readwrite[] = {
     { "-a", "addr" },
     { "-b", "bank" },
+    { "-C", "cons" },
+    { "-C", "conservative" },
     { "-D", "debug" },
     { "-d", "dump" },
     { "-f", "file" },
@@ -235,8 +244,12 @@ long_to_short_t long_to_short_readwrite[] = {
 
 BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
 uint flag_debug = 0;
-uint8_t flag_quiet = 0;
-uint8_t *test_loopback_buf = NULL;
+static uint8_t flag_conservative_mode = 0;
+static uint8_t flag_flash_write_bug = 1;
+static uint8_t flag_quiet = 0;
+static uint8_t flag_yes = 0;
+static uint8_t *test_loopback_buf = NULL;
+
 
 /*
  * is_user_abort
@@ -289,6 +302,27 @@ long_to_short(const char *ptr, long_to_short_t *ltos, uint ltos_count)
         if (strcmp(ptr, ltos[cur].long_name) == 0)
             return (ltos[cur].short_name);
     return (ptr);
+}
+
+static uint
+cia_ticks(void)
+{
+    uint8_t hi1;
+    uint8_t hi2;
+    uint8_t lo;
+
+    hi1 = *CIAA_TBHI;
+    lo  = *CIAA_TBLO;
+    hi2 = *CIAA_TBHI;
+
+    /*
+     * The below operation will provide the same effect as:
+     *     if (hi2 != hi1)
+     *         lo = 0xff;  // rollover occurred
+     */
+    lo |= (hi2 - hi1);  // rollover of hi forces lo to 0xff value
+
+    return (lo | (hi2 << 8));
 }
 
 /*
@@ -476,7 +510,7 @@ spin_memory(uint32_t addr)
 #endif
 
     for (count = 0; count < MEM_LOOPS; count += 4) {
-        (void) *ADDR32(addr);
+        (void) *VADDR32(addr);
     }
 
     spin(MEM_LOOPS);
@@ -501,7 +535,7 @@ spin_memory_ovl(uint32_t addr)
 
     *CIAA_PRA |= CIAA_PRA_OVERLAY | CIAA_PRA_LED;
     for (count = 0; count < MEM_LOOPS; count++) {
-        (void) *ADDR32(addr);
+        (void) *VADDR32(addr);
     }
     *CIAA_PRA &= ~(CIAA_PRA_OVERLAY | CIAA_PRA_LED);
 
@@ -1745,6 +1779,29 @@ uint32_t flash_debugaddr[8];
 uint8_t  flash_debugcount;
 #endif
 
+static uint
+send_cmd_core_retry(uint16_t cmd, void *arg, uint16_t arglen,
+                    void *reply, uint replymax, uint *replyalen)
+{
+    uint rc;
+    uint tries = 5;
+
+    do {
+        rc = send_cmd_core(cmd, arg, arglen, reply, replymax, replyalen);
+        if ((rc != 0) &&
+            (cmd != KS_CMD_FLASH_READ) && (cmd != KS_CMD_FLASH_CMD) &&
+            (cmd != KS_CMD_FLASH_ERASE) && (cmd != KS_CMD_FLASH_WRITE)) {
+            flash_read_mode(1);
+        }
+        if ((rc != MSG_STATUS_BAD_CRC) &&
+            (rc != MSG_STATUS_NO_REPLY) &&
+            (rc != KS_STATUS_CRC)) {
+            break;
+        }
+    } while (--tries > 0);
+    return (rc);
+}
+
 /*
  * flash_cmd_core
  * --------------
@@ -1779,14 +1836,18 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
     num_addr /= 4;
 
     cia_spin(CIA_USEC(10));
+    if (flag_conservative_mode)
+        cia_spin(20);
 
     addr = ROM_BASE + ((addrs[0] << smash_cmd_shift) & 0x7ffff);
-    (void) *ADDR32(addr);  // Generate OE strobe to kick off DMA
+    (void) *VADDR32(addr);  // Generate OE strobe to kick off DMA
     cia_spin(1);
+    if (flag_conservative_mode)
+        cia_spin(2);
 
     for (pos = 0; pos < num_addr; pos++) {
         uint32_t addr = ROM_BASE + ((addrs[pos] << smash_cmd_shift) & 0x7ffff);
-        uint32_t val = *ADDR32(addr);  // Generate address on the bus
+        uint32_t val = *VADDR32(addr);  // Generate address on the bus
         if ((pos == 0) && (val == 0xffffffff)) {
             if (retry++ > 5) {
                 rc = 7;  // RC_TIMEOUT
@@ -1814,13 +1875,12 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
     }
 
 flash_cmd_cleanup:
-    if (rc == 0) {
-        cia_spin(2);
-    } else {
+    cia_spin(1);
+    if (rc != 0) {
         /* Attempt to drain data and wait for Kicksmash to enable flash */
         for (pos = 0; pos < 500; pos++) {
-            (void) *ADDR32(ROM_BASE + 4);
-            cia_spin(20);
+            (void) *VADDR32(ROM_BASE + 4);
+            cia_spin(10);
         }
         /* Wait 10 ms longer */
         for (pos = 0; pos < 10; pos++)
@@ -1858,27 +1918,52 @@ flash_read(void)
 }
 #endif
 
+static uint32_t rom_header_expected;
+static void
+rom_get_normal(void)
+{
+    rom_header_expected = *VADDR32(ROM_BASE);
+}
+
+/*
+ * rom_wait_normal() waits until ROM is back in normal mode.
+ */
+static uint
+rom_wait_normal(void)
+{
+    uint timeout = 0;
+    while (*VADDR32(ROM_BASE) != rom_header_expected) {
+        if (timeout++ > 100)
+            return (1);  // Took too long.
+        cia_spin(10);
+    }
+    return (0);
+}
+
 /*
  * flash_read_mode() returns the flash to normal read mode.
+ *
+ * expect_rom_signature says whether to expect the Kickstart ROM signature
+ * at offset 0.
  */
 static int
-flash_read_mode(void)
+flash_read_mode(uint expect_rom_signature)
 {
     uint count;
     int rc = flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0);
-    if (rc != 0) {
+    if ((rc != 0) || (expect_rom_signature && rom_wait_normal()))  {
         /* Try harder to restore flash to normal read mode */
         for (count = 0; count < 10; count++) {
             for (count = 0; count < 10; count++)
-                (void) *ADDR32(ROM_BASE + 8);
+                (void) *VADDR16(ROM_BASE + 8);
             cia_spin(CIA_USEC(1000));
-            if (flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0) == 0)
+            if ((flash_cmd_core(KS_CMD_FLASH_READ, NULL, 0) == 0) &&
+                ((expect_rom_signature == 0) || (rom_wait_normal() == 0))) {
+                rc = 0;
                 break;
+            }
         }
     }
-    for (count = 0; count < 4; count++)
-        (void) *ADDR32(ROM_BASE + 12);
-    cia_spin(CIA_USEC(2));
     return (rc);
 }
 
@@ -1913,17 +1998,17 @@ flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode)
     rc1 = flash_cmd_core(KS_CMD_FLASH_ID, NULL, 0);
 #endif
     /* Workaround for cold STM32 not releasing OEWE in time */
-    (void) *ADDR32(ROM_BASE + 32);
-    (void) *ADDR32(ROM_BASE + 36);
-    (void) *ADDR32(ROM_BASE + 40);
-    (void) *ADDR32(ROM_BASE + 44);
+    (void) *VADDR16(ROM_BASE + 32);
+    (void) *VADDR16(ROM_BASE + 36);
+    (void) *VADDR16(ROM_BASE + 40);
+    (void) *VADDR16(ROM_BASE + 44);
     cia_spin(CIA_USEC(5));
 
     /* Get flash ID data */
     for (pos = 0; pos < ARRAY_SIZE(data); pos++)
-        data[pos] = *ADDR32(ROM_BASE + pos * 4);
+        data[pos] = *VADDR32(ROM_BASE + pos * 4);
 
-    rc2 = flash_read_mode();
+    rc2 = flash_read_mode(1);
 
     CACHE_FLUSH();
     MMU_RESTORE();
@@ -2397,7 +2482,7 @@ ask_again:
             return (TRUE);
         if ((ch == 'n') || (ch == 'N'))
             return (FALSE);
-        if (!isspace(ch))
+        if (!isspace(ch) && (ch != '\n'))
             goto ask_again;
     }
     return (FALSE);
@@ -2562,8 +2647,8 @@ read_from_flash(uint bank, uint addr, void *buf, uint len)
 #ifdef USE_OVERLAY
     *CIAA_PRA |= CIAA_PRA_OVERLAY | CIAA_PRA_LED;
 #endif
-    rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
-                       &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    rc = send_cmd_core_retry(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
+                             &bankarg, sizeof (bankarg), NULL, 0, NULL);
     cia_spin(6);
 #ifdef USE_OVERLAY
     local_memcpy(buf, (void *) (addr), len);
@@ -2571,8 +2656,8 @@ read_from_flash(uint bank, uint addr, void *buf, uint len)
 #else
     local_memcpy(buf, (void *) (ROM_BASE + addr), len);
 #endif
-    rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
-                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    rc |= send_cmd_core_retry(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
+                              &bankarg, sizeof (bankarg), NULL, 0, NULL);
     cia_spin(CIA_USEC(1000));
 
     CACHE_FLUSH();
@@ -2584,7 +2669,7 @@ read_from_flash(uint bank, uint addr, void *buf, uint len)
 }
 
 static int
-wait_for_flash_done(uint addr, uint erase_mode)
+wait_for_flash_done(uint addr, uint erase_mode, uint32_t expected)
 {
     uint32_t status;
     uint32_t cstatus = 0;
@@ -2594,10 +2679,10 @@ wait_for_flash_done(uint addr, uint erase_mode)
     int      same_count = 0;
     int      see_fail_count = 0;
 
-    cia_spin(1);
-    lstatus = *ADDR32(addr);
+    cia_spin(2);
+    lstatus = *VADDR32(addr);
     while (spin_count < spins) {
-        status = *ADDR32(addr);
+        status = *VADDR32(addr);
 
         cstatus = status;
         /* Filter out checking of status which is already done */
@@ -2609,10 +2694,11 @@ wait_for_flash_done(uint addr, uint erase_mode)
         if (status == lstatus) {
             if (same_count++ >= 1) {
                 /* Same for 2 tries */
-                if (erase_mode && (status != 0xffffffff)) {
-                    /* Something went wrong -- block protected? */
-                    return (MSG_STATUS_PRG_FAIL);
+                if (status == expected) {
+                    return (0);  // Done
                 }
+                /* Something went wrong -- block protected? */
+                return (MSG_STATUS_PRG_FAIL);
                 return (0);
             }
         } else {
@@ -2640,9 +2726,13 @@ static uint
 write_to_flash(uint bank, uint addr, void *buf, uint len)
 {
     uint rc;
+    uint rc2;
     uint xlen;
+    uint cmd_tries = 0;
+    uint write_tries = 0;
     uint8_t *xbuf = buf;
     uint16_t bankarg = bank;
+    uint fail_data = 0;
 
     SUPERVISOR_STATE_ENTER();
     INTERRUPTS_DISABLE();
@@ -2650,40 +2740,171 @@ write_to_flash(uint bank, uint addr, void *buf, uint len)
     MMU_DISABLE();
 
     /* Switch to flash bank to be programmed */
-    rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
-                       &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    rc = send_cmd_core_retry(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
+                             &bankarg, sizeof (bankarg), NULL, 0, NULL);
     cia_spin(CIA_USEC(100));
+    if (rc != 0) {
+        goto write_give_up;
+    }
 
-    if (rc == 0) {
-        /* Write flash data */
-        while (len > 0) {
-            xlen = len;
-            if (xlen > 4)
-                xlen = 4;
+    /* Write flash data */
+    while (len > 0) {
+        xlen = len;
+        if (xlen > 4)
+            xlen = 4;
 
-            rc = flash_cmd_core(KS_CMD_FLASH_WRITE, xbuf, xlen);
-            if (rc != 0)
-                break;
+        /*
+         * A typical Kickstart ROM has 0xffffffff values. This can
+         * improve flash write performance by about 4%.
+         */
+        if (*ADDR32(xbuf) == *VADDR32(ROM_BASE + addr))
+            goto skip_write;  // Destination already has value
 
-            *ADDR32(ROM_BASE + addr);  // Generate address for write
-            rc = wait_for_flash_done(ROM_BASE, 0);
-            if (rc != 0)
-                break;
-
-            len  -= xlen;
-            xbuf += xlen;
-            addr += xlen;
+        rc = flash_cmd_core(KS_CMD_FLASH_WRITE, xbuf, xlen);
+        if (rc != 0) {
+            uint count;
+            for (count = 0; count < 10; count++) {
+                *VADDR32(ROM_BASE + addr);  // Generate address for write
+                cia_spin(10);
+            }
+            flash_read_mode(0);
+            if (cmd_tries++ < 5)
+                continue;  // Try again
+            break;         // Give up
         }
+        cmd_tries = 0;
+
+        *VADDR32(ROM_BASE + addr);  // Generate address for write
+        *VADDR32(ROM_BASE + addr);  // Generate address for write
+        rc = wait_for_flash_done(ROM_BASE + addr, 0, *ADDR32(xbuf));
+        if (rc != 0) {
+            if (write_tries++ < 5) {
+                /*
+                 * Try again after forcing read mode and verifying that
+                 * the same or more bits are set in the destination.
+                 */
+                flash_read_mode(1);  // Force "try hard"
+                cia_spin(10);
+                if ((*ADDR32(xbuf) & *VADDR32(ROM_BASE + addr)) ==
+                    *ADDR32(xbuf)) {
+                    continue;  // Retry
+                }
+            }
+            break;
+        }
+        if (flag_flash_write_bug &&
+            ((addr & 0xff) == 0x54)) {  // 0x1554 and variants
+            /*
+             * Some flash parts have a bug where writes to the 0xAAA
+             * offset and variants could get interpreted as a command,
+             * potentially corrupting flash. Work around this by
+             * stomping on the false "command" with a READ command.
+             */
+            flash_read_mode(0);
+        }
+        if (flag_conservative_mode &&
+            ((*VADDR32(ROM_BASE + addr) != *ADDR32(xbuf)) ||
+             (*VADDR32(ROM_BASE + addr) != *ADDR32(xbuf)))) {
+            rc = MSG_STATUS_MISMATCH;
+            break;
+        }
+        write_tries = 0;
+
+skip_write:
+        len  -= xlen;
+        xbuf += xlen;
+        addr += xlen;
     }
     cia_spin(CIA_USEC(10));
+    if (rc != 0)
+        fail_data = *VADDR32(ROM_BASE + addr);
 
     /* Restore flash to read mode */
-    rc |= flash_read_mode();
+    rc2 = flash_read_mode(1);  // Force "try harder"
+    if (rc == 0)
+        rc = rc2;
+    cia_spin(CIA_USEC(10));
+
+write_give_up:
+    /* Return to "current" flash bank */
+    rc2 = send_cmd_core_retry(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
+                              &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    if (rc == 0)
+        rc = rc2;
+    cia_spin(CIA_USEC(1000));
+
+    CACHE_FLUSH();
+    MMU_RESTORE();
+    CACHE_RESTORE_STATE();
+    INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
+
+    if (rc != 0) {
+        printf("\nWrite failure at %05x readback=%08x file=%08x ",
+               addr, fail_data, *VADDR32(xbuf));
+    }
+    return (rc);
+}
+
+static uint
+erase_flash_block(uint bank, uint addr)
+{
+    uint rc;
+    uint rc1;
+    uint cmd_tries = 0;
+    uint erase_tries = 0;
+    uint16_t bankarg = bank;
+
+    SUPERVISOR_STATE_ENTER();
+    INTERRUPTS_DISABLE();
+    CACHE_DISABLE_DATA();
+    MMU_DISABLE();
+
+    /* Switch to flash bank to be erased */
+    rc = send_cmd_core_retry(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
+                             &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    cia_spin(CIA_USEC(100));
+
+    /* Send erase command */
+try_erase_again:
+    while (cmd_tries++ < 5) {
+        rc = flash_cmd_core(KS_CMD_FLASH_ERASE, NULL, 0);
+        if (rc == 0)
+            break;
+        uint count;
+        for (count = 0; count < 10; count++) {
+            *VADDR32(ROM_BASE + addr);  // Generate address for erase
+            cia_spin(5);
+        }
+        flash_read_mode(0);
+    }
+
+    if (rc == 0) {
+        *VADDR32(ROM_BASE + addr);  // Generate address for erase
+        rc = wait_for_flash_done(ROM_BASE + addr, 1, 0xffffffff);
+        if (rc != 0) {
+            if (erase_tries++ < 5) {
+                /*
+                 * Try again after forcing read mode.
+                 */
+                (void) flash_read_mode(0);
+                cia_spin(10);
+                goto try_erase_again;
+            }
+        }
+    }
+    /* Restore flash to read mode */
+    rc1 = flash_read_mode(1);  // Force "try harder"
+    if (rc == 0)
+        rc = rc1;
+
     cia_spin(CIA_USEC(10));
 
     /* Return to "current" flash bank */
-    rc |= send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
-                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    rc1 = send_cmd_core_retry(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
+                              &bankarg, sizeof (bankarg), NULL, 0, NULL);
+    if (rc == 0)
+        rc = rc1;
     cia_spin(CIA_USEC(1000));
 
     CACHE_FLUSH();
@@ -2695,69 +2916,260 @@ write_to_flash(uint bank, uint addr, void *buf, uint len)
 }
 
 static uint
-erase_flash_block(uint bank, uint addr)
+get_flash_bsize(const chip_blocks_t *cb, uint flash_addr)
 {
-    uint rc;
-    uint rc1;
-    uint16_t bankarg = bank;
+    uint flash_bsize = cb->cb_bsize << (10 + smash_cmd_shift);
+    uint flash_bnum  = flash_addr / flash_bsize;
+    if (flag_debug) {
+        printf("Erase at %x bnum=%x: flash_bsize=%x flash_bbnum=%x\n",
+               flash_addr, flash_bnum, flash_bsize, cb->cb_bbnum);
+    }
+    if (flash_bnum == cb->cb_bbnum) {
+        /*
+         * Boot block area has variable sub-block size.
+         *
+         * The map is 8 bits which are arranged in order such that Bit 0
+         * represents the first sub-block and Bit 7 represents the last
+         * sub-block.
+         *
+         * If a given bit is 1, this is the start of an erase block.
+         * If a given bit is 0, then it is a continuation of the previous
+         * bit's erase block.
+         */
+        uint bboff = flash_addr & (flash_bsize - 1);
+        uint bsnum = (bboff / cb->cb_ssize) >> (10 + smash_cmd_shift);
+        uint first_snum = bsnum;
+        uint last_snum = bsnum;
+        uint smap = cb->cb_map;
+        if (flag_debug)
+            printf(" bblock bb_off=%x snum=%x s_map=%x\n", bboff, bsnum, smap);
+        flash_bsize = 0;
+        /* Find first bit of this map */
+        while (first_snum > 0) {
+            if (smap & BIT(first_snum))  // Found base
+                break;
+            first_snum--;
+        }
+        while (++last_snum < 8) {
+            if (smap & BIT(last_snum))  // Found next base
+                break;
+        }
+        flash_bsize = (cb->cb_ssize * (last_snum - first_snum)) <<
+                      (10 + smash_cmd_shift);
+        if (flag_debug) {
+            printf(" first_snum=%x last_snum=%x bb_ssize=%x\n",
+                   first_snum, last_snum, flash_bsize);
+        }
+    } else if (flag_debug) {
+        printf(" normal block %x\n", flash_bsize);
+    }
+    return (flash_bsize);
+}
 
-    SUPERVISOR_STATE_ENTER();
-    INTERRUPTS_DISABLE();
-    CACHE_DISABLE_DATA();
-    MMU_DISABLE();
+static int
+erase_flash(uint bank, uint addr, uint len, uint flag_yes)
+{
+    bank_info_t info;
+    uint        rc;
+    uint        rlen;
+    uint        bank_sub;
+    uint        bank_size;
+    uint32_t    flash_dev1;
+    uint32_t    flash_dev2;
+    uint        flash_start_addr;
+    uint        flash_end_addr;
+    uint        flash_start_bsize;
+    uint        flash_end_bsize;
+    uint        dot_count = 0;
+    uint        dot_iters = 1;
+    uint        dot_max;
+    uint        mode = 0;
+    uint        tlen = 0;
+    uint64_t    time_start;
+    uint64_t    time_end;
+    const char *id1;
+    const char *id2;
+    const chip_blocks_t *cb;
+    const chip_blocks_t *cb2;
 
-    /* Switch to flash bank to be programmed */
-    rc = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETTEMP,
-                       &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    cia_spin(CIA_USEC(100));
-
-    /* Send erase command */
-    rc = flash_cmd_core(KS_CMD_FLASH_ERASE, NULL, 0);
-    if (rc == 0) {
-        *ADDR32(ROM_BASE + addr);  // Generate address for erase
-        rc = wait_for_flash_done(ROM_BASE + addr, 1);
+    rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, &info, sizeof (info), &rlen);
+    if (rc != 0) {
+        printf("Failed to get bank information: %s\n", smash_err(rc));
+        return (rc);
     }
 
-    /* Restore flash to read mode */
-    rc1 = flash_read_mode();
-    if (rc == 0)
-        rc = rc1;
-    cia_spin(CIA_USEC(10));
+    bank_sub  = info.bi_merge[bank] & 0x0f;
+    bank_size = ((info.bi_merge[bank] + 0x10) & 0xf0) << 15;  // size in bytes
+    if (bank_sub != 0) {
+        printf("Bank %u is part of a merged bank, but is not the "
+               "first (use %u)\n", bank, bank - bank_sub);
+        return (1);
+    }
 
-    /* Return to "current" flash bank */
-    rc1 = send_cmd_core(KS_CMD_BANK_SET | KS_BANK_UNSETTEMP,
-                        &bankarg, sizeof (bankarg), NULL, 0, NULL);
-    if (rc == 0)
-        rc = rc1;
-    cia_spin(CIA_USEC(1000));
+    if (len == VALUE_UNASSIGNED) {
+        /* Get length from size of bank */
+        len = bank_size - (addr & (bank_size - 1));
+    } else if (len > bank_size) {
+        printf("Specified length 0x%x is greater than bank size 0x%x\n",
+               len, bank_size);
+        return (1);
+    } else if (addr + len > bank_size) {
+        printf("Specified address + length (0x%x) overflows bank (size 0x%x)\n",
+               addr + len, bank_size);
+        return (1);
+    }
 
-    CACHE_FLUSH();
-    MMU_RESTORE();
-    CACHE_RESTORE_STATE();
-    INTERRUPTS_ENABLE();
-    SUPERVISOR_STATE_EXIT();
+    /* Acquire flash id to get block erase zones */
+    rc = flash_id(&flash_dev1, &flash_dev2, &mode);
+    if (rc != 0) {
+        printf("Flash id failure (%s)\n", smash_err(rc));
+        return (rc);
+    }
+    id1 = ee_id_string(flash_dev1);
+    id2 = ee_id_string(flash_dev2);
+    if (flag_debug) {
+        if (mode == 16)
+            printf("    %08x %s", flash_dev1, id1);
+        else
+            printf("    %08x %08x %s %s", flash_dev1, flash_dev2, id1, id2);
+        printf(" (%u-bit mode)\n", mode);
+    }
+
+    if (strcmp(id1, "Unknown") == 0) {
+        printf("Failed to identify device 1 (%08x)\n", flash_dev1);
+        rc = MSG_STATUS_BAD_DATA;
+    }
+    if ((mode == 32) && (strcmp(id2, "Unknown") == 0)) {
+        printf("Failed to identify device 2 (%08x)\n", flash_dev2);
+        rc = MSG_STATUS_BAD_DATA;
+    }
+    if (rc != 0)
+        return (rc);
+
+    cb = get_chip_block_info(flash_dev1);
+    if (cb == NULL) {
+        printf("Failed to determine erase block information for %08x\n",
+               flash_dev1);
+        return (MSG_STATUS_BAD_DATA);
+    }
+    if (mode == 32) {
+        cb2 = get_chip_block_info(flash_dev1);
+        if (cb2 == NULL) {
+            printf("Failed to determine erase block information for %08x\n",
+                   flash_dev2);
+            return (MSG_STATUS_BAD_DATA);
+        }
+        if ((cb->cb_bbnum != cb2->cb_bbnum) ||
+            (cb->cb_bsize != cb2->cb_bsize) ||
+            (cb->cb_ssize != cb2->cb_ssize) ||
+            (cb->cb_map != cb2->cb_map)) {
+            printf("    Failure: flash device IDs are not compatible "
+                   "(%08x %08x)\n", flash_dev1, flash_dev2);
+            return (MSG_STATUS_BAD_DATA);
+        }
+    }
+
+    flash_start_addr  = bank * ROM_WINDOW_SIZE + addr;
+    flash_end_addr    = bank * ROM_WINDOW_SIZE + addr + len - 1;
+    flash_start_bsize = get_flash_bsize(cb, flash_start_addr);
+    flash_end_bsize   = get_flash_bsize(cb, flash_end_addr);
+
+    if (flag_debug)
+        printf("pre saddr=%x eaddr=%x\n", flash_start_addr, flash_end_addr);
+
+    /* Round start address down and end address up, then compute length */
+    flash_start_addr = flash_start_addr & ~(flash_start_bsize - 1);
+    flash_end_addr   = (flash_end_addr | (flash_end_bsize - 1)) + 1;
+    len = flash_end_addr - flash_start_addr;
+    addr = addr & ~(flash_start_bsize - 1);
+
+    if (flag_debug) {
+        printf("saddr=%x sbsize=%x\n", flash_start_addr, flash_start_bsize);
+        printf("eaddr=%x ebsize=%x\n", flash_end_addr, flash_end_bsize);
+    }
+
+    printf("Erase bank=%u addr=%x len=%x\n", bank, addr, len);
+    if ((!flag_yes) && (!are_you_sure("Proceed"))) {
+        return (1);
+    }
+
+    dot_max = (len + MAX_CHUNK - 1) / MAX_CHUNK;
+    while (dot_max > 50) {
+        dot_max >>= 1;
+        dot_iters <<= 1;
+    }
+    printf("Progress [%*s]\rProgress [", dot_max, "");
+    fflush(stdout);
+
+    time_start = smash_time();
+
+    bank += addr / ROM_WINDOW_SIZE;
+    addr &= (ROM_WINDOW_SIZE - 1);
+
+    while (len > 0) {
+        uint xlen = get_flash_bsize(cb, bank * ROM_WINDOW_SIZE + addr);
+
+        rc = erase_flash_block(bank, addr);
+        if (rc != 0) {
+            printf("\nKicksmash failure (%s)\n", smash_err(rc));
+            break;
+        }
+        if (is_user_abort()) {
+            rc = 2;
+            break;
+        }
+
+        tlen += xlen;
+        len  -= xlen;
+        addr += xlen;
+        if (addr >= ROM_WINDOW_SIZE) {
+            addr -= ROM_WINDOW_SIZE;
+            bank++;
+        }
+        if (tlen >= MAX_CHUNK) {
+            while (tlen >= MAX_CHUNK) {
+                tlen -= MAX_CHUNK;
+                if (++dot_count == dot_iters) {
+                    dot_count = 0;
+                    printf(".");
+                }
+            }
+            fflush(stdout);
+        }
+    }
+    if (rc == 0) {
+        while (tlen >= MAX_CHUNK) {
+            tlen -= MAX_CHUNK;
+            if (++dot_count == dot_iters) {
+                dot_count = 0;
+                printf(".");
+            }
+        }
+        time_end = smash_time();
+        printf("]\nErase complete in ");
+        print_us_diff(time_start, time_end);
+    }
     return (rc);
 }
+
 
 /*
  * cmd_readwrite
  * -------------
  * Read from flash and write to file or read from file and write to flash.
  */
-int
+static int
 cmd_readwrite(int argc, char *argv[])
 {
     bank_info_t info;
     const char *ptr;
     const char *filename = NULL;
     uint64_t    time_start;
-    uint64_t    time_rw_end;
     uint64_t    time_end;
     int         arg;
     int         pos;
     int         bytes;
     uint        flag_dump = 0;
-    uint        flag_yes = 0;
     uint        addr = VALUE_UNASSIGNED;
     uint        bank = VALUE_UNASSIGNED;
     uint        len  = VALUE_UNASSIGNED;
@@ -2835,6 +3247,9 @@ cmd_readwrite(int argc, char *argv[])
                                    argv[arg], argv[0], ptr);
                             goto usage;
                         }
+                        break;
+                    case 'C':  // conservative
+                        flag_conservative_mode ^= 1;
                         break;
                     case 'D':  // debug
                         flag_debug++;
@@ -3057,7 +3472,6 @@ usage:
 
     rc = 0;
 
-    time_start = smash_time();
 
     bank += addr / ROM_WINDOW_SIZE;
     addr &= (ROM_WINDOW_SIZE - 1);
@@ -3071,7 +3485,14 @@ usage:
         dot_max >>= 1;
         dot_iters <<= 1;
     }
+    if (writemode) {
+        if (flag_yes || are_you_sure("Erase area before write")) {
+            if (erase_flash(bank, addr, len, 1))
+                return (1);
+        }
+    }
     if (readmode || writemode) {
+        time_start = smash_time();
         dot_count = 0;
         if (!file_is_stdio) {
             printf("Progress [%*s]\rProgress [", dot_max, "");
@@ -3142,14 +3563,17 @@ usage:
                 bank++;
             }
         }
+        if (!file_is_stdio && (rc == 0)) {
+            time_end = smash_time();
+            printf("]\n%s complete in ", writemode ? "Write" : "Read");
+            print_us_diff(time_start, time_end);
+        }
     }
-    time_rw_end = smash_time();
 
     if (verifymode && (rc == 0)) {
+        time_start = smash_time();
         dot_count = 0;
         if (!file_is_stdio) {
-            if ((rc == 0) && (readmode || writemode))
-                printf("]\n");
             printf("  Verify [%*s]\r  Verify [", dot_max, "");
             fflush(stdout);
         }
@@ -3212,20 +3636,15 @@ usage:
                 bank++;
             }
         }
+        if (!file_is_stdio && (rc == 0)) {
+            time_end = smash_time();
+            printf("]\n%s complete in ", "Verify");
+            print_us_diff(time_start, time_end);
+        }
     }
-    if (!file_is_stdio && (rc == 0)) {
-        time_end = smash_time();
-        if (rc == 0)
-            printf("]\n");
+
+    if (!file_is_stdio) {
         fclose(file);
-        if (readmode || writemode) {
-            printf("%s complete in ", writemode ? "Write" : "Read");
-            print_us_diff(time_start, time_rw_end);
-        }
-        if (verifymode) {
-            printf("%s complete in ", "Verify");
-            print_us_diff(time_rw_end, time_end);
-        }
     }
 fail_end:
     FreeMem(buf, MAX_CHUNK);
@@ -3240,7 +3659,7 @@ fail_end:
  * Set a KickSmash value, such as board name, or NVRAM value available to
  * AmigaOS.
  */
-int
+static int
 cmd_set(int argc, char *argv[])
 {
     int rc;
@@ -3415,23 +3834,48 @@ cmd_set_usage:
  * --------
  * Open a KickSmash terminal.
  */
-int
+static int
 cmd_term(int argc, char *argv[])
 {
     int ch;
+    int arg;
     uint rlen;
     uint rc;
     uint is_poll = 0;
+    uint count = 0;
     ULONG ihandle = Input();
     __attribute__((aligned(4))) uint8_t buf[256];
     uint16_t maxlen = sizeof (buf) - 4;
+    uint poll_delay = 0;
+    uint poll_count = 0;
+    uint interactive;
+    uint tick_last = 0;
+    uint tick_count = 0;
+    uint tick_now;
 
-    (void) argc;
-    (void) argv;
-
-    printf("Press ^X to exit\n");
+    if (argc > 1) {
+        interactive = 0;
+        buf[0] = 'U' - '@';  // ^U
+        buf[1] = '\n';       // ^M Return
+        if (send_cmd_retry(KS_CMD_CONS_INPUT, buf, 2, NULL, 0, &rlen) != 0)
+            return (1);
+        buf[0] = ' ';  // ^M Return
+        for (arg = 1; arg < argc; arg++) {
+            if (send_cmd_retry(KS_CMD_CONS_INPUT, argv[arg],
+                               strlen(argv[arg]), NULL, 0, &rlen) != 0) {
+                return (1);
+            }
+            if (arg == argc - 1)
+                buf[0] = '\n';  // ^M Return
+            if (send_cmd_retry(KS_CMD_CONS_INPUT, buf, 1, NULL, 0, &rlen) != 0)
+                return (1);
+        }
+    } else {
+        interactive = 1;
+        printf("Press ^X to exit\n");
+        SetMode(Input(), 1);
+    }
     setvbuf(stdout, NULL, _IONBF, 0);  // Raw output mode
-    SetMode(Input(), 1);
     SetMode(Output(), 1);
 
 #define KEY_CTRL_X 0x18
@@ -3448,15 +3892,27 @@ cmd_term(int argc, char *argv[])
                 printf("\n");
                 break;
             }
-            rc = send_cmd(KS_CMD_CONS_INPUT, buf, 1, NULL, 0, &rlen);
+            rc = send_cmd_retry(KS_CMD_CONS_INPUT, buf, 1, NULL, 0, &rlen);
             if (rc != 0)
                 break;
         }
 
+        tick_now = cia_ticks();  // CIA counts downward
+        tick_count += (uint16_t) (tick_last - tick_now);
+        tick_last = tick_now;
+        if ((count++ & 0x7) != 0)
+            continue;  // Poll infrequently for BEC output
+
+        if (poll_count < poll_delay) {
+            poll_count++;
+            continue;
+        }
+        poll_count = 0;
+
         /* Poll for Kicksmash output */
         maxlen = sizeof (buf) - 2;
-        rc = send_cmd(KS_CMD_CONS_OUTPUT, &maxlen, sizeof (maxlen),
-                      buf, sizeof (buf), &rlen);
+        rc = send_cmd_retry(KS_CMD_CONS_OUTPUT, &maxlen, sizeof (maxlen),
+                            buf, sizeof (buf), &rlen);
 #if 0
         if (rc == MSG_STATUS_BAD_CRC) {
             uint pos;
@@ -3470,15 +3926,27 @@ cmd_term(int argc, char *argv[])
             is_poll = 1;
             break;
         }
-        if ((rlen > 0) && Write(Output(), buf, rlen) == 0) {
-            setvbuf(stdout, NULL, _IOLBF, 0);  // Line output mode
-            printf("\nWrite fail\n");
-            break;
+        if (rlen > 0) {
+            count = 0;  // Got output -- poll again right away
+            poll_delay = 0;
+            tick_count = 0;
+            if (Write(Output(), buf, rlen) == 0) {
+                setvbuf(stdout, NULL, _IOLBF, 0);  // Line output mode
+                printf("\nWrite fail\n");
+                break;
+            }
+        } else {
+            poll_delay++;
+            if (!interactive && (tick_count > 800000)) {
+                /* More than 1 second with no additional output */
+                break;
+            }
         }
     }
 
     /* Restore cooked mode */
-    SetMode(Input(), 0);
+    if (interactive)
+        SetMode(Input(), 0);
     SetMode(Output(), 0);
     setvbuf(stdout, NULL, _IOLBF, 0);  // Line output mode
 
@@ -3489,92 +3957,19 @@ cmd_term(int argc, char *argv[])
     return (0);
 }
 
-static uint
-get_flash_bsize(const chip_blocks_t *cb, uint flash_addr)
-{
-    uint flash_bsize = cb->cb_bsize << (10 + smash_cmd_shift);
-    uint flash_bnum  = flash_addr / flash_bsize;
-    if (flag_debug) {
-        printf("Erase at %x bnum=%x: flash_bsize=%x flash_bbnum=%x\n",
-               flash_addr, flash_bnum, flash_bsize, cb->cb_bbnum);
-    }
-    if (flash_bnum == cb->cb_bbnum) {
-        /*
-         * Boot block area has variable sub-block size.
-         *
-         * The map is 8 bits which are arranged in order such that Bit 0
-         * represents the first sub-block and Bit 7 represents the last
-         * sub-block.
-         *
-         * If a given bit is 1, this is the start of an erase block.
-         * If a given bit is 0, then it is a continuation of the previous
-         * bit's erase block.
-         */
-        uint bboff = flash_addr & (flash_bsize - 1);
-        uint bsnum = (bboff / cb->cb_ssize) >> (10 + smash_cmd_shift);
-        uint first_snum = bsnum;
-        uint last_snum = bsnum;
-        uint smap = cb->cb_map;
-        if (flag_debug)
-            printf(" bblock bb_off=%x snum=%x s_map=%x\n", bboff, bsnum, smap);
-        flash_bsize = 0;
-        /* Find first bit of this map */
-        while (first_snum > 0) {
-            if (smap & BIT(first_snum))  // Found base
-                break;
-            first_snum--;
-        }
-        while (++last_snum < 8) {
-            if (smap & BIT(last_snum))  // Found next base
-                break;
-        }
-        flash_bsize = (cb->cb_ssize * (last_snum - first_snum)) <<
-                      (10 + smash_cmd_shift);
-        if (flag_debug) {
-            printf(" first_snum=%x last_snum=%x bb_ssize=%x\n",
-                   first_snum, last_snum, flash_bsize);
-        }
-    } else if (flag_debug) {
-        printf(" normal block %x\n", flash_bsize);
-    }
-    return (flash_bsize);
-}
-
 /*
  * cmd_erase
  * ---------
  * Erase flash
  */
-int
+static int
 cmd_erase(int argc, char *argv[])
 {
-    bank_info_t          info;
-    const chip_blocks_t *cb;
-    const chip_blocks_t *cb2;
     const char *ptr;
-    uint64_t    time_start;
-    uint64_t    time_end;
-    uint32_t    flash_dev1;
-    uint32_t    flash_dev2;
-    const char *id1;
-    const char *id2;
     uint        addr = VALUE_UNASSIGNED;
     uint        bank = VALUE_UNASSIGNED;
     uint        len  = VALUE_UNASSIGNED;
-    uint        flag_yes = 0;
     uint        rc = 1;
-    uint        rlen;
-    uint        bank_sub;
-    uint        bank_size;
-    uint        flash_start_addr;
-    uint        flash_end_addr;
-    uint        flash_start_bsize;
-    uint        flash_end_bsize;
-    uint        mode = 0;
-    uint        tlen = 0;
-    uint        dot_count = 0;
-    uint        dot_iters = 1;
-    uint        dot_max;
     int         arg;
     int         pos;
 
@@ -3657,165 +4052,7 @@ usage:
     if (addr == VALUE_UNASSIGNED)
         addr = 0;
 
-    rc = send_cmd(KS_CMD_BANK_INFO, NULL, 0, &info, sizeof (info), &rlen);
-    if (rc != 0) {
-        printf("Failed to get bank information: %s\n", smash_err(rc));
-        return (rc);
-    }
-
-    bank_sub  = info.bi_merge[bank] & 0x0f;
-    bank_size = ((info.bi_merge[bank] + 0x10) & 0xf0) << 15;  // size in bytes
-    if (bank_sub != 0) {
-        printf("Bank %u is part of a merged bank, but is not the "
-               "first (use %u)\n", bank, bank - bank_sub);
-        return (1);
-    }
-
-    if (len == VALUE_UNASSIGNED) {
-        /* Get length from size of bank */
-        len = bank_size - (addr & (bank_size - 1));
-    } else if (len > bank_size) {
-        printf("Specified length 0x%x is greater than bank size 0x%x\n",
-               len, bank_size);
-        return (1);
-    } else if (addr + len > bank_size) {
-        printf("Specified address + length (0x%x) overflows bank (size 0x%x)\n",
-               addr + len, bank_size);
-        return (1);
-    }
-
-    /* Acquire flash id to get block erase zones */
-    rc = flash_id(&flash_dev1, &flash_dev2, &mode);
-    if (rc != 0) {
-        printf("Flash id failure (%s)\n", smash_err(rc));
-        return (rc);
-    }
-    id1 = ee_id_string(flash_dev1);
-    id2 = ee_id_string(flash_dev2);
-    if (flag_debug) {
-        if (mode == 16)
-            printf("    %08x %s", flash_dev1, id1);
-        else
-            printf("    %08x %08x %s %s", flash_dev1, flash_dev2, id1, id2);
-        printf(" (%u-bit mode)\n", mode);
-    }
-
-    if (strcmp(id1, "Unknown") == 0) {
-        printf("Failed to identify device 1 (%08x)\n", flash_dev1);
-        rc = MSG_STATUS_BAD_DATA;
-    }
-    if ((mode == 32) && (strcmp(id2, "Unknown") == 0)) {
-        printf("Failed to identify device 2 (%08x)\n", flash_dev2);
-        rc = MSG_STATUS_BAD_DATA;
-    }
-    if (rc != 0)
-        return (rc);
-
-    cb = get_chip_block_info(flash_dev1);
-    if (cb == NULL) {
-        printf("Failed to determine erase block information for %08x\n",
-               flash_dev1);
-        return (MSG_STATUS_BAD_DATA);
-    }
-    if (mode == 32) {
-        cb2 = get_chip_block_info(flash_dev1);
-        if (cb2 == NULL) {
-            printf("Failed to determine erase block information for %08x\n",
-                   flash_dev2);
-            return (MSG_STATUS_BAD_DATA);
-        }
-        if ((cb->cb_bbnum != cb2->cb_bbnum) ||
-            (cb->cb_bsize != cb2->cb_bsize) ||
-            (cb->cb_ssize != cb2->cb_ssize) ||
-            (cb->cb_map != cb2->cb_map)) {
-            printf("    Failure: flash device IDs are not compatible "
-                   "(%08x %08x)\n", flash_dev1, flash_dev2);
-            return (MSG_STATUS_BAD_DATA);
-        }
-    }
-
-    flash_start_addr  = bank * ROM_WINDOW_SIZE + addr;
-    flash_end_addr    = bank * ROM_WINDOW_SIZE + addr + len - 1;
-    flash_start_bsize = get_flash_bsize(cb, flash_start_addr);
-    flash_end_bsize   = get_flash_bsize(cb, flash_end_addr);
-
-    if (flag_debug)
-        printf("pre saddr=%x eaddr=%x\n", flash_start_addr, flash_end_addr);
-
-    /* Round start address down and end address up, then compute length */
-    flash_start_addr = flash_start_addr & ~(flash_start_bsize - 1);
-    flash_end_addr   = (flash_end_addr | (flash_end_bsize - 1)) + 1;
-    len = flash_end_addr - flash_start_addr;
-    addr = addr & ~(flash_start_bsize - 1);
-
-    if (flag_debug) {
-        printf("saddr=%x sbsize=%x\n", flash_start_addr, flash_start_bsize);
-        printf("eaddr=%x ebsize=%x\n", flash_end_addr, flash_end_bsize);
-    }
-
-    printf("Erase bank=%u addr=%x len=%x\n", bank, addr, len);
-    if ((!flag_yes) && (!are_you_sure("Proceed"))) {
-        return (1);
-    }
-
-    dot_max = (len + MAX_CHUNK - 1) / MAX_CHUNK;
-    while (dot_max > 50) {
-        dot_max >>= 1;
-        dot_iters <<= 1;
-    }
-    printf("Progress [%*s]\rProgress [", dot_max, "");
-    fflush(stdout);
-
-    time_start = smash_time();
-
-    bank += addr / ROM_WINDOW_SIZE;
-    addr &= (ROM_WINDOW_SIZE - 1);
-
-    while (len > 0) {
-        uint xlen = get_flash_bsize(cb, bank * ROM_WINDOW_SIZE + addr);
-
-        rc = erase_flash_block(bank, addr);
-        if (rc != 0) {
-            printf("\nKicksmash failure (%s)\n", smash_err(rc));
-            break;
-        }
-        if (is_user_abort()) {
-            rc = 2;
-            break;
-        }
-
-        tlen += xlen;
-        len  -= xlen;
-        addr += xlen;
-        if (addr >= ROM_WINDOW_SIZE) {
-            addr -= ROM_WINDOW_SIZE;
-            bank++;
-        }
-        if (tlen >= MAX_CHUNK) {
-            while (tlen >= MAX_CHUNK) {
-                tlen -= MAX_CHUNK;
-                if (++dot_count == dot_iters) {
-                    dot_count = 0;
-                    printf(".");
-                }
-            }
-            fflush(stdout);
-        }
-    }
-    if (rc == 0) {
-        while (tlen >= MAX_CHUNK) {
-            tlen -= MAX_CHUNK;
-            if (++dot_count == dot_iters) {
-                dot_count = 0;
-                printf(".");
-            }
-        }
-        printf("]\n");
-        time_end = smash_time();
-        printf("Erase complete in ");
-        print_us_diff(time_start, time_end);
-    }
-    return (rc);
+    return (erase_flash(bank, addr, len, flag_yes));
 }
 
 static int
@@ -4040,6 +4277,8 @@ main(int argc, char *argv[])
 #pragma GCC diagnostic pop
     cpu_control_init();  // cpu_type, SysBase
 
+    rom_get_normal();  // Get Kickstart ROM
+
     for (arg = 1; arg < argc; arg++) {
         const char *ptr;
         ptr = long_to_short(argv[arg], long_to_short_main,
@@ -4051,6 +4290,9 @@ main(int argc, char *argv[])
                         exit(cmd_bank(argc - arg, argv + arg));
                     case 'c':  // clock
                         exit(cmd_clock(argc - arg, argv + arg));
+                    case 'C':  // conservative
+                        flag_conservative_mode ^= 1;
+                        break;
                     case 'd':  // debug
                         flag_debug++;
                         break;
@@ -4101,7 +4343,7 @@ main(int argc, char *argv[])
                     case 'w':  // write file to flash
                         exit(cmd_readwrite(argc - arg, argv + arg));
                         break;
-                    case 'x':  // spin reading address
+                    case 'X':  // spin reading address
                         if (++arg >= argc) {
                             printf("%s requires an argument\n", ptr);
                             exit(1);
@@ -4116,7 +4358,7 @@ main(int argc, char *argv[])
                         }
                         flag_x_spin = 1;
                         break;
-                    case 'y':  // spin reading address with ROM overlay set
+                    case 'Y':  // spin reading address with ROM overlay set
                         if (++arg >= argc) {
                             printf("%s requires an argument\n", ptr);
                             exit(1);
@@ -4130,6 +4372,9 @@ main(int argc, char *argv[])
                             exit(1);
                         }
                         flag_y_spin = 1;
+                        break;
+                    case 'y':  // yes
+                        flag_yes++;
                         break;
                     default:
                         printf("Unknown argument %s\n", ptr);
