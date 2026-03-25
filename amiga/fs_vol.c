@@ -104,7 +104,7 @@ amiga_datestamp_to_unix_time(struct DateStamp *ds, uint *nsec)
  */
 static int
 name_present_in_dos_devinfo(struct DosInfo *info, const char *name,
-                            struct DeviceList *ignore)
+                            void *ignore)
 {
     struct DeviceList *tmp;
     uint present = 0;
@@ -124,7 +124,7 @@ name_present_in_dos_devinfo(struct DosInfo *info, const char *name,
 }
 
 static void
-fsname(struct DosInfo *info, char *name, char *volumename, DeviceList_t *ignore)
+fsname(struct DosInfo *info, char *name, char *volumename, void *ignore)
 {
     int len;
     char *ptr;
@@ -162,50 +162,60 @@ fsname(struct DosInfo *info, char *name, char *volumename, DeviceList_t *ignore)
     volumename[0] = len;
 }
 
-static struct DeviceList *
+static struct DosList *
 volnode_init(char *name, uint32_t access_time, LONG dl_type,
-             struct MsgPort *msgport, struct DeviceList *ignore)
+             struct MsgPort *msgport, void *ignore)
 {
     uint namelen = strlen(name) + 5;
-    struct DeviceList *volnode;
     char *volumename;
     struct DosInfo *info;
+    struct DosList *dosnode;
 
     info = (struct DosInfo *)
            BTOC(((struct RootNode *) DOSBase->dl_Root)->rn_Info);
 
-    volnode = (struct DeviceList *)
-              AllocMem(sizeof (struct DeviceList), MEMF_PUBLIC);
+    dosnode = (struct DosList *) AllocMem(sizeof (*dosnode),
+                                          MEMF_PUBLIC | MEMF_CLEAR);
 
-    if (volnode == NULL) {
+    if (dosnode == NULL) {
         printf("volnode_init: unable to allocate %d bytes\n",
-               sizeof (struct DeviceList));
+               sizeof (*dosnode));
         return (NULL);
     }
 
     volumename = (char *) AllocVec(namelen, MEMF_PUBLIC);
     if (volumename == NULL) {
         printf("volnode_init: unable to allocate %u bytes\n", namelen);
-        FreeMem(volnode, sizeof (struct DeviceList));
+        FreeMem(dosnode, sizeof (*dosnode));
         return (NULL);
     }
 
-    /* Probably only useful if booting from this volume and RTC unavailable */
-    unix_time_to_amiga_datestamp(access_time, 0, &volnode->dl_VolumeDate);
+    if (dl_type == DLT_DEVICE) {
+        dosnode->dol_misc.dol_handler.dol_Handler = CTOB("\7smashfs");
+        dosnode->dol_misc.dol_handler.dol_StackSize = 4096;
+        dosnode->dol_misc.dol_handler.dol_Priority = 0;
+        dosnode->dol_misc.dol_handler.dol_Startup = 0;  // FileSysStartupMsg
+        dosnode->dol_misc.dol_handler.dol_SegList = 0;
+        dosnode->dol_misc.dol_handler.dol_GlobVec = -1;
+    } else if (dl_type == DLT_VOLUME) {
+        /* Probably only useful if booting from this volume and no RTC */
+        unix_time_to_amiga_datestamp(access_time, 0,
+            &dosnode->dol_misc.dol_volume.dol_VolumeDate);
+        dosnode->dol_misc.dol_volume.dol_LockList = 0;
+        dosnode->dol_misc.dol_volume.dol_DiskType = ID_SMASHFS_DISK;
+        /*
+         * Randell Jesup said (22-Dec-1991) that if we want Workbench to
+         * recognize BFFS, it might need to fake ID_DOS_DISK in response
+         * to ACTION_INFO. It needs to be faked for ACTION_DISK_INFO,
+         * but not here.
+         */
+    }
 
-    volnode->dl_Type     = dl_type;
-    volnode->dl_Task     = msgport;
-    volnode->dl_Lock     = 0;
-    volnode->dl_LockList = 0;
+    dosnode->dol_Type     = dl_type;
+    dosnode->dol_Task     = msgport;
+    dosnode->dol_Lock     = 0;
 
-    /*
-     * Randell Jesup said (22-Dec-1991) that if we want Workbench to recognize
-     * BFFS, it might need to fake ID_DOS_DISK in response to ACTION_INFO.  It
-     * needs to be faked for ACTION_DISK_INFO, not here.
-     */
-    volnode->dl_DiskType = ID_SMASHFS_DISK;
-    volnode->dl_unused   = 0;
-    volnode->dl_Name     = CTOB(volumename);
+    dosnode->dol_Name     = CTOB(volumename);
 
     /*
      * Lock of volume list was done by the caller.
@@ -217,10 +227,10 @@ volnode_init(char *name, uint32_t access_time, LONG dl_type,
      */
     // LockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
         fsname(info, name, volumename, ignore);
-        volnode->dl_Next = info->di_DevInfo;
-        info->di_DevInfo = (BPTR) CTOB(volnode);
+        dosnode->dol_Next = info->di_DevInfo;
+        info->di_DevInfo = (BPTR) CTOB(dosnode);
     // UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
-    return (volnode);
+    return (dosnode);
 }
 
 static void
@@ -234,7 +244,8 @@ volnode_new(char *name, uint32_t access_time, vollist_t *vol)
      */
     vol->vl_devnode = volnode_init(name, access_time, DLT_DEVICE,
                                    vol->vl_msgport, NULL);
-    vol->vl_volnode = volnode_init(name, access_time, DLT_VOLUME,
+    vol->vl_volnode = (DeviceList_t *)
+                      volnode_init(name, access_time, DLT_VOLUME,
                                    vol->vl_msgport, vol->vl_devnode);
 }
 
@@ -243,7 +254,7 @@ volnode_remove(vollist_t *vol)
 {
     int             removed = 0;
     DeviceList_t   *volnode = vol->vl_volnode;
-    DeviceList_t   *devnode = vol->vl_devnode;
+    DosList_t      *devnode = vol->vl_devnode;
     DeviceList_t   *current;
     DeviceList_t   *parent;
     struct DosInfo *info;
@@ -268,7 +279,7 @@ volnode_remove(vollist_t *vol)
     // LockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
         current = (struct DeviceList *) BTOC(info->di_DevInfo);
         while (current != NULL) {
-            if ((current == volnode) || (current == devnode)) {
+            if ((current == volnode) || (current == (void *) devnode)) {
                 removed++;
                 current->dl_Task = NULL;
                 if (parent == NULL)
@@ -381,7 +392,7 @@ volume_flush(void)
                     FreeVec(BTOC(dlnode->dl_Name));
                     FreeMem(dlnode, sizeof (*dlnode));
                 }
-                if ((dlnode = cur->vl_devnode) != NULL) {
+                if ((dlnode = (DeviceList_t *) cur->vl_devnode) != NULL) {
                     FreeVec(BTOC(dlnode->dl_Name));
                     FreeMem(dlnode, sizeof (*dlnode));
                 }

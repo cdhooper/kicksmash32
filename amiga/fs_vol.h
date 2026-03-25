@@ -18,6 +18,7 @@
 #define VOLNAME_MAXLEN 32
 
 typedef struct DeviceList DeviceList_t;
+typedef struct DosList DosList_t;
 typedef struct MsgPort MsgPort_t;
 
 typedef struct vollist vollist_t;
@@ -31,8 +32,8 @@ typedef struct vollist {
     int8_t        vl_bootpri;
     ULONG         vl_msg_mask;
     handle_t      vl_handle;
+    DosList_t    *vl_devnode;
     DeviceList_t *vl_volnode;
-    DeviceList_t *vl_devnode;
     MsgPort_t    *vl_msgport;
 } vollist_t;
 
