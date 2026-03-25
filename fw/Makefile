@@ -239,10 +239,12 @@ $(OBJDIR):
 $(OPENCM3_DIR)/Makefile:
 	@echo Cloning $@
 	$(QUIET)git clone https://github.com/libopencm3/libopencm3
+	$(QUIET)(cd $(OPENCM3_DIR); git checkout 201f5bcfb3fa70ee34818152463e7139f24db377)
 
 $(OPENCM3_DIR)/include/%: $(OPENCM3_DIR)/Makefile
 	@echo Building $@
 	$(QUIET)make -C $(OPENCM3_DIR) -j8
+	$(QUIET)touch $@
 
 $(OPENCM3_LIB): $(OPENCM3_HEADER)
 
