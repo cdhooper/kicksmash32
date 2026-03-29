@@ -305,7 +305,7 @@ adc_poll(int verbose, int force)
                 if (v5_good == false) {
                     if (!board_is_standalone)
                         printf("Power is off\n");
-                    goto drive_oe_high;
+                    goto power_is_off;
                 }
             }
         }
@@ -322,13 +322,29 @@ adc_poll(int verbose, int force)
             }
             if (v5_stable) {
                 /* Just pull up SOCKET_OE */
+                gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
                 gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
                              GPIO_SETMODE_INPUT_PULLUPDOWN);
+                gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN,
+                             GPIO_SETMODE_INPUT);
             } else {
-drive_oe_high:
-                /* Drive SOCKET_OE high */
+power_is_off:
                 gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
                              GPIO_SETMODE_OUTPUT_PPULL_2);
+                if (config.flags & CF_POWER_OFF_OLD) {
+                    /* Drive SOCKET_OE high */
+                    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+                } else {
+                    /* Drive FLASH_OE high and SOCKET_OE low */
+                    gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
+                    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN,
+                                 GPIO_SETMODE_OUTPUT_PPULL_2);
+                    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
+
+                    /* Pull data pins low */
+                    gpio_setv(FLASH_D0_PORT, 0xffff, 0);
+                    gpio_setv(FLASH_D16_PORT, 0xffff, 0);
+                }
             }
         } else {
             deglitch--;

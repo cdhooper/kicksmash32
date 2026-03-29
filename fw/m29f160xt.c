@@ -208,8 +208,8 @@ address_output_disable(void)
         GPIO_CRL(SOCKET_A0_PORT)   = 0x88888888;  // Input Pull-Up / Pull-Down
         GPIO_CRH(SOCKET_A0_PORT)   = 0x44488888;  // Not PC13-PC15
         GPIO_CRL(SOCKET_A13_PORT)  = 0x88888888;  // PA0=SOCKET_OE = Input PU
-        GPIO_ODR(SOCKET_A0_PORT)   = 0xffff;      // Pull up A0-A12
-        GPIO_BSRR(SOCKET_A13_PORT) = 0x0000003e;  // Pull up A13-A17
+        GPIO_ODR(SOCKET_A0_PORT)   = 0x0000;      // Pull down A0-A12
+        GPIO_BSRR(SOCKET_A13_PORT) = 0x003e0000;  // Pull down A13-A17
     } else {
         GPIO_CRL(SOCKET_A0_PORT)   = 0x44444444;  // Input
         GPIO_CRH(SOCKET_A0_PORT)   = 0x44444444;

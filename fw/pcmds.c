@@ -899,7 +899,7 @@ cmd_gpio(int argc, char * const *argv)
 
 
 static const char *const config_flag_bits[] = {
-    "OEWE_PIN_SHOW", "", "", "",
+    "OEWE_PIN_SHOW", "POWEROFF_OLD", "", "",
         "", "", "", "",
     "", "", "", "",
         "", "", "", "",

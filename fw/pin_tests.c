@@ -978,7 +978,7 @@ pin_tests(uint verbose)
 
     /* Restore all pins to input pull-up/pull-down and final state */
     for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {
-        uint final = FS_PU;  // default to pull-up
+        uint final = FS_PD;  // default to pull-down
         uint mode = GPIO_SETMODE_INPUT_PULLUPDOWN;
         curname = pin_config_get(cur, &curport, &curpin, buf0);
         if (cur < ARRAY_SIZE(pin_config)) {

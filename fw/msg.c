@@ -1002,7 +1002,7 @@ oe_reply_end:
     timer_set_oc_polarity_low(TIM5, TIM_OC1);
 
     nvic_enable_irq(LOG_DMA_NVIC_IRQ);
-    data_output(0xffffffff);    // Return to pull-up of data pins
+    data_output(0x00000000);    // Return to pull-down of data pins
 
 #ifdef CAPTURE_GPIOS
     if (flags & KS_REPLY_RAW)

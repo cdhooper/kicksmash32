@@ -724,9 +724,9 @@ gpio_init(void)
     gpio_setmode(FLASH_A18_PORT, FLASH_A18_PIN | FLASH_A19_PIN,
                  GPIO_SETMODE_INPUT_PULLUPDOWN);
 
-    /* Give D0-D31 weak pull up */
-    gpio_setv(FLASH_D0_PORT,  0xffff, 1);
-    gpio_setv(FLASH_D16_PORT, 0xffff, 1);
+    /* Give D0-D31 weak pull down */
+    gpio_setv(FLASH_D0_PORT,  0xffff, 0);
+    gpio_setv(FLASH_D16_PORT, 0xffff, 0);
     gpio_setmode(FLASH_D0_PORT,  0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
     gpio_setmode(FLASH_D16_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
 
