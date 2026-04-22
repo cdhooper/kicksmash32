@@ -217,6 +217,7 @@ setup(void)
     serial_putc('K');
     test_draw();
     test_gadget();
+    serial_putc('\r');
     serial_putc('\n');
     BACKGROUND_COLOR(0x999);  // Grey background
 
