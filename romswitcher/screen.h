@@ -32,6 +32,7 @@
 
 void show_char(uint ch);
 void show_string(const uint8_t *str);
+void screen_output_set(uint enabled);
 void render_text_at(const char *str, uint maxlen, uint x, uint y,
                     uint fg_color, uint bg_color);
 void screen_init(void);

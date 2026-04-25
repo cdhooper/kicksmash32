@@ -16,7 +16,7 @@ FW	 := ../fw
 MED_SRCS := med_cmds.c mem_access.c med_cmdline.c med_readline.c \
 	    med_cpu.c db_disasm.c
 SRCS     := main.c autoconfig.c cache.c keyboard.c pcmds.c \
-            printf.c reset.c scanf.c screen.c serial.c \
+            picassoiv.c printf.c reset.c scanf.c screen.c serial.c \
             sprite.c strtoll.c strtoull.c timer.c util.c blitter.c \
 	    vectors.c mouse.c draw.c intuition.c gadget.c \
 	    testdraw.c testgadget.c audio.c $(MED_SRCS) \
@@ -133,7 +133,8 @@ $(OBJDIR)/main.o: ../fw/version.c $(filter-out $(OBJDIR)/main.o,$(OBJS))
 $(OBJS): amiga_chipset.h screen.h printf.h util.h serial.h timer.h
 $(OBJDIR)/serial.o: keyboard.h
 $(OBJDIR)/sprite.o: sprite.h
-$(OBJDIR)/main.o: sprite.h keyboard.h reset.h
+$(OBJDIR)/main.o: sprite.h keyboard.h reset.h picassoiv.h
+$(OBJDIR)/picassoiv.o: autoconfig.h picassoiv.h timer.h
 $(OBJDIR)/draw.o: draw.h intuition.h
 $(OBJDIR)/intuition.o: draw.h intuition.h
 $(OBJDIR)/cache.o $(OBJDIR)/main.o $(OBJDIR)/med_cpu.o: $(AM)/cpu_control.h
