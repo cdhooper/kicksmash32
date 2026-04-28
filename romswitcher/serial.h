@@ -19,6 +19,7 @@
 void serial_init(void);
 void serial_putc(unsigned int ch);
 void serial_puts(const char *str);
+void serial_output_set(unsigned int enabled);
 void serial_flush(void);
 void serial_poll(void);              // poll for serial input
 void serial_replay_output(void);     // re-show all previous serial output

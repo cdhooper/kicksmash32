@@ -16,9 +16,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "amiga_chipset.h"
+#include "autoconfig.h"
 #include "printf.h"
 #include "util.h"
 #include "med_cmdline.h"
+#include "timer.h"
 
 #define Z2_CFG_BASE 0x00e80000
 #define Z3_CFG_BASE 0xff000000
@@ -31,6 +33,7 @@
 #define Z2_BASE_A23_A16 VADDR8(Z2_CFG_BASE + 0x48)  // Z2 / Z3 in Z2 space (4)
 
 #define Z3_BASE_A23_A16 VADDR8(Z3_CFG_BASE + 0x48)  // Z3 in Z3 space (0)
+#define Z3_BASE_A19_A16 VADDR8(Z3_CFG_BASE + 0x4a)  // Z2 in Z3 space
 #define Z3_BASE_A31_A24 VADDR8(Z3_CFG_BASE + 0x44)  // Z3 in Z3 space (1a)
 #define Z3_BASE_A31_A16 VADDR16(Z3_CFG_BASE + 0x44)  // Z3 in Z3 space (1b)
 
@@ -60,11 +63,19 @@ static const char * const config_subsizes[] =
     "4MB", "6MB", "8MB", "10MB", "12MB", "14MB", "Rsvd1", "Rsvd2"
 };
 
+#define AC_ROM_FLAGS     2
+#define AC_FLAG_SIZE_EXT BIT(5)
+
 #define AC_TYPE_INVALID  0
 #define AC_TYPE_ALLOC_Z2 1  // Allocated to Zorro II device
 #define AC_TYPE_ALLOC_Z3 2  // Allocated to Zorro III device
 #define AC_TYPE_FREE_Z2  3  // Free in Zorro II address range
 #define AC_TYPE_FREE_Z3  4  // Free in Zorro III address range
+
+#define PRESENT_CHECK 16
+#define AUTOCONFIG_MAX_BOARDS 32
+#define AUTOCONFIG_SETTLE_TRIES 5
+#define AUTOCONFIG_SETTLE_MSEC 2
 
 typedef struct ac_t ac_t;
 struct ac_t {
@@ -76,7 +87,22 @@ struct ac_t {
     uint32_t ac_size;
 };
 
+typedef enum {
+    AC_CFG_WINDOW_Z2 = 0,
+    AC_CFG_WINDOW_Z3 = 1,
+} ac_cfg_window_t;
+
 static ac_t *ac_list = NULL;
+
+static void
+autoconfig_dev_export(const ac_t *node, autoconfig_dev_t *dev)
+{
+    dev->ac_type = node->ac_type;
+    dev->ac_product = node->ac_product;
+    dev->ac_mfg = node->ac_mfg;
+    dev->ac_addr = node->ac_addr;
+    dev->ac_size = node->ac_size;
+}
 
 /*
  * autoconfig_alloc
@@ -87,45 +113,67 @@ static ac_t *
 autoconfig_alloc(uint addr, uint size, uint zorro_type)
 {
     ac_t *cur;
+    uint alloc_type = (zorro_type == AC_TYPE_FREE_Z2) ?
+                      AC_TYPE_ALLOC_Z2 : AC_TYPE_ALLOC_Z3;
+
     for (cur = ac_list; cur != NULL; cur = cur->ac_next) {
+        uint alloc_addr;
+        uint before_size;
+        uint after_size;
+        ac_t *alloc_node = NULL;
+        ac_t *after_node = NULL;
+
         if (cur->ac_type != zorro_type)
             continue;  // Not free
 
         if (cur->ac_size < size)
             continue;
 
-        if ((addr != 0) &&
-            ((cur->ac_addr > addr) ||
-             (cur->ac_addr + cur->ac_size < addr + size)))
+        if (addr == 0)
+            alloc_addr = (cur->ac_addr + size - 1) & ~(size - 1);
+        else
+            alloc_addr = addr;
+
+        if ((cur->ac_addr > alloc_addr) ||
+            (cur->ac_addr + cur->ac_size < alloc_addr + size))
             continue;  // Not within this range
 
-        if ((addr != 0) && (addr > cur->ac_addr)) {
-            /* Fragment this entry (request is inside entry) */
-            uint frag_size = addr - cur->ac_addr;
-            ac_t *node = malloc(sizeof (ac_t));
-            node->ac_type = cur->ac_type;
-            node->ac_size = frag_size;
-            node->ac_addr = addr;
-            node->ac_next = cur->ac_next;
+        before_size = alloc_addr - cur->ac_addr;
+        after_size  = cur->ac_addr + cur->ac_size - (alloc_addr + size);
 
-            cur->ac_size = cur->ac_size - frag_size;
-            cur->ac_next = node;
-            cur = node;
+        if (before_size != 0) {
+            alloc_node = malloc(sizeof (ac_t));
+            if (alloc_node == NULL)
+                return (NULL);
         }
-        if (cur->ac_size >= size + 0x10000) {
-            /* Fragment this entry (request is at start of entry) */
-            ac_t *node = malloc(sizeof (ac_t));
-            node->ac_type = cur->ac_type;
-            node->ac_size = cur->ac_size - size;
-            node->ac_addr = cur->ac_addr + size;
-            node->ac_next = cur->ac_next;
-            cur->ac_next = node;
+        if (after_size != 0) {
+            after_node = malloc(sizeof (ac_t));
+            if (after_node == NULL)
+                return (NULL);
         }
-        cur->ac_size = size;
-        if (zorro_type == AC_TYPE_FREE_Z2)
-            cur->ac_type = AC_TYPE_ALLOC_Z2;
-        else
-            cur->ac_type = AC_TYPE_ALLOC_Z3;
+
+        if (before_size != 0) {
+            alloc_node->ac_type = alloc_type;
+            alloc_node->ac_size = size;
+            alloc_node->ac_addr = alloc_addr;
+            alloc_node->ac_next = cur->ac_next;
+
+            cur->ac_size = before_size;
+            cur->ac_next = alloc_node;
+            cur = alloc_node;
+        } else {
+            cur->ac_type = alloc_type;
+            cur->ac_size = size;
+            cur->ac_addr = alloc_addr;
+        }
+
+        if (after_size != 0) {
+            after_node->ac_type = zorro_type;
+            after_node->ac_size = after_size;
+            after_node->ac_addr = alloc_addr + size;
+            after_node->ac_next = cur->ac_next;
+            cur->ac_next = after_node;
+        }
         return (cur);
     }
     printf("Could not allocate");
@@ -171,8 +219,8 @@ autoconfig_list(void)
 static uint8_t
 get_z2_byte(uint offset)
 {
-    uint8_t unibble = (*ADDR16(Z2_CFG_BASE + offset * 4 + 0) >> 8) & 0xf0;
-    uint8_t lnibble = (*ADDR16(Z2_CFG_BASE + offset * 4 + 2) >> 12) & 0x0f;
+    uint8_t unibble = (*VADDR16(Z2_CFG_BASE + offset * 4 + 0) >> 8) & 0xf0;
+    uint8_t lnibble = (*VADDR16(Z2_CFG_BASE + offset * 4 + 2) >> 12) & 0x0f;
     return (unibble | lnibble);
 }
 
@@ -184,9 +232,107 @@ get_z2_byte(uint offset)
 static uint8_t
 get_z3_byte(uint offset)
 {
-    uint8_t unibble = (*ADDR16(Z3_CFG_BASE + offset * 4 + 0x000) >> 8) & 0xf0;
-    uint8_t lnibble = (*ADDR16(Z3_CFG_BASE + offset * 4 + 0x100) >> 12) & 0x0f;
+    uint8_t unibble = (*VADDR16(Z3_CFG_BASE + offset * 4 + 0x000) >> 8) & 0xf0;
+    uint8_t lnibble = (*VADDR16(Z3_CFG_BASE + offset * 4 + 0x100) >> 12) & 0x0f;
     return (unibble | lnibble);
+}
+
+static uint8_t
+autoconfig_window_byte(ac_cfg_window_t cfg_window, uint offset)
+{
+    return ((cfg_window == AC_CFG_WINDOW_Z3) ?
+            get_z3_byte(offset) : get_z2_byte(offset));
+}
+
+static void
+autoconfig_signature_read(ac_cfg_window_t cfg_window,
+                          uint8_t sig[PRESENT_CHECK])
+{
+    uint cur;
+
+    for (cur = 0; cur < PRESENT_CHECK; cur++)
+        sig[cur] = autoconfig_window_byte(cfg_window, cur);
+}
+
+static bool
+autoconfig_signature_same(ac_cfg_window_t cfg_window,
+                          const uint8_t before[PRESENT_CHECK])
+{
+    uint cur;
+    uint all_zero = 1;
+    uint all_ff = 1;
+
+    for (cur = 0; cur < PRESENT_CHECK; cur++) {
+        uint8_t value = autoconfig_window_byte(cfg_window, cur);
+
+        if (value != 0x00)
+            all_zero = 0;
+        if (value != 0xff)
+            all_ff = 0;
+        if (value != before[cur])
+            return (false);
+    }
+
+    return (!all_zero && !all_ff);
+}
+
+static void
+autoconfig_shutup_window(ac_cfg_window_t cfg_window)
+{
+    if (cfg_window == AC_CFG_WINDOW_Z3)
+        *Z3_SHUTUP = 0;
+    else
+        *Z2_SHUTUP = 0;
+}
+
+static void
+autoconfig_advance_if_still_visible(ac_cfg_window_t cfg_window,
+                                    const uint8_t before[PRESENT_CHECK])
+{
+    uint tries;
+
+    for (tries = 0; tries < AUTOCONFIG_SETTLE_TRIES; tries++) {
+        if (!autoconfig_signature_same(cfg_window, before))
+            return;
+        timer_delay_msec(AUTOCONFIG_SETTLE_MSEC);
+    }
+
+    if (!autoconfig_signature_same(cfg_window, before))
+        return;
+
+    printf("Z%c config window still has same card after assignment; "
+           "sending shutup\n",
+           (cfg_window == AC_CFG_WINDOW_Z3) ? '3' : '2');
+    autoconfig_shutup_window(cfg_window);
+}
+
+static void
+autoconfig_write_base(ac_cfg_window_t cfg_window, uint32_t addr,
+                      uint use_z3_assignment)
+{
+    if (cfg_window == AC_CFG_WINDOW_Z3) {
+        if (use_z3_assignment) {
+            /* Zorro III assignment in the Zorro III config aperture. */
+            *Z3_BASE_A23_A16 = (addr >> 16);  // Byte
+            *Z3_BASE_A31_A16 = (addr >> 16);  // Word
+        } else {
+            /* Zorro II assignment in the Zorro III config aperture. */
+            *Z3_BASE_A19_A16 = (addr >> 12);  // Nibble
+            *Z3_BASE_A23_A16 = (addr >> 16);  // Byte
+        }
+    } else {
+        if (use_z3_assignment) {
+            /* Zorro III assignment in the Zorro II config aperture. */
+            *Z2_BASE_A27_A24 = (addr >> 20);  // Nibble
+            *Z2_BASE_A31_A24 = (addr >> 24);  // Byte
+            *Z2_BASE_A19_A16 = (addr >> 12);  // Nibble
+            *Z2_BASE_A23_A16 = (addr >> 16);  // Byte
+        } else {
+            /* Zorro II assignment in the Zorro II config aperture. */
+            *Z2_BASE_A19_A16 = (addr >> 12);  // Nibble
+            *Z2_BASE_A23_A16 = (addr >> 16);  // Byte
+        }
+    }
 }
 
 static void
@@ -271,7 +417,7 @@ autoconfig_decode(uint8_t *cfgdata, uint cfgsize)
     }
     if (value & BIT(5))
         printf(" Memory");
-    if (is_z3 && ((~cfgdata[0x00]) & BIT(5)))
+    if (cfgdata[AC_ROM_FLAGS] & AC_FLAG_SIZE_EXT)
         winsize = z3_config_sizes[value & 0x7];
     else
         winsize = z2_config_sizes[value & 0x7];
@@ -349,7 +495,6 @@ autoconfig_decode(uint8_t *cfgdata, uint cfgsize)
     return (RC_SUCCESS);
 }
 
-#define PRESENT_CHECK 16
 static uint
 z2_is_present(void)
 {
@@ -458,10 +603,14 @@ static rc_t
 autoconfig_z2_address(uint32_t addr)
 {
     uint8_t  cfg0       = get_z2_byte(0);
-    uint     is_z3_size = cfg0 & BIT(5);
+    uint8_t  cfgflags   = ~get_z2_byte(AC_ROM_FLAGS);
+    uint     is_z3_size = cfgflags & AC_FLAG_SIZE_EXT;
     uint     is_z3 = 0;
     uint     addr_z3 = 0;
     uint32_t devsize;
+    uint8_t  signature[PRESENT_CHECK];
+
+    autoconfig_signature_read(AC_CFG_WINDOW_Z2, signature);
 
     switch (cfg0 >> 6) {
         case 2:  // Zorro III
@@ -476,13 +625,17 @@ autoconfig_z2_address(uint32_t addr)
     }
 
     /* Confirm that the address is allowed based on the board config */
-    if (is_z3 && is_z3_size)
+    if (is_z3_size)
         devsize = z3_config_sizenums[cfg0 & 0x7];
     else
         devsize = z2_config_sizenums[cfg0 & 0x7];
+    if (devsize == 0) {
+        printf("Invalid board size (%x) detected for Zorro II\n", cfg0);
+        return (RC_FAILURE);
+    }
 
     if (addr == 0)
-        addr_z3 = is_z3;
+        addr_z3 = is_z3 || is_z3_size;
     else if (addr >= 0x10000000)
         addr_z3 = 1;
     else
@@ -501,16 +654,9 @@ autoconfig_z2_address(uint32_t addr)
     }
 
     autoconfig_assign(node, 0);
-    if (is_z3) {
-        *Z2_BASE_A27_A24 = (addr >> 20);  // Nibble
-        *Z2_BASE_A31_A24 = (addr >> 24);  // Byte
-        *Z2_BASE_A19_A16 = (addr >> 12);  // Nibble
-        *Z2_BASE_A23_A16 = (addr >> 16);  // Byte
-    } else {
-        *Z2_BASE_A19_A16 = (addr >> 12);  // Nibble
-        *Z2_BASE_A23_A16 = (addr >> 16);  // Byte
-    }
+    autoconfig_write_base(AC_CFG_WINDOW_Z2, addr, is_z3 || addr_z3);
     show_autoconfig(node);
+    autoconfig_advance_if_still_visible(AC_CFG_WINDOW_Z2, signature);
     return (RC_SUCCESS);
 }
 
@@ -518,13 +664,25 @@ static rc_t
 autoconfig_z3_address(uint32_t addr)
 {
     uint8_t  cfg0       = get_z3_byte(0);
-    uint     is_z3_size = cfg0 & BIT(5);
+    uint8_t  cfgflags   = ~get_z3_byte(AC_ROM_FLAGS);
+    uint     is_z3_size = cfgflags & AC_FLAG_SIZE_EXT;
+    uint     is_z3 = 0;
     uint     addr_z3 = 0;
     uint32_t devsize;
+    uint8_t  signature[PRESENT_CHECK];
 
-    if ((cfg0 >> 6) != 2) {
-        printf("Invalid board (%x) detected for Zorro III\n", cfg0);
-        return (RC_FAILURE);
+    autoconfig_signature_read(AC_CFG_WINDOW_Z3, signature);
+
+    switch (cfg0 >> 6) {
+        case 2:  // Zorro III
+            is_z3 = 1;
+            break;
+        case 3:  // Zorro II, visible in Zorro III config space
+            is_z3 = 0;
+            break;
+        default:
+            printf("Invalid board (%x) detected for Zorro III\n", cfg0);
+            return (RC_FAILURE);
     }
 
     /* Confirm that the address is allowed based on the board config */
@@ -532,9 +690,13 @@ autoconfig_z3_address(uint32_t addr)
         devsize = z3_config_sizenums[cfg0 & 0x7];
     else
         devsize = z2_config_sizenums[cfg0 & 0x7];
+    if (devsize == 0) {
+        printf("Invalid board size (%x) detected for Zorro III\n", cfg0);
+        return (RC_FAILURE);
+    }
 
     if (addr == 0)
-        addr_z3 = 1;  // Assume Zorro III
+        addr_z3 = is_z3 || is_z3_size;
     else if (addr >= 0x10000000)
         addr_z3 = 1;
     else
@@ -555,31 +717,93 @@ autoconfig_z3_address(uint32_t addr)
 
     autoconfig_assign(node, 1);
 
-#undef CONFIG_Z3_FROM_Z2
-#ifdef CONFIG_Z3_FROM_Z2
-    /* Config in Z2 space */
-    *Z2_BASE_A27_A24 = (addr >> 20);  // Nibble
-    *Z2_BASE_A31_A24 = (addr >> 24);  // Byte
-    *Z2_BASE_A23_A16 = (addr >> 16);  // Nibble
-    *Z2_BASE_A23_A16 = (addr >> 16);  // Byte
-#else
-    /* Config in Z3 space, as specified in the hardware reference manual */
-    *Z3_BASE_A23_A16 = (addr >> 16);  // Byte
-    *Z3_BASE_A31_A16 = (addr >> 16);  // Word
-#endif
+    autoconfig_write_base(AC_CFG_WINDOW_Z3, addr, is_z3 || addr_z3);
     show_autoconfig(node);
+    autoconfig_advance_if_still_visible(AC_CFG_WINDOW_Z3, signature);
     return (RC_SUCCESS);
 }
 
 rc_t
 autoconfig_address(uint32_t addr)
 {
-    /* Dynamically allocate an address based on the board type */
-    if (z3_is_present())
-        return (autoconfig_z3_address(addr));
-    if (z2_is_present())
+    uint z2_present = z2_is_present();
+    uint z3_present = z3_is_present();
+    uint z2_type = 0;
+    uint z3_type = 0;
+
+    if (z2_present)
+        z2_type = get_z2_byte(0) >> 6;
+    if (z3_present)
+        z3_type = get_z3_byte(0) >> 6;
+
+    /*
+     * Prefer the real Zorro II config window for cards that advertise Zorro II.
+     * Some of them mirror into the Zorro III config window but do not accept
+     * assignment there.
+     */
+    if (z2_present && (z2_type == 3))
         return (autoconfig_z2_address(addr));
+    if (z3_present && (z3_type == 2))
+        return (autoconfig_z3_address(addr));
+    if (z2_present && (z2_type == 2))
+        return (autoconfig_z2_address(addr));
+    if (z3_present && (z3_type == 3))
+        return (autoconfig_z3_address(addr));
+    if (z2_present)
+        return (autoconfig_z2_address(addr));
+    if (z3_present)
+        return (autoconfig_z3_address(addr));
+
     return (RC_NO_DATA);
+}
+
+/*
+ * autoconfig_configure_all
+ * ------------------------
+ * Assign addresses to all devices currently visible through the autoconfig
+ * chain. Devices must be configured to make their normal register windows
+ * accessible.
+ */
+uint
+autoconfig_configure_all(void)
+{
+    uint count = 0;
+    rc_t rc;
+
+    while ((rc = autoconfig_address(0)) == RC_SUCCESS) {
+        count++;
+        if (count >= AUTOCONFIG_MAX_BOARDS) {
+            printf("Autoconfig stopped after %u boards; "
+                   "current card may not be accepting assignment\n", count);
+            break;
+        }
+    }
+    if ((rc != RC_NO_DATA) && (count == 0))
+        printf("Autoconfig stopped with rc=%d\n", rc);
+    return (count);
+}
+
+/*
+ * autoconfig_find
+ * ---------------
+ * Find a configured board by manufacturer and product id.
+ */
+bool
+autoconfig_find(uint16_t mfg, uint8_t product, autoconfig_dev_t *dev)
+{
+    ac_t *cur;
+
+    for (cur = ac_list; cur != NULL; cur = cur->ac_next) {
+        if ((cur->ac_type != AC_TYPE_ALLOC_Z2) &&
+            (cur->ac_type != AC_TYPE_ALLOC_Z3))
+            continue;
+        if ((cur->ac_mfg != mfg) || (cur->ac_product != product))
+            continue;
+        if (dev != NULL)
+            autoconfig_dev_export(cur, dev);
+        return (true);
+    }
+    return (false);
 }
 
 static void
