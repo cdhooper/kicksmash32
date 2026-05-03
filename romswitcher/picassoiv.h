@@ -1,5 +1,5 @@
 /*
- * Zorro AutoConfig functions.
+ * Village Tronic Picasso IV initialization helpers.
  *
  * This header file is part of the code base for a simple Amiga ROM
  * replacement sufficient to allow programs using some parts of GadTools
@@ -13,27 +13,11 @@
  * THE AUTHOR ASSUMES NO LIABILITY FOR ANY DAMAGE ARISING OUT OF THE USE
  * OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
  */
-#ifndef _AUTOCONFIG_H
-#define _AUTOCONFIG_H
+#ifndef _PICASSOIV_H
+#define _PICASSOIV_H
 
-#include <stdbool.h>
-#include <stdint.h>
 #include "med_cmdline.h"
 
-typedef struct {
-    uint8_t  ac_type;
-    uint8_t  ac_product;
-    uint16_t ac_mfg;
-    uint32_t ac_addr;
-    uint32_t ac_size;
-} autoconfig_dev_t;
+rc_t picassoiv_enable_flicker_fixer(void);
 
-void autoconfig_init(void);
-void autoconfig_list(void);
-rc_t autoconfig_address(uint32_t addr);
-uint autoconfig_configure_all(void);
-bool autoconfig_find(uint16_t mfg, uint8_t product, autoconfig_dev_t *dev);
-rc_t autoconfig_shutup(void);
-rc_t autoconfig_show(void);
-
-#endif /* _AUTOCONFIG_H */
+#endif /* _PICASSOIV_H */
