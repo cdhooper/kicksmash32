@@ -16,9 +16,23 @@
 #ifndef _AUTOCONFIG_H
 #define _AUTOCONFIG_H
 
+#include <stdbool.h>
+#include <stdint.h>
+#include "med_cmdline.h"
+
+typedef struct {
+    uint8_t  ac_type;
+    uint8_t  ac_product;
+    uint16_t ac_mfg;
+    uint32_t ac_addr;
+    uint32_t ac_size;
+} autoconfig_dev_t;
+
 void autoconfig_init(void);
 void autoconfig_list(void);
 rc_t autoconfig_address(uint32_t addr);
+uint autoconfig_configure_all(void);
+bool autoconfig_find(uint16_t mfg, uint8_t product, autoconfig_dev_t *dev);
 rc_t autoconfig_shutup(void);
 rc_t autoconfig_show(void);
 
