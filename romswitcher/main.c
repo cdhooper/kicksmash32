@@ -24,6 +24,7 @@
 #include "cpu_control.h"
 #include "mouse.h"
 #include "autoconfig.h"
+#include "picassoiv.h"
 #include "testdraw.h"
 #include "testgadget.h"
 #include "printf.h"
@@ -195,11 +196,11 @@ setup(void)
 //  show_string(RomID + 6);
 
     timer_init();
+    serial_init();  // Now that ECLK is known
     serial_putc('D');
     audio_init();
     serial_putc('E');
     BACKGROUND_COLOR(0x008);  // Half Blue background
-//  serial_init();  // Now that ECLK is known
     serial_putc('F');
     keyboard_init();
     serial_putc('G');
@@ -208,7 +209,12 @@ setup(void)
     BACKGROUND_COLOR(0x004);  // Midnight Blue background
     sprite_init();
     serial_putc('I');
+    screen_output_set(0);
+    printf("\n");
     autoconfig_init();
+    autoconfig_configure_all();
+    picassoiv_enable_flicker_fixer();
+    screen_output_set(1);
     serial_putc('J');
 
     gui_wants_all_input = 1;
