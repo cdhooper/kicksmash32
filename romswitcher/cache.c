@@ -26,9 +26,15 @@
 #define CACR_68030_CI  BIT(3)  // Clear instruction cache
 #define CACR_68030_EI  BIT(0)  // Enable instruction cache
 
-#define TTR_E     BIT(15)       // Enable transparent translation
-#define TTR_S_I   BIT(14)       // Supervisor mode -- Ignore
-#define TTR_CM_NC BIT(6)|BIT(5) // Cache mode -- Noncachable
+#define TTR_LBASE(addr) ((uint32_t) (addr) & 0xff000000)
+#define TTR_LMASK(mask) (((uint32_t) (mask) & 0xff) << 16)
+#define TTR_E           BIT(15)       // Enable transparent translation
+#define TTR_S_I         BIT(14)       // Supervisor mode -- Ignore
+#define TTR_CM_NC       (BIT(6) | BIT(5)) // Cache mode -- Noncachable
+#define TTR_NC_RANGE(addr, mask) \
+    (TTR_LBASE(addr) | TTR_LMASK(mask) | TTR_E | TTR_S_I | TTR_CM_NC)
+#define TTR_NC_16M(addr) \
+    TTR_NC_RANGE(addr, 0)
 
 static uint32_t
 convert_030_cacr_to_040_cacr(uint32_t cacr_030)
@@ -97,6 +103,19 @@ CacheControl(uint32_t cache_bits, uint32_t cache_mask)
 }
 
 void
+cache_data_noncache_16m(uint32_t addr)
+{
+    switch (cpu_type) {
+        case 68040:
+        case 68060:
+            cpu_cache_flush_040_data();
+            cpu_set_dtt1(TTR_NC_16M(addr));
+            flush_tlb_040();
+            break;
+    }
+}
+
+void
 cache_init(void)
 {
     switch (cpu_type) {
@@ -113,7 +132,8 @@ cache_init(void)
         case 68060:
             flush_tlb_040();
             cpu_cache_invalidate_040();
-            cpu_set_dtt0(TTR_E | TTR_S_I | TTR_CM_NC);  // Don't cache I/O
+            cpu_set_dtt0(TTR_NC_16M(0x00000000));  // Chipset and Z2 config
+            cpu_set_dtt1(TTR_NC_16M(0xff000000));  // Z3 config
             if (cpu_type == 68060)
                 cpu_set_cacr(CACR_68060_CABC);
             cpu_set_cacr(CACR_68040_EDC | CACR_68040_EIC);

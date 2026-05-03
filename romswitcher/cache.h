@@ -30,5 +30,6 @@
 uint32_t CacheControl(uint32_t cache_bits, uint32_t cache_mask);
 
 void cache_init(void);
+void cache_data_noncache_16m(uint32_t addr);
 
 #endif /* _CACHE_H */
