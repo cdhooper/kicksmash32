@@ -34,6 +34,8 @@ volatile uint8_t     gui_wants_all_input; // Non-zero if GUI wants all key input
 static uint8_t       ser_out_wrapped;     // Serial output wrapped buffer
 static uint8_t       ser_out_buf[4096];   // Serial output
 static volatile uint16_t ser_out_prod;    // Serial output producer
+static uint8_t       serial_output_enabled = 1;  // Console text writes serial
+static uint8_t       screen_output_enabled = 1;  // Console text draws to screen
 
 static const uint8_t input_med_magic[] = { 0x0d, 0x05, 0x04,         // ^M^E^D
                                            0x13, 0x14, 0x0f, 0x10 }; // ^S^T^O^P
@@ -129,7 +131,7 @@ serial_init(void)
     *CIAB_PRA = 0x4f; // Set DTR
     *INTENA = INTENA_TBE | INTENA_RBF;  // disable interrupts
     *INTREQ = INTREQ_TBE | INTREQ_RBF;  // clear interrupts
-    *INTENA = INTENA_SETCLR | INTENA_RBF;  // enable interrupt
+    *INTENA = INTENA_SETCLR | INTENA_INTEN | INTENA_RBF;  // enable interrupt
 }
 
 void
@@ -138,7 +140,8 @@ serial_putc(unsigned int ch)
     ser_out_buf[ser_out_prod] = ch;
     ser_out_prod = (ser_out_prod + 1) % sizeof (ser_out_buf);
 
-    if ((serial_active == 0) && (timer_tick_get() >> 25))
+    if ((serial_active == 0) && (eclk_ticks_per_sec != 0) &&
+        (timer_tick_get() >> 25))
         return;  // No serial input and it's past 45 seconds
 
 #if 0
@@ -212,6 +215,18 @@ serial_puts(const char *str)
 }
 
 void
+serial_output_set(uint enabled)
+{
+    serial_output_enabled = (enabled != 0);
+}
+
+void
+screen_output_set(uint enabled)
+{
+    screen_output_enabled = (enabled != 0);
+}
+
+void
 serial_poll(void)
 {
     int ch;
@@ -253,23 +268,31 @@ int
 putchar(int ch)
 {
     if (ch == '\n') {
-        serial_putc('\r');
-        show_char('\r');
+        if (serial_output_enabled)
+            serial_putc('\r');
+        if (screen_output_enabled)
+            show_char('\r');
     }
 
-    serial_putc((uint) ch);
-    show_char((uint) ch);
+    if (serial_output_enabled)
+        serial_putc((uint) ch);
+    if (screen_output_enabled)
+        show_char((uint) ch);
     return (ch);
 }
 
 int
 puts(const char *str)
 {
-    serial_puts(str);
-    serial_putc('\r');
-    serial_putc('\n');
-    show_string(str);
-    show_string("\r\n");
+    if (serial_output_enabled) {
+        serial_puts(str);
+        serial_putc('\r');
+        serial_putc('\n');
+    }
+    if (screen_output_enabled) {
+        show_string(str);
+        show_string("\r\n");
+    }
     return (0);
 }
 
