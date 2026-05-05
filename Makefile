@@ -28,6 +28,7 @@ clean-sw clean-fw clean-amiga clean-romswitcher:
 
 RELEASE_DIR := release/kicksmash_$(VERSION)
 RELEASE_LHA := release/kicksmash_$(VERSION)_amiga.lha
+RELEASE_ADF := release/kicksmash_$(VERSION).adf
 RELEASE_ZIP := release/kicksmash_$(VERSION).zip
 
 RELEASE_SUBDIR := $(patsubst release/%,%,$(RELEASE_DIR))
@@ -67,14 +68,14 @@ $(foreach DOC,$(wildcard doc/*.txt doc/*.md),$(eval $(call RELEASE_IT,$(DOC),$(D
 
 RELEASE_DIRS := $(sort $(RELEASE_DIR) $(RELEASE_DIRS))
 
-ifneq (,$(wildcard $(RELEASE_LHA))$(wildcard $(RELEASE_ZIP)))
+ifneq (,$(wildcard $(RELEASE_LHA))$(wildcard $(RELEASE_ZIP))$(wildcard $(RELEASE_ADF)))
 release:
-	@echo $(RELEASE_LHA) or $(RELEASE_ZIP) already exists
+	@echo $(RELEASE_LHA), $(RELEASE_ZIP) or $(RELEASE_ADF) already exists
 else
 release: all
 	@$(MAKE) do_release
 
-do_release: populating $(RELEASE_TARGETS) $(RELEASE_LHA) $(RELEASE_ZIP)
+do_release: populating $(RELEASE_TARGETS) $(RELEASE_LHA) $(RELEASE_ZIP) $(RELEASE_ADF)
 
 AMIGA_RELS := $(RELEASE_SUBDIR)/amiga/* \
 	      $(RELEASE_SUBDIR)/README.md $(RELEASE_SUBDIR)/LICENSE.md
@@ -87,6 +88,16 @@ $(RELEASE_ZIP): all populating $(RELEASE_TARGETS)
 	@echo "* Building $@"
 	@rm -f $@
 	(cd release; zip -rq $(notdir $@) $(RELEASE_SUBDIR))
+
+$(RELEASE_ADF): all populating $(RELEASE_TARGETS)
+	@echo "* Building $@"
+	@rm -f $@
+	xdftool $@ format "kicksmash_$(VERSION)"
+	xdftool $@ makedir kicksmash
+	for f in $(RELEASE_DIR)/amiga/*; do \
+		xdftool $@ write "$$f" kicksmash/$$(basename "$$f"); \
+	done
+	xdftool $@ boot install
 
 populating:
 	@echo "* Populating $(RELEASE_DIR)"
