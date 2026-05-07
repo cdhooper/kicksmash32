@@ -11,6 +11,7 @@
 
 #include "printf.h"
 #include "board.h"
+#include "clock.h"
 #include "main.h"
 #include "uart.h"
 #include <stdbool.h>
@@ -51,14 +52,14 @@ static uint8_t       usb_out_buf[4096];   // USB output buffer
 static uint8_t       ami_out_buf[2048];   // Amiga output buffer
 static uint8_t       uart_out_buf[2048];  // UART output
 static uint16_t      uart_out_prod;       // UART output producer
-static uint16_t      usb_out_bufpos = 0;  // USB output buffer position
 static uint16_t      ami_out_prod = 0;    // Amiga output buffer producer
 static uint16_t      ami_out_cons = 0;    // Amiga output buffer consumer
 static uint8_t       uart_out_wrapped;    // UART output wrapped buffer
 static bool          uart_console_active = false;
 static bool          ami_console_active = false;
 
-uint8_t last_input_source = 0;
+uint16_t usb_out_bufpos = 0;     // USB output buffer position
+uint8_t  last_input_source = 0;  // SOURCE_UART or SOURCE_USB
 
 static void uart_wait_done(USART_TypeDef_P usart)
 {
@@ -75,8 +76,16 @@ static void uart_wait_send_ready(USART_TypeDef_P usart)
     /* Wait until the data has been transferred into the shift register. */
     int count = 0;
 
+    if (is_gd32) {
+        /* GD32 will drop Tx characters when clocked > 78 MHz */
+        while ((USART_SR(usart) & USART_SR_TC) == 0)
+            if (count++ == 2000)
+                break;  // Misconfigured hardware?
+        return;
+    }
+
     while ((USART_SR(usart) & USART_SR_TXE) == 0)
-        if (count++ == 1000)
+        if (count++ == 1200)
             break;  // Misconfigured hardware?
 }
 

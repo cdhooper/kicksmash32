@@ -154,6 +154,20 @@ int vprintf(const char *fmt, va_list ap);
 __attribute__((format(__printf__, 1, 2)))
 int printf(const char *fmt, ...);
 
+/**
+ * uartprintf() is a stdio compatible function which operates on a format
+ *              string and variable argument list.  Output is directed only
+ *              to the serial console.
+ *
+ * @param [in]  fmt - A string describing the format of the output.  This
+ *                    format string is compatible with that of printf().
+ * @param [in]  ... - A variable list of arguments.
+ *
+ * @return      The number of characters written to the serial console.
+ */
+__attribute__((format(__printf__, 1, 2)))
+int uartprintf(const char *fmt, ...);
+
 /*
  * scanf() uses a format string to derive specified values from input buffer>
  *

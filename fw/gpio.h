@@ -23,6 +23,8 @@
 #define USB_CC1_PIN             GPIO8
 #define USB_CC2_PORT        GPIOA
 #define USB_CC2_PIN             GPIO10
+#define USB_VBUS_PORT       GPIOA
+#define USB_VBUS_PIN            GPIO9
 
 #define SOCKET_OE_PORT      GPIOA
 #define SOCKET_OE_PIN           GPIO0       // OE# Output Enable (Amiga)

@@ -610,7 +610,10 @@ cmd_prom(int argc, char * const *argv)
     } else if (strcmp("write", arg) == 0) {
         op_mode = OP_WRITE;
     } else if (strcmp("test", arg) == 0) {
-        rc = pin_tests(1);
+        uint force = 0;
+        if ((argc > 1) && (strncmp("force", argv[1], 1) == 0))
+            force = 1;
+        rc = pin_tests(1, force);
         if (rc == 0)
             rc = prom_test();
         if (rc != 0)

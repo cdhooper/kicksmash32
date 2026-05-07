@@ -206,6 +206,7 @@ static const char *usb_strings[] = {
 void
 usb_shutdown(void)
 {
+    usbd_disconnect(usbd_gdev, true);
 }
 
 void usb_poll(void)
@@ -328,18 +329,14 @@ transmit_success:
             tlen = USB_MAX_EP2_SIZE / 2;
         }
         usb_poll();
-        usb_mask_interrupts();
         count = usbd_ep_write_packet(usbd_gdev, 0x82, buf, tlen);
-        usb_unmask_interrupts();
         if (count == 0) {
             /* Wrote 0 bytes */
             if (timeout == 0) {
                 timeout = timer_tick_plus_msec(50);
             } else if (timer_tick_has_elapsed(timeout)) {
                 /* Try one last time */
-                usb_mask_interrupts();
                 count = usbd_ep_write_packet(usbd_gdev, 0x82, buf, tlen);
-                usb_unmask_interrupts();
                 if (count != 0)
                     goto transmit_success;
                 usb_drop_packets++;
@@ -508,11 +505,11 @@ cdcacm_control_request(usbd_device *usbd_dev, struct usb_setup_data *req,
     switch (req->bRequest) {
         case USB_CDC_REQ_SET_CONTROL_LINE_STATE: {
             /*
-             * This Linux cdc_acm driver requires this to be implemented
+             * The Linux cdc_acm driver requires this to be implemented
              * even though it's optional in the CDC spec, and we don't
              * advertise it in the ACM functional descriptor.
              */
-            char local_buf[10];
+            char local_buf[16];
             struct usb_cdc_notification *notif = (void *)local_buf;
 
             /* We echo signals back to host as notification. */
@@ -523,7 +520,7 @@ cdcacm_control_request(usbd_device *usbd_dev, struct usb_setup_data *req,
             notif->wLength = 2;
             local_buf[8] = req->wValue & 3;
             local_buf[9] = 0;
-            // usbd_ep_write_packet(usbd_gdev, 0x83, buf, 10);
+            usbd_ep_write_packet(usbd_gdev, 0x83, local_buf, 10);
             return (USBD_REQ_HANDLED);
         }
         case USB_CDC_REQ_SET_LINE_CODING:
@@ -705,16 +702,14 @@ usb_startup(void)
     using_usb_interrupt = false;
 #endif
 
-#ifndef STM32F103xE
-    /*
-     * STM32F4 and STM32F105/STM32F107 have register with status indicating
-     * that VBus was detected. This is a clearable status, so this code
-     * relies on the USB interrupt handler not clearing that status.
-     */
-    if ((OTG_FS_GINTSTS & OTG_GINTSTS_SRQINT) == 0) {
+    if (gpio_get(USB_VBUS_PORT, USB_VBUS_PIN) == 0) {
+        /*
+         * GD32F107 doesn't seem to correctly detect VBUS using
+         * (OTG_FS_GINTSTS & OTG_GINTSTS_SRQINT), so this code
+         * now directly uses the GPIO instead.
+         */
         printf("    VBus not detected\n");
     }
-#endif
 }
 
 typedef struct {

@@ -550,6 +550,37 @@ int printf(const char *fmt, ...)
 }
 
 /**
+ * uartprintf() is a stdio compatible function which operates on a format
+ *              string and variable argument list.  Output is directed only
+ *              to the serial console.
+ *
+ * @param [in]  fmt - A string describing the format of the output.  This
+ *                    format string is compatible with that of printf().
+ * @param [in]  ... - A variable list of arguments.
+ *
+ * @return      The number of bytes written to the serial console.
+ */
+__attribute__((format(__printf__, 1, 2)))
+int uartprintf(const char *fmt, ...)
+{
+    int rc;
+    va_list args;
+
+    extern uint8_t  usb_console_active;
+    extern uint16_t usb_out_bufpos;
+    uint8_t temp = usb_console_active;
+    uint    tpos = usb_out_bufpos;
+    usb_console_active = 0;
+    va_start(args, fmt);
+    rc = vprintf(fmt, args);
+    va_end(args);
+    usb_console_active = temp;
+    usb_out_bufpos = tpos;
+
+    return (rc);
+}
+
+/**
  * warnx() is a stdio compatible function which operates on a format
  *        string and variable argument list.  Output is directed to
  *        the serial console.

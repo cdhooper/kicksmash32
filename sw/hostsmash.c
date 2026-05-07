@@ -2503,7 +2503,7 @@ eeprom_read(const char *filename, uint bank, uint addr, uint len)
             err(EXIT_FAILURE, "Failed to open %s", filename);
         if (execute_swapmode((uint8_t *)eebuf, rxcount, SWAP_FROM_ROM)) {
             rc = 1;
-            goto read_fail;
+            /* Continue to write file which can't be swapped */
         }
         written = fwrite(eebuf, rxcount, 1, fp);
         if (written != 1)

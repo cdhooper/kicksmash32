@@ -12,10 +12,12 @@
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/flash.h>
+#include <libopencm3/cm3/scb.h>
 #include "board.h"
 #include "clock.h"
 
 uint32_t rcc_pclk2_frequency = 0;
+uint8_t  is_gd32;
 
 /*
  * STM32F107 Clock structure
@@ -61,7 +63,8 @@ uint32_t rcc_pclk2_frequency = 0;
  *
  */
 #ifdef STM32F1
-static const struct rcc_clock_scale rcc_clock_config = {
+static const struct rcc_clock_scale *rcc_clock_config;
+static const struct rcc_clock_scale rcc_clock_config_stm32f1 = {
     /* HSE=8 PLL=72 USB=48 APB1=36 APB2=72 ADC=12 */
 /*
  *  These don't need to be set because they are not driving a
@@ -100,7 +103,27 @@ static const struct rcc_clock_scale rcc_clock_config = {
     .apb1_frequency   = 36000000,
     .apb2_frequency   = 72000000,
 };
+static const struct rcc_clock_scale rcc_clock_config_gd32f1 = {
+    /* HSE=8 PLL=96 USB=48 APB1=48 APB2=96 ADC=12 */
+    .prediv1_source   = RCC_CFGR2_PREDIV1SRC_HSE_CLK,  // 8 MHz
+    .prediv1          = RCC_CFGR2_PREDIV_NODIV,        // 8 / 1 = 8 MHz
+    .pll_source       = RCC_CFGR_PLLSRC_PREDIV1_CLK,   // 8 / 1 = 8 MHz
+    .pll_mul          = RCC_CFGR_PLLMUL_PLL_CLK_MUL12, // 12 * 8 = 96 MHz
+
+    .hpre             = RCC_CFGR_HPRE_NODIV,           // 96 / 1 = 96 MHz Core
+    .ppre1            = RCC_CFGR_PPRE_DIV2,            // 96 / 2 = 48 MHz APB1
+    .ppre2            = RCC_CFGR_PPRE_NODIV,           // 96 / 1 = 96 MHz APB2
+    .adcpre           = RCC_CFGR_ADCPRE_DIV8,          // 96 / 8 = 12 MHz ADC
+    .usbpre           = RCC_CFGR_USBPRE_PLL_VCO_CLK_DIV2, // 96 * 2 / 2 = 96 MHz
+    /* XXX: For GD32, also set bit 23 to configure CK_PLL / 2 for USB */
+
+    .flash_waitstates = 2,
+    .ahb_frequency    = 96000000,
+    .apb1_frequency   = 48000000,
+    .apb2_frequency   = 96000000,
+};
 #else
+/* STM32F4xx */
 static const struct rcc_clock_scale rcc_clock_config = {
     /* HSE=8 USB=48 APB1=42 APB2=84 */
     .pllm             = 8,                      // 8 MHz / 8 = 1 MHz
@@ -128,25 +151,34 @@ clock_init(void)
     rcc_clock_setup_pll(&rcc_hse_8mhz_3v3[RCC_CLOCK_3V3_168MHZ]);
     rcc_pclk2_frequency = rcc_clock_config.apb2_frequency;
 #else
-    rcc_clock_setup_pll(&rcc_clock_config);
-    rcc_pclk2_frequency = rcc_clock_config.apb2_frequency;
+    if (SCB_CPUID == 0x412fc231) {
+        /* GD32F1xx */
+        rcc_clock_config = &rcc_clock_config_gd32f1;
+        RCC_CFGR |= (1 << 23);  // GD32F1xx /2 or /2.5
+        is_gd32 = 1;
+    } else {
+        /* STM32F1 */
+        rcc_clock_config = &rcc_clock_config_stm32f1;
+    }
+    rcc_clock_setup_pll(rcc_clock_config);
+    rcc_pclk2_frequency = rcc_clock_config->apb2_frequency;
 #endif
 }
 
 uint32_t
 clock_get_hclk(void)
 {
-    return (rcc_clock_config.ahb_frequency);
+    return (rcc_clock_config->ahb_frequency);
 }
 
 uint32_t
 clock_get_apb1(void)
 {
-    return (rcc_clock_config.apb1_frequency);
+    return (rcc_clock_config->apb1_frequency);
 }
 
 uint32_t
 clock_get_apb2(void)
 {
-    return (rcc_clock_config.apb2_frequency);
+    return (rcc_clock_config->apb2_frequency);
 }

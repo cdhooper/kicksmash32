@@ -17,5 +17,6 @@ uint32_t clock_get_apb1(void);
 uint32_t clock_get_apb2(void);
 
 extern uint32_t rcc_pclk2_frequency;
+extern uint8_t is_gd32;
 
 #endif /* _CLOCK_H */

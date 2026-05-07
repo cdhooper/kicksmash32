@@ -19,7 +19,6 @@
 
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/stm32/rcc.h>
-#include <libopencm3/cm3/scb.h>
 #include <libopencm3/stm32/dbgmcu.h>
 #define HCLK_FREQ clock_get_hclk()
 #define APB1_FREQ clock_get_apb1()
@@ -195,9 +194,14 @@ identify_cpu(void)
             runtime_cpu = "?";
             break;
     }
-    printf("    CPUID=%08lx Dev=%04lx Rev=%04lx (compile: %s)\n",
-           SCB_CPUID, DBGMCU_DEVID, DBGMCU_REVID, COMPILE_CPU);
-    printf("    %s", runtime_cpu);
+    printf("    CPUID=%08lx Dev=%04lx Rev=%04lx",
+           SCB_CPUID, DBGMCU_DEVID, DBGMCU_REVID);
+#ifdef STM32F1
+    printf(" Flash=%u KB", *ADDR16(DESIG_FLASH_SIZE_BASE));
+    if (is_gd32)
+        printf("  SRAM=%u KB", *ADDR16(DESIG_FLASH_SIZE_BASE + 2));
+#endif
+    printf("\n    %s", runtime_cpu);
     if (DBGMCU_DEVID != 0) {
         const char *core_type;
         const char *core_rev = "?";
@@ -284,6 +288,8 @@ identify_cpu(void)
                     case 0x1001:
                         core_rev = "Z";
                         break;
+                    case 0x1309:  // GD32F107
+                        break;
                     default:
                         break;
                 }
@@ -329,14 +335,6 @@ identify_cpu(void)
     printf("    HCLK=%ld MHz  APB1=%ld MHz  APB2=%ld MHz\n",
            HCLK_FREQ / 1000000, APB1_FREQ / 1000000, APB2_FREQ / 1000000);
 
-#if 0
-#ifdef STM32F1XX
-    printf("    FlashSize=%u KB FlashPage=%u KB\n", *ADDR16(FLASHSIZE_BASE),
-            FLASH_PAGE_SIZE / 1024);
-#else
-    printf("    FlashSize=%u KB\n", *ADDR16(FLASHSIZE_BASE));
-#endif
-#endif
 }
 
 /* Deal with annoying newlib warnings */

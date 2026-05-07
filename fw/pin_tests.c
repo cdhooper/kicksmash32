@@ -122,6 +122,7 @@ check_board_standalone(void)
 {
     uint     pass;
     uint     d31_conn;
+    uint     addr_conn;
     int      rc;
     uint64_t timeout;
     uint16_t got;
@@ -159,50 +160,89 @@ check_board_standalone(void)
     }
 
     /*
-     * Test whether D31 is connected to the Amiga.
-     *
-     * In the first test (0), pull D31 pin low and wait for up to
-     * 2 ms for the pin to go high. If the pin was not seen low,
-     * then the pin is connected.
-     *
-     * In the second pass (1), set D31 pin high and wait for up to
-     * 2 ms for the pin to go high. If the pin was not seen high,
-     * then the pin is connected.
-     *
-     * The test will finish sooner (armed) if the state is first the
-     * same and then opposite of whether the pin is pulled low or high.
+     * Test whether address lines are connected
      */
-    gpio_setmode(SOCKET_D31_PORT, SOCKET_D31_PIN,
-                 GPIO_SETMODE_INPUT_PULLUPDOWN);
+    usb_poll();
+    gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
     conn = 0;
 
-    usb_poll();
     for (pass = 0; pass <= 1; pass++) {
-        gpio_setv(SOCKET_D31_PORT, SOCKET_D31_PIN, pass);
+        gpio_setv(SOCKET_A0_PORT, 0xffff, pass);
         timeout = timer_tick_plus_msec(2);
         armed = 0;
         while (timer_tick_has_elapsed(timeout) == false) {
-            got = gpio_get(SOCKET_D31_PORT, SOCKET_D31_PIN);
+            got = gpio_get(SOCKET_A0_PORT, 0xffff);
             if (pass == 1)
-                got ^= SOCKET_D31_PIN;
-            if (got) {
-                if (armed) {
-                    conn = 1;  // pin is opposite of pull-up or pull-down
-                    break;     // can stop now
-                }
-            } else {
-                /* In the set pull-up or pull-down state */
-                armed = 1;
+                got ^= 0xffff;
+            if (armed & got) {
+                conn = 1;  // armed pin is opposite of pull-up or pull-down
+                break;     // can stop now
             }
+            /* Arm any GPIOs which are in the same state as pull-up/down */
+            armed |= (uint16_t) ~got;
         }
-        if (armed == 0) {
-            /* Didn't arm within timeout period -- must be connected */
+        if (__builtin_popcount(armed) <= 4) {
+            /*
+             * Most address lines didn't arm within the timeout period:
+             * must be connected to the Amiga.
+             */
             conn = 1;
         }
         if (conn)
             break;
     }
-    d31_conn = conn ? 1 : 0;
+    addr_conn = conn ? 1 : 0;
+    gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT);
+
+    if (addr_conn) {
+        /*
+         * Test whether D31 is connected to the Amiga.
+         *
+         * In the first test (0), pull D31 pin low and wait for up to
+         * 2 ms for the pin to go high. If the pin was not seen low,
+         * then the pin is connected.
+         *
+         * In the second pass (1), set D31 pin high and wait for up to
+         * 2 ms for the pin to go high. If the pin was not seen high,
+         * then the pin is connected.
+         *
+         * The test will finish sooner (armed) if the state is first the
+         * same and then opposite of whether the pin is pulled low or high.
+         */
+        gpio_setmode(SOCKET_D31_PORT, SOCKET_D31_PIN,
+                     GPIO_SETMODE_INPUT_PULLUPDOWN);
+        conn = 0;
+
+        usb_poll();
+        for (pass = 0; pass <= 1; pass++) {
+            gpio_setv(SOCKET_D31_PORT, SOCKET_D31_PIN, pass);
+            timeout = timer_tick_plus_msec(2);
+            armed = 0;
+            while (timer_tick_has_elapsed(timeout) == false) {
+                got = gpio_get(SOCKET_D31_PORT, SOCKET_D31_PIN);
+                if (pass == 1)
+                    got ^= SOCKET_D31_PIN;
+                if (got) {
+                    if (armed) {
+                        conn = 1;  // pin is opposite of pull-up or pull-down
+                        break;     // can stop now
+                    }
+                } else {
+                    /* In the set pull-up or pull-down state */
+                    armed = 1;
+                }
+            }
+            if (armed == 0) {
+                /* Didn't arm within timeout period -- must be connected */
+                conn = 1;
+            }
+            if (conn)
+                break;
+        }
+        d31_conn = conn ? 1 : 0;
+    } else {
+        d31_conn = 0;
+    }
 
     /*
      * Test whether A18 and A19 are connected to the Amiga.
@@ -260,6 +300,8 @@ check_board_standalone(void)
             break;  // Only run pass 0
     }
     printf("Connected: ");
+    if (addr_conn)
+        printf("A0-A16 ");
     if (!(conn & FLASH_A17_PIN))
         putchar('!');
     printf("A17 ");
@@ -277,7 +319,7 @@ check_board_standalone(void)
     printf("KBRST");
     usb_poll();
 
-    if (kbrst_in_amiga) {
+    if (addr_conn || kbrst_in_amiga) {
         printf("\n");
         goto in_amiga;  // Can't do further tests in a running Amiga
     }
@@ -394,7 +436,7 @@ in_amiga:
     }
 
     board_is_standalone = true;
-    rc = pin_tests(0);
+    rc = pin_tests(0, 0);
     if (rc == 0)
         rc = prom_test();
     if (rc != 0)
@@ -698,7 +740,7 @@ pin_test_flash_data(uint verbose)
  * Performs stand-alone board pin tests.
  */
 uint
-pin_tests(uint verbose)
+pin_tests(uint verbose, uint force)
 {
     uint     pass;
     uint     cur;
@@ -710,7 +752,7 @@ pin_tests(uint verbose)
     const char *curname;
 
     /* Perform data bus tests */
-    if (board_is_standalone == false) {
+    if ((board_is_standalone == false) && (force == 0)) {
         printf("This test may only be performed on a stand-alone board\n");
         return (RC_FAILURE);
     }

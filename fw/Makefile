@@ -68,7 +68,11 @@ OPENCM3_LIB := $(OPENCM3_DIR)/lib/lib$(LIBNAME).a
 # Where the Black Magic Probe is attached
 BMP_PORT = /dev/ttyACM0
 
+DFU_UTIL=dfu-util-gd32
+ifeq (, $(shell which $(DFU_UTIL) 2>/dev/null ))
 DFU_UTIL=dfu-util
+endif
+
 ST_BUILD_DIR=/usr/stlink
 ifeq (,$(wildcard $(ST_BUILD_DIR)))
 ST_BUILD_DIR=stutils

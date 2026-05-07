@@ -15,15 +15,14 @@ running on the TF.
     other side to a component on the motherboard. The Dupont connetor
     would then attach to the KBRST pin on KickSmash.
 
-    Amiga 1200:   solder or clip a wire to TP1 pin 9, U13 pin 38,
-                  U5 pin 63, or a via near the E121R silkscreen.
+    Amiga 1200:   use R116 top (side facing U4 Lisa). This is _RST.
     Amiga 3000:   use RP701 pin 6 or U713 pin 1.
     Amiga 3000T:  use RP701 pin 6 or U713 pin 1.
     Amiga 4000:   use U141 pin 1.
     Amiga 4000CR: use U141 pin 1.
     Amiga 4000T:  use U141 pin 1.
     Amiga AA3000: use U693 pin 1.
-    AmigaPCI:     use CN210 near ROM socket
+    AmigaPCI:     use CN210 near ROM socket.
 
 3. Remove your old Kickstart ROMs
     It's best to use a chip extractor to remove the ROM chips. If you must use
