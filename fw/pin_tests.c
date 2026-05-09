@@ -50,7 +50,8 @@ typedef struct {
 
 static const pin_config_t pin_config[] =
 {
-    { "KBRST",      KBRST_PORT,      KBRST_PIN,      FS_PD, PIN_INPUT },
+    /* In Kicksmash Rev 10, KBRST affects SOCKET_OE and FLASH OE */
+//  { "KBRST",      KBRST_PORT,      KBRST_PIN,      FS_PD, PIN_INPUT },
     { "FLASH_RB",   FLASH_RB_PORT,   FLASH_RB_PIN,   FS_PU, PIN_INPUT },
     { "FLASH_WE",   FLASH_WE_PORT,   FLASH_WE_PIN,   FS_PU, PIN_EXT_PULLUP },
     { "FLASH_OE",   FLASH_OE_PORT,   FLASH_OE_PIN,   FS_PU, PIN_INPUT },
@@ -157,6 +158,7 @@ check_board_standalone(void)
             kbrst_in_amiga = false;
         }
         gpio_setv(KBRST_PORT, KBRST_PIN, 0);
+        timer_delay_msec(1);
     }
 
     /*
@@ -792,12 +794,10 @@ pin_tests(uint verbose, uint force)
         for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {
             curname = pin_config_get(cur, &curport, &curpin, buf0);
             gpio_setmode(curport, curpin, GPIO_SETMODE_INPUT_PULLUPDOWN);
-#if 1
             if ((pass == 0) &&
                 (((curport == FLASH_OE_PORT) && (curpin == FLASH_OE_PIN)) ||
                  ((curport == SOCKET_OE_PORT) && (curpin == SOCKET_OE_PIN))))
                 continue;  // Don't set FLASH_OE or SOCKET_OE low
-#endif
             gpio_setv(curport, curpin, !pass);
         }
 

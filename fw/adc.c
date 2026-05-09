@@ -331,7 +331,8 @@ adc_poll(int verbose, int force)
 power_is_off:
                 gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
                              GPIO_SETMODE_OUTPUT_PPULL_2);
-                if (config.flags & CF_POWER_OFF_OLD) {
+                if ((config.flags & CF_POWER_OFF_OLD) ||
+                    (config.board_rev >= 10)) {
                     /* Drive SOCKET_OE high */
                     gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
                 } else {
