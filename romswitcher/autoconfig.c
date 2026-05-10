@@ -453,10 +453,10 @@ autoconfig_write_base(ac_cfg_window_t cfg_window, uint32_t addr,
     } else {
         if (use_z3_assignment) {
             /* Zorro III assignment in the Zorro II config aperture. */
-            *Z2_BASE_A27_A24 = (addr >> 20);  // Nibble
-            *Z2_BASE_A31_A24 = (addr >> 24);  // Byte
             *Z2_BASE_A19_A16 = (addr >> 12);  // Nibble
             *Z2_BASE_A23_A16 = (addr >> 16);  // Byte
+            *Z2_BASE_A27_A24 = (addr >> 20);  // Nibble
+            *Z2_BASE_A31_A24 = (addr >> 24);  // Byte
         } else {
             /* Zorro II assignment in the Zorro II config aperture. */
             *Z2_BASE_A19_A16 = (addr >> 12);  // Nibble

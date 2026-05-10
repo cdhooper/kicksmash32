@@ -1,0 +1,1 @@
+KBRST should be moved slightly further outside to avoid motherboard RN200

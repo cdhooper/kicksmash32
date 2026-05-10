@@ -4,9 +4,36 @@ KickSmash Hardware Build
 Use the files in the desired `rev*` directory to have a fabrication
 house build a PCB. I use JLCPCB with HASL for most of my builds.
 
+** SOURCING
+
+74FCT162244 is becoming difficult to find, but are still readily available
+if you know what to locate. The part must be TSSOP-48 and 5V supply and
+I/O with TTL signal compatibility. You can also use 74FCT16245 or 74FCT162245.
+The main difference is drive strength, and either is more than a suitable
+replacement for the drive strength of an EPROM. Known options:
++ IDT74FCT162244ATPAG8 -- I personally use for hand-soldering, sourced
+                          from ebay.
++ 74FCT162244CTPAG - the part which is called out in the BOM, which is
+                     unfortunately no longer available from LCSC.
++ 74FCT162244ATPACT - available from Rochester Electronics (qty 25+).
++ CY74FCT16244TPAC - Chucky uses these and knows that they work.
++ SNABT162244DGGR - these parts are still available from Mouser and should
+                    be compatible (untested).
++ 74FCT162244CTPACT - this part appears to be compatible (untested)
++ QS74FCT162244ATPA - quantity from Rochester Electronics (untested)
++ CD74FCT162244ATMT - available from Rochester Electronics (untested)
++ 74FCT16244CTPAG8 - this part appears to be compatible (untested)
++ 74FCT16245ATPAG8 - ROTATE 180 degrees. The 74FCT16245 and 74FCT162245
+                     parts should work as suitable replacements for
+                     74FCT162244, but they MUST be rotated 180 degrees
+                     from the footprint marking.
++ 74FCT162245CTPAG - ROTATE 180 degrees. See the comment above.
+
+
 ** IMPORTANT NOTE **
-   Although it's listed in the BOM, do not use AO3400A for Q2 / Q3.
-   Use 2N7002 MOSFETs instead. The AO3400A are too slow for reliable
+   Although it's listed in the BOM of some boards, do not use AO3400A
+   for Q2 / Q3. Use 2N7002 MOSFETs instead. The AO3400A are too slow
+   for reliable
    flashing from AmigaOS.
 
 My recommended assembly order is:
