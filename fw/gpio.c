@@ -599,7 +599,7 @@ gpio_assign(int whichport, int pins, const char *assign)
         case 'o':
         case 'O':
             if (assign[1] == '\0') {
-                gpio_setmode(gpio, pins, GPIO_SETMODE_OUTPUT_PPULL_2);
+                gpio_setmode(gpio, pins, GPIO_SETMODE_OUTPUT_PPULL_10);
                 return;
             }
             break;
@@ -613,9 +613,9 @@ change_to_output:
                         continue;
                     mode = gpio_getmode(gpio, pin);
                     if ((mode & 3) == 0) {
-                        /* Currently an input mode -- default to 2MHz Output */
+                        /* Currently an input mode -- default to 10MHz Output */
                         gpio_setmode(gpio, BIT(pin),
-                                     GPIO_SETMODE_OUTPUT_PPULL_2);
+                                     GPIO_SETMODE_OUTPUT_PPULL_10);
                     }
                 }
                 return;

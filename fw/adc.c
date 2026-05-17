@@ -21,20 +21,25 @@
 #include "timer.h"
 #include "gpio.h"
 #include "config.h"
+#include "clock.h"
 #include "pin_tests.h"
 
 #define TEMP_BASE          25000     // Base temperature is 25C
 
 #if defined(STM32F407xx)
 #define TEMP_V25           760       // 0.76V
-#define TEMP_AVGSLOPE      25        // 2.5
+#define TEMP_AVGSLOPE      25        // 2.5 mV/C
 #define SCALE_VREF         12100000  // 1.21V
 
 #elif defined(STM32F1)
 /* Verified STM32F103xE and STM32F107xC are identical */
 #define TEMP_V25           1410      // 1.34V-1.52V; 1.41V seems more accurate
-#define TEMP_AVGSLOPE      43        // 4.3
+#define TEMP_AVGSLOPE      43        // 4.3 mV/C
 #define SCALE_VREF         12000000  // 1.20V
+
+#define GD32_TEMP_V25      1450      // 1.45V GD32F107 datasheet
+#define GD32_TEMP_AVGSLOPE 41        // 4.1 mV/C
+#define GD32_SCALE_VREF    12000000  // 1.20V
 
 #else
 #error STM32 architecture temp sensor slopes must be known
@@ -181,7 +186,10 @@ adc_get_scale(uint16_t adc0_value)
     if (adc0_value == 0)
         adc0_value = 1;
 
-    tscale = SCALE_VREF / adc0_value;
+    if (is_gd32)
+        tscale = GD32_SCALE_VREF / adc0_value;
+    else
+        tscale = SCALE_VREF / adc0_value;
 
     if (scale == 0)
         scale = tscale;
@@ -198,23 +206,19 @@ adc_show_sensors(void)
     uint16_t adc[CHANNEL_COUNT];
 
     /*
-     * raw / 4095 * 3V = voltage reading * resistor/div scale (8.5) = reading
-     *      10K / 1.33K divider: 10V -> 1.174V (multiply reading by 8.51788756)
-     *      So, if reading is 1614:
-     *              1608 / 4096 * 3 = 1.177734375V
-     *              1.177734375 * 8.51788756 = 10.0318
+     * raw / 4095 * 3.3V = voltage reading * resistor/div scale (2) = reading
      *
-     * PC4 ADC_U1 IN14 is V10SENSE (nominally 10V)
+     * On STM32F407:
      *     ADC_U1 IN16 is STM32 Temperature (* 10000 / 25 - 279000)
      *     ADC_U1 IN17 is Vrefint 1.2V
      *     ADC_U1 IN18 is Vbat (* 2)
      *
-     *     ADC_CHANNEL_TEMPSENSOR
-     *     ADC_CHANNEL_VREFINT
+     *     ADC_CHANNEL_TEMP
+     *     ADC_CHANNEL_VREF
      *     ADC_CHANNEL_VBAT
      *
-     * We could use Vrefin_cal to get a more accurate expected Vrefint
-     * from factory-calibrated values when Vdda was 3.3V.
+     *     We could use Vrefin_cal to get a more accurate expected Vrefint
+     *     from factory-calibrated values when Vdda was 3.3V.
      *
      * Temperature sensor formula
      *      Temp = (V25 - VSENSE) / Avg_Slope + 25
@@ -227,14 +231,15 @@ adc_show_sensors(void)
      * Channel order (STM32F1):
      *     adc_buffer[0] = Vrefint
      *     adc_buffer[1] = Vtemperature
+     *     adc_buffer[2] = 5V sense / 2
      *
      * Algorithm:
      *  * Vrefint tells us what 1.21V (STM32F407) or 1.20V (STM32F1xx) should
      *  be according to ADCs.
      *  1. scale = 1.2 / adc_buffer[0]
      *          Because: reading * scale = 1.2V
-     *  2. Report Vbat:
-     *          adc_buffer[1] * scale * 2
+     *  2. Report V5:
+     *          adc_buffer[2] * scale * 2
      */
     memcpy(adc, (void *)adc_buffer, sizeof (adc_buffer));
     scale = adc_get_scale(adc[0]);
@@ -268,6 +273,7 @@ adc_poll(int verbose, int force)
     static uint     avg_v5 = 0;
     uint            calc_v5;
     uint            scale;
+    uint            v5_max;
     int             v5_good = false;
     uint16_t        adc[CHANNEL_COUNT];
     static uint16_t got_v5_count = 0;
@@ -288,7 +294,15 @@ adc_poll(int verbose, int force)
     else
         avg_v5 += ((int)calc_v5 - (int)avg_v5) / 4;
 
-    if ((avg_v5 < 4250) || (avg_v5 > 5400)) {  // 4.25V - 5.40V
+    /*
+     * XXX: Temporary solution for GD32F107 incorrect high ADC readings
+     */
+    if (is_gd32)
+        v5_max = 5800;  // 5.80V
+    else
+        v5_max = 5400;  // 5.40V
+
+    if ((avg_v5 < 4250) || (avg_v5 > v5_max)) {  // 4.25V minimum
         v5_good = false;
     } else {
         v5_good = true;
@@ -330,7 +344,7 @@ adc_poll(int verbose, int force)
             } else {
 power_is_off:
                 gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
-                             GPIO_SETMODE_OUTPUT_PPULL_2);
+                             GPIO_SETMODE_OUTPUT_PPULL_50);
                 if ((config.flags & CF_POWER_OFF_OLD) ||
                     (config.board_rev >= 10)) {
                     /* Drive SOCKET_OE high */
@@ -339,7 +353,7 @@ power_is_off:
                     /* Drive FLASH_OE high and SOCKET_OE low */
                     gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
                     gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN,
-                                 GPIO_SETMODE_OUTPUT_PPULL_2);
+                                 GPIO_SETMODE_OUTPUT_PPULL_50);
                     gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
 
                     /* Pull data pins low */

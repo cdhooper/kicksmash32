@@ -122,7 +122,7 @@ void
 kbrst_amiga(uint hold, uint longreset)
 {
     gpio_setv(KBRST_PORT, KBRST_PIN, 0);
-    gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+    gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_OUTPUT_PPULL_50);
     if (hold) {
         amiga_reset_timer = 0;
         amiga_long_reset_timer = 0xffffffffffffffff;

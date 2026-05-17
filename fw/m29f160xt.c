@@ -156,7 +156,7 @@ ee_address_override(uint8_t bits, uint override)
         if (bits & BIT(bit)) {
             /* Drive address pin */
             uint     shift = (bits & BIT(bit + 4)) ? 0 : 16;
-            gpio_setmode(port, pin, GPIO_SETMODE_OUTPUT_PPULL_2);
+            gpio_setmode(port, pin, GPIO_SETMODE_OUTPUT_PPULL_50);
             GPIO_BSRR(port) = pin << shift;
 #undef ADDR_OVERRIDE_DEBUG
 #ifdef ADDR_OVERRIDE_DEBUG
@@ -190,9 +190,9 @@ address_output_enable(void)
     ee_address_override(0, 1);  // Suspend A19-A18-A17 override
 
     /* A0-A12=PC0-PC12 A13-A19=PA1-PA7 */
-    GPIO_CRL(SOCKET_A0_PORT)  = 0x11111111;  // Output Push-Pull
-    GPIO_CRH(SOCKET_A0_PORT)  = 0x00011111;  // Not PC13-PC15 (weak drive)
-    GPIO_CRL(SOCKET_A13_PORT) = 0x11111118;  // PA0=SOCKET_OE = Input PU
+    GPIO_CRL(SOCKET_A0_PORT)  = 0x33333333;  // Output Push-Pull
+    GPIO_CRH(SOCKET_A0_PORT)  = 0x00033333;  // Not PC13-PC15 (weak drive)
+    GPIO_CRL(SOCKET_A13_PORT) = 0x33333338;  // PA0=SOCKET_OE = Input PU
 }
 
 /*
@@ -255,10 +255,10 @@ data_input(void)
 void
 data_output_enable(void)
 {
-    GPIO_CRL(FLASH_D0_PORT)  = 0x11111111; // Output Push-Pull
-    GPIO_CRH(FLASH_D0_PORT)  = 0x11111111;
-    GPIO_CRL(FLASH_D16_PORT) = 0x11111111;
-    GPIO_CRH(FLASH_D16_PORT) = 0x11111111;
+    GPIO_CRL(FLASH_D0_PORT)  = 0x33333333; // Output Push-Pull
+    GPIO_CRH(FLASH_D0_PORT)  = 0x33333333;
+    GPIO_CRL(FLASH_D16_PORT) = 0x33333333;
+    GPIO_CRH(FLASH_D16_PORT) = 0x33333333;
 }
 
 /*
@@ -448,6 +448,7 @@ ee_read_word(uint32_t addr, uint32_t *data)
     oe_output(0);
     oe_output_enable();
     timer_delay_ticks(ticks_per_30_nsec);  // Wait for tOE
+//  timer_delay_usec(10);
     *data = data_input();
     oe_output(1);
     oe_output_disable();
@@ -1241,6 +1242,12 @@ ee_test(void)
     data_output(0xffffffff);  // pull high
     ee_read_word(0x3, &val);
     ee_read_mode();
+
+    /* ST M29W160Ex parts have a non-zero value at word 3 */
+    if ((part1 == 0x002022c4) || (part1 == 0x00202249))  //  M29W160Ex
+        val &= ~0x00000001;
+    if ((part2 == 0x002022c4) || (part2 == 0x00202249))  //  M29W160Ex
+        val &= ~0x00010000;
 
     // XXX: Might need to accommodate 16-bit ee_mode here
     if (val != 0x00000000) {

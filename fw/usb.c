@@ -209,7 +209,8 @@ usb_shutdown(void)
     usbd_disconnect(usbd_gdev, true);
 }
 
-void usb_poll(void)
+void
+usb_poll(void)
 {
 #ifndef DEBUG_NO_USB
     if (!using_usb_interrupt)
@@ -226,7 +227,7 @@ usb_signal_reset_to_host(int restart)
     rcc_periph_clock_enable(RCC_AFIO);
 
     gpio_setv(GPIOA, GPIO11 | GPIO12, 0);
-    gpio_setmode(GPIOA, GPIO11 | GPIO12, GPIO_SETMODE_OUTPUT_PPULL_2);
+    gpio_setmode(GPIOA, GPIO11 | GPIO12, GPIO_SETMODE_OUTPUT_PPULL_10);
 #ifdef DEBUG_NO_USB
     return;
 #endif

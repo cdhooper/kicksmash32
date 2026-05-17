@@ -159,7 +159,9 @@ irq_debugger_msg(const char *msg)
     full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#if defined(__GNUC__) && (__GNUC__ >= 7)
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
     memcpy(regs + 1, regs, sizeof (*regs));
 #pragma GCC diagnostic pop
     printf(msg);
@@ -178,7 +180,9 @@ Default(void)
         uint16_t vector_offset;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#if defined(__GNUC__) && (__GNUC__ >= 7)
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
         full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
         memcpy(regs + 1, regs, sizeof (*regs));
         sp_reg = regs->a[7];
@@ -516,7 +520,9 @@ irq_show_regs(uint which)
         regs++;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#if defined(__GNUC__) && (__GNUC__ >= 7)
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
 
     sp_reg = regs->a[7];
     if ((sp_reg < 0x01000) || (sp_reg > 0x10000)) {
@@ -647,7 +653,9 @@ irq_debugger(uint mode)
      */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#if defined(__GNUC__) && (__GNUC__ >= 7)
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
     if (mode == 0)
         memcpy(regs + 1, regs, sizeof (*regs));
     regs++;
