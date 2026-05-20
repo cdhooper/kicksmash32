@@ -1,3 +1,111 @@
+Release 2.0
+
+Kicksmash FW
+- prom log command now shows what it thinks is the actual Amiga address
+- Fixed bug where "comp" command could not be used
+- Sync MED command line fixes and enhancements across repositories
+- Fixed bug where "prom name A4000-CR" would set the name to "a3ff4R"
+- Added standalone pin test to verify data lines are connected to flash parts
+- Added flash A1-A8 address pin test.
+- Changed serial number algorithm to not emit non-alphanumeric characters
+- Reduced ADC clock from 12 MHz to 9 MHz
+- Slightly improved ROM address capture latency by not capturing high bits
+- Locked down libopencm3 to a specific known working version
+- Change backpower solution to instead drive 0V on the Amiga data lines.
+- Added initial GD32F107 support (higher clock speed). More work is needed.
+- Further GD32 support - GPIO speed mode affects maximum pin current
+- Improved pin tests (A0-A15 connection determination)
+- Added "prom test force" to force initial pin tests.
+- Fixed bug in USB ACM implementation which prevented using newer libopencm3
+- Increased usbdfu ROM area size to deal with libopencm3 code creep
+- Fixed pin tests for Kicksmash Rev 10+ (SOCKET_OE tri-state)
+- Kicksmash Rev 10+ now sets internal SOCKET_OE high when power is off
+
+ROM Switcher
+- Added some tolerance of CIA-A not being readable (incomplete)
+- Added debug background color (blue) during initialization
+- Added MED "cpu spin <addr>" command
+- Fixed false repeating key when multiple keystrokes are held
+- Early init color sequence
+  Green background: Stuck at chipmem init
+  Bright Blue background: Stuck at early chipset or CPU vectors init
+  Power LED bright: Stuck at IRQ init, CPU type, or serial init
+  ROM ID at serial: Stuck at cache init
+  'A' at serial: Stuck at chipset init
+  'B' at serial: Stuck at screen init
+  'C' at serial and Medium Blue background: Stuck at timer init
+  'D' at serial: Stuck at audio init
+  'E' at serial and Half Blue background: Stuck at serial reinit
+  'F' at serial: Stuck at keyboard init
+  'G' at serial: Stuck at mouse init
+  'H' at serial and Dark Blue background: Stuck at sprite init
+  'I' at serial: Stuck at autoconfig init
+  'J' at serial: Stuck command line init
+  'K' at serial: Stuck at drawing test
+  Grey background: ROM switcher should be running
+- Added MED ability to get/set CPU SR register
+- User may now enter a digit to select that bank for booting
+- Fixed MED bug where "comp" command could not be used
+- Improved tolerance of spurious interrupts because they do occur on some Amigas
+- Moved Vector base from chipmem to ROM
+- Added support for Keyboard-controlled Mouse movement and clicks
+  Amiga-cursor keys for small movements
+  Shift-Amiga-cursor keys for large movements
+  Control-Amiga-cursor keys for move-to-next gadget
+- Enhanced build system to allow toolchain on a different path than standard.
+- Fixed dehunk compilation errors and portability issues.
+- Replaced MX radio button gadget rectangle with capsule shape
+- MX radio button gadgets now drawn with 3D beveled outlines
+- Cleaned up serial output to always emit \n in combination with \r
+- Zorro configuration apertures are now marked as uncacheable
+- Implemented autoconfig of all Zorro devices by default
+- Improved autoconfig to handle Zorro II devices visible through the
+  Zorro III config aperature.
+- Fixed autoconfig of Zorro III device in Zorro II window (HW doc is wrong)
+- Find and configure Picasso IV flicker fixer as part of autoconfig
+- Serial and screen output paths are not independent
+- Fixed serial init to enable the master interrupt to avoid using
+  timer delays before EClock rate has been established.
+- Work around gcc 6.5 compiler warnings, not knowing -Wstringop-overflow
+
+smashftp and smashfs
+- Improved file operations by adding automatic message retry on CRC error
+- Fixed bug where devtest -g on smashfs device could crash Amiga
+
+hostsmash
+- MacOS can now automatically locate Kicksmash
+  So in most cases, one no longer needs to specify -d /dev/cu.usbmodem*`
+- Fixed file service bug where non-existing file opened for create would fail
+- Fixed (some) macOS compilation problems
+= Added --version option
+- Kicksmash asynchronous text messages will now be shown as just text
+  when hostsmash is in file server mode.
+- Flash write is allowed to continue even if swap mode can't be determined
+
+smash
+- Improved flash id test to better recover from Kicksmash message failures
+- Enhanced smash term to allow text to send to be specified on the command line
+  In that mode, term will exit after no output for 1 second
+- Enhanced smash write to always first prompt for erase
+- Improved smash write and erase flash error recovery
+  Now even if Kicksmash communication is not 100% stable, it may still
+  be possible to write flash from AmigaOS.
+
+Build system
+- Added ADF image generation as part of release process
+
+Documentation
+- Added AmigaPCi
+- Minor updates to Windows notes for driver install help
+- Added HW install info for A4000CR and AA3000+
+- Added Windows tip about keeping the same COM port
+- Added sourcing help for 74FCT162244 and alternatives
+
+PCBs
+- Kicksmash4KCR updated to Rev9
+
+----------------------------------------------------------------------------
+
 Release 1.9
 
 Kicksmash FW
