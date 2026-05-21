@@ -138,6 +138,9 @@ timer_tick_has_elapsed(uint64_t value)
     if (now >= value)
         return (true);
 
+    if (vblank_hz & 1)
+        return (true); // Timer init failed
+
     __asm("nop");
     return (false);
 }
@@ -207,6 +210,8 @@ void
 timer_delay_msec(uint msec)
 {
     uint64_t end = timer_tick_plus_msec(msec);
+    if (vblank_hz & 1)
+        return; // Timer init failed
     while (timer_tick_has_elapsed(end) == false) {
         /* Empty */
     }
@@ -223,6 +228,8 @@ void
 timer_delay_usec(uint usec)
 {
     uint64_t end = timer_tick_plus_usec(usec);
+    if (vblank_hz & 1)
+        return; // Timer init failed
     while (timer_tick_has_elapsed(end) == false) {
         /* Empty */
     }
@@ -316,18 +323,18 @@ timer_init(void)
     eclk_tbhi = *CIAA_TBHI;
     hz_tick   = *CIAA_ELSB;
 
-    timeout = 10000;
+    timeout = 500000;
     while (eclk_tbhi == *CIAA_TBHI)
         if (--timeout == 0) {
             if (eclk_tbhi == 0)
-                printf("CIA-E ECLK done too early\n");
+                printf("CIA-A ECLK done too early\n");
             else
                 printf("CIA-A ECLK timeout\n");
 
 fail_use_defaults:
             /* Use NTSC 60 Hz as defaults */
             *CIAA_CRB = CIA_CRB_START;
-            vblank_hz = eclk_to_hz_table[0].tick_hz + 1;
+            vblank_hz = eclk_to_hz_table[0].tick_hz | 1;  // Mark init failed
             eclk_ticks_per_sec = eclk_to_hz_table[0].eclk;
             vid_type = eclk_to_hz_table[0].vid_type;
             return;

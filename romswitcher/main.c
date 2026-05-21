@@ -227,11 +227,13 @@ setup(void)
     serial_putc('\n');
     BACKGROUND_COLOR(0x999);  // Grey background
 
+#ifdef DEBUG_TIMER
     if (vblank_hz & 1) {
         /* Timer init failed */
         while (1)
             debug_cmdline();
     }
+#endif
 #ifdef STANDALONE
     extern void main_func(void);
     main_func();

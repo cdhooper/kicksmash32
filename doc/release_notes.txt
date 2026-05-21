@@ -77,7 +77,7 @@ hostsmash
   So in most cases, one no longer needs to specify -d /dev/cu.usbmodem*`
 - Fixed file service bug where non-existing file opened for create would fail
 - Fixed (some) macOS compilation problems
-= Added --version option
+- Added --version option
 - Kicksmash asynchronous text messages will now be shown as just text
   when hostsmash is in file server mode.
 - Flash write is allowed to continue even if swap mode can't be determined
