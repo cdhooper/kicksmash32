@@ -273,9 +273,12 @@ VBlank(void)
      *   WAIT ($FF,$FE)
      *   ;end of the Copper list (wait for an impossible screen position)
      */
+#ifdef COPPER_DISABLED
+    /* These pointers are now updated by the Copper */
     *BPL1PT = BITPLANE_0_BASE;  // Bitplane 0 base address
     *BPL2PT = BITPLANE_1_BASE;  // Bitplane 1 base address
     *BPL3PT = BITPLANE_2_BASE;  // Bitplane 2 base address
+#endif
 
     *INTREQ = INTREQ_VERTB;
     COUNTER(3)++;  // 0x100c

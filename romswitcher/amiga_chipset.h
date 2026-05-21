@@ -44,6 +44,15 @@
 #define INTENA    VADDR16(0x00dff09a)  // Interrupt enable register (write)
 #define INTREQR   VADDR16(0x00dff01e)  // Interrupt status register (read)
 #define INTREQ    VADDR16(0x00dff09c)  // Interrupt status register (write)
+#define COP1LC    VADDR32(0x00dff080)  // Copper list 1 address
+#define COP1LCH   VADDR16(0x00dff080)  // Copper list 1 address (hi)
+#define COP1LCL   VADDR16(0x00dff082)  // Copper list 1 address (lo)
+#define COP2LC    VADDR32(0x00dff084)  // Copper list 2 address
+#define COP2LCH   VADDR16(0x00dff084)  // Copper list 2 address (hi)
+#define COP2LCL   VADDR16(0x00dff086)  // Copper list 2 address (lo)
+#define COPJMP1   VADDR16(0x00dff088)  // Copper restart 1
+#define COPJMP2   VADDR16(0x00dff08a)  // Copper restart 2
+#define COPINS    VADDR16(0x00dff08c)  // Copper inst fetch identify
 #define DIWSTRT   VADDR16(0x00dff08e)  // Start of screen window
 #define DIWSTOP   VADDR16(0x00dff090)  // End of screen window
 #define DDFSTRT   VADDR16(0x00dff092)  // Bitplane DMA start

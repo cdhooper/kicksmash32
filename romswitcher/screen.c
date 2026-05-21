@@ -799,9 +799,39 @@ screen_init(void)
     *DIWSTOP  = (y << 8) | (x & 0xff);
 #endif
 
+    /*
+     * The following Copperlist waits until at the top of the screen
+     * and then updates the BPL1PT, BPL2PT, and BPL3PT registers so
+     * that the screen can be redrawn after VBlank. The first 16-bit
+     * number is the register address (example: dff0e0 = e0 = BPL1PT).
+     * The second 16-bit number is the value to write in that register.
+     * Wait is a special operation.
+     * As an example, force top part of the screen to blue background:
+     *     0x0180, 0x000f,                   // Blue background
+     *     0x9601, 0xff00,                   // Wait VPOS=150, HPOS=0
+     *     0x0180, 0x0888,                   // Grey background
+     */
+    static const uint16_t copperlist[] = {
+        0x0001, 0xff00,                   // Wait VPOS=0, HPOS=0
+        0x00e0, BITPLANE_0_BASE >> 16,    // BPL1PTH (High address)
+        0x00e2, BITPLANE_0_BASE & 0xffff, // BPL1PTL (Low address)
+        0x00e4, BITPLANE_1_BASE >> 16,    // BPL2PTH (High address)
+        0x00e6, BITPLANE_1_BASE & 0xffff, // BPL2PTL (Low address)
+        0x00e8, BITPLANE_2_BASE >> 16,    // BPL3PTH (High address)
+        0x00ea, BITPLANE_2_BASE & 0xffff, // BPL3PTL (Low address)
+        0xffff, 0xfffe,                   // End of Copper list
+    };
+    /* Configure the Copper to handle screen pointer refresh */
+    uint16_t *cp = malloc_chipmem(sizeof (uint16_t) * ARRAY_SIZE(copperlist));
+    memcpy(cp, copperlist, sizeof (copperlist));
+
+    *COP1LC = (uintptr_t) &cp[0x0];
+    *COPJMP1 = 0x0000;
+
     *DMACON   = DMACON_SET |     // Enable
 //              DMACON_BLTPRI |  // Blitter gets priority over CPU
                 DMACON_DMAEN |   // Enable DMA
+                DMACON_COPEN |   // Copper DMA
                 DMACON_BPLEN |   // Bitplane DMA
                 DMACON_BLTEN;    // Blitter DMA
 
