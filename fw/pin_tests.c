@@ -759,7 +759,11 @@ pin_tests(uint verbose, uint force)
         return (RC_FAILURE);
     }
 
-    /* Set alternate PA13 | PA14 | PA15 to be input */
+    /* Make SOCKET_OE an input pull-up */
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    /* Set alternate A13 | A14 | A15 to be input */
     gpio_setmode(SOCKET_A13_PORT, GPIO1 | GPIO2 | GPIO3, GPIO_SETMODE_INPUT);
 
     /*
