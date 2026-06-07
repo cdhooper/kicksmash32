@@ -5,7 +5,7 @@ KickSmash32 is a Kickstart ROM replacement module for the Amiga 3000 and Amiga 4
 Features include:
 
 * In-system programming via an Amiga command line utility (smash)
-* Out-of-system programming (USB-C) via a Linux command line utility (hostsmash)
+* Out-of-system programming (USB-C) via a Linux/Windows/macOS command line utility (hostsmash)
 * Up to 8 independent flash banks
 * Configurable ROM bank switching on long reboot or cold power-on
 * Optional host file service to the Amiga over the USB-C link (smashfs and smashftp)
@@ -13,6 +13,8 @@ Features include:
 <IMG SRC="photos/2024_11_07_kicksmash32_rev5_profile_view_2.jpg" WIDTH="50%">
 
 All hardware, firmware, and software is open source.
+
+**New to KickSmash on Windows? Start with the [Getting Started on Windows guide](doc/getting_started_windows.md)** -- an end-to-end, copy-paste walkthrough from USB cable to a flashed, configured board.
 
 View files in the doc directory for complete documentation.
 

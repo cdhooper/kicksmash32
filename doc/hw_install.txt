@@ -17,6 +17,9 @@ running on the TF.
 
     Amiga 1200:   use R116 top (side facing U4 Lisa). This is _RST.
     Amiga 3000:   use RP701 pin 6 or U713 pin 1.
+                  For U713, pin 1 is the chip leg at the notch end --
+                  the top-left leg when the chip is oriented with its
+                  notch toward the top.
     Amiga 3000T:  use RP701 pin 6 or U713 pin 1.
     Amiga 4000:   use U141 pin 1.
     Amiga 4000CR: use U141 pin 1.
@@ -42,11 +45,22 @@ running on the TF.
 4. Install KickSmash in place of the ROMs
     The USB connector of KickSmash should face the same side of the ROM
     sockets as the notch of the ROMs you've removed.
+
+    Some Amigas have 40-pin sockets and others have 42-pin sockets.
+    If your motherboard has 40-pin sockets and the KickSmash has 42 pins
+    installed, then the overhang pins should be pin 1 and pin 42. If your
+    motherboard has 42-pin sockets and the KickSmash has 40 pins installed,
+    then the KickSmash should not occupy pin 1 and pin 42 of the socket.
+    Pin 1 and pin 42 are the A20 and A21 address signals, which are nearest
+    the notch for most Amiga motherboards.
+
     Amiga 1200: Orient KickSmash with the USB connector facing Gayle and
             the 28 MHz crystal oscillator. If KickSmash pins A20 and A21
             are not populated, do not install the KickSmash in A1200
             socket pins 1 and 42.
     Amiga 3000: Orient KickSmash with the USB connector facing Fat Gary.
+            Note that older Amigas (those having U182 & U183 sockets
+            installed) require a specific ROM Tower to work with KickSmash32.
     Amiga 3000T: Orient KickSmash with the USB connector next to the
             motherboard's SCSI connector.
     Amiga 4000: Orient KickSmash with the USB connector facing the 50 MHz
