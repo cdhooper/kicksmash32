@@ -1,7 +1,13 @@
 JLCPCB-assembled Power LED is too bright
     Change to 5.1K R3 resistor for Rev 7
-    NO. Using PWM instead.
+    No change: using PWM to set LED brightness instead
 
-Change cutout for USB-C connector to avoid confusion at JLCPCB
-    Probably need to go with a different footprint that doesn't
-    do its own cutout.
+Change USB-C to use raised connector to avoid cutout issues at JLCPCB
+    Fixed in Rev 10
+
+Add physical DFU button
+    Fixed in Rev 10
+
+Add second KBRST which is in line with 42-pin socket (Kavanoz) for the
+    purpose of boards which have KBRST option on pin 42.
+    Fixed in Rev 10

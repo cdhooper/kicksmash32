@@ -187,6 +187,8 @@ fill_rect(uint fgpen, uint x1, uint y1, uint x2, uint y2)
 }
 
 
+#if 0
+/* Currently not used */
 static void
 gray_rect_cpu(uint fgpen, uint x1, uint y1, uint x2, uint y2)
 {
@@ -269,6 +271,7 @@ gray_rect(uint fgpen, uint x1, uint y1, uint x2, uint y2)
     // XXX: gray_rect_cpu() can't handle the case where x2 - x1 < 16
     gray_rect_cpu(fgpen, x1, y1, x2, y2);
 }
+#endif
 
 #undef TAKEN_FROM_THE_INTERNET_UNTESTED
 #ifdef TAKEN_FROM_THE_INTERNET_UNTESTED

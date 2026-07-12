@@ -274,6 +274,7 @@ data_output_disable(void)
     GPIO_CRH(FLASH_D0_PORT)  = 0x88888888;
     GPIO_CRL(FLASH_D16_PORT) = 0x88888888;
     GPIO_CRH(FLASH_D16_PORT) = 0x88888888;
+    data_output(0);
 }
 
 /*

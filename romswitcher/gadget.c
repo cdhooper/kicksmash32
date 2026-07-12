@@ -493,9 +493,11 @@ gadget_draw_button(Gadget *gad, uint activated)
         if (underscore != NULL)
             len--;
 
-        if (activated) {
+        if (gad->Flags & GFLG_DISABLED)
+            bg_pen = 7;  // Mid Gray
+
+        if (activated)
             bg_pen = 3;  // Blue
-        }
 
         if (len > textlen_max)
             len = textlen_max;
@@ -539,9 +541,8 @@ gadget_draw_button(Gadget *gad, uint activated)
                            x + xoff, y + yoff + it->TopEdge,
                            fg_pen, bg_pen);
         }
-    }
-    if (gad->Flags & GFLG_DISABLED) {
-        gray_rect(6, x, y, x + gad->Width, y + gad->Height - 2);
+    } else if (gad->Flags & GFLG_DISABLED) {
+        fill_rect(7, x, y, x + gad->Width, y + gad->Height - 2);
     }
 
     gadget_draw_bounding_box(gad, BBFT_BUTTON, activated);

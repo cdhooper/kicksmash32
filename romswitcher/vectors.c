@@ -114,8 +114,9 @@ static const char *const vector_names[] = {
     "FPCP NAN",             // 54    0xd8      FPCP Signaling NAN
     NULL,                   // 55    0xdc      Unassigned / reserved
     "MMU Conf Error",       // 56    0xe0      MMU Configuration Error
-    "MC688851",             // 57    0xe4      MC688851-specific
-    "MC688851",             // 58    0xe8      MC688851-specific
+    "MC68851 Cfg",          // 57    0xe4      MC68851 PMMU Configuration Error
+    "MC68851 Ill",          // 58    0xe8      MC68851 PMMU Illegal Operation
+    "MC68851 Prt",          // 59    0xec      MC68851 PMMU Protocol Exception
                             // ...             Unassigned / reserved
                             // 64    0x100     User Defined Vector #0
                             // ...
@@ -194,7 +195,7 @@ Default(void)
         } else if (COUNTER(0) <= 3) {
             irq_show_regs(1);
         } else if (COUNTER(0) <= 20) {
-            sprintf(buf, "\n%\n", get_vector_name(vector_offset));
+            sprintf(buf, "\n%s\n", get_vector_name(vector_offset));
             serial_puts(buf);
         }
 #pragma GCC diagnostic pop
@@ -231,7 +232,7 @@ Ports(void)
 //  *INTENA  = INTENA_PORTS;  // disable interrupt
     st = *CIAA_ICR;
 
-    COUNTER(2)++;
+    COUNTER(2)++;  // 0x1008
 
     /*
      * If additional interrupts are handled by this routine in the
@@ -274,7 +275,7 @@ VBlank(void)
      *   ;end of the Copper list (wait for an impossible screen position)
      */
 #ifdef COPPER_DISABLED
-    /* These pointers are now updated by the Copper */
+    /* Bitplane pointers are normally updated by the Copper */
     *BPL1PT = BITPLANE_0_BASE;  // Bitplane 0 base address
     *BPL2PT = BITPLANE_1_BASE;  // Bitplane 1 base address
     *BPL3PT = BITPLANE_2_BASE;  // Bitplane 2 base address
@@ -343,6 +344,8 @@ VBlank(void)
             sprite1_data[0] = 0x00000000;
         }
 
+// #ifdef COPPER_DISABLED
+        /* Sprite pointers are normally updated by the Copper */
         *SPR0PTH = (uintptr_t) sprite0_data;
         *SPR1PTH = (uintptr_t) spritex_data;
         *SPR2PTH = (uintptr_t) sprite1_data;
@@ -351,6 +354,7 @@ VBlank(void)
         *SPR5PTH = (uintptr_t) spritex_data;
         *SPR6PTH = (uintptr_t) spritex_data;
         *SPR7PTH = (uintptr_t) spritex_data;
+// #endif
     }
 
     if (vblank_ints++ > 180) {  // 3 seconds
@@ -380,7 +384,7 @@ Serial(void)
 {
     SAVE_A4();
     GET_A4();
-    COUNTER(5)++;  // 0x101c
+    COUNTER(5)++;  // 0x1014
     serial_poll();
     RESTORE_A4();
 }
@@ -463,8 +467,8 @@ VECTOR_WRAP(Default);
  *  54     d8                FPCP Signaling NAN
  *  55     dc                Unassigned / reserved
  *  56     e0                MMU Configuration Error
- *  57     e4                MC688851-specific
- *  58     e8                MC688851-specific
+ *  57     e4                MC68851-specific
+ *  58     e8                MC68851-specific
  *  ...                      Unassigned / reserved
  *  64     100               User Defined Vector #0
  *  ...
@@ -483,6 +487,57 @@ const void *vectors[] =
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(DiskBlk), VECTOR(Ports),   VECTOR(VBlank),
     VECTOR(Audio),   VECTOR(Serial),  VECTOR(Default), VECTOR(NMI),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
     VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),

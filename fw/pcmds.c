@@ -966,7 +966,7 @@ static const config_set_t config_set[] = {
     { "led",            "LED",
       CFOFF(led_level), MODE_DEC },
     { "mode",           "Prom mode ",
-      CFOFF(led_level), MODE_DEC },
+      CFOFF(ee_mode), MODE_DEC },
     { "name",          "Board name",
       CFOFF(name), MODE_STRING },
     { "sw_bank",       "ROM Switcher bank",

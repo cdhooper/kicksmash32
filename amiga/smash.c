@@ -1863,7 +1863,7 @@ flash_cmd_core(uint32_t cmd, void *arg, uint argsize)
         }
 #ifdef DEBUG_FLASH_SEQUENCE
         /* Debug this particular command sequence */
-        if (cmd == KS_CMD_FLASH_ID) {
+        if ((cmd == KS_CMD_FLASH_ID) || (cmd == KS_CMD_FLASH_CMD)) {
             if (pos < ARRAY_SIZE(flash_debugdata)) {
                 *ADDR32(0x77800 + pos * 4) = addr;
                 *ADDR32(0x77810 + pos * 4) = val;

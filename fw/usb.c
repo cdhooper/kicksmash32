@@ -227,7 +227,7 @@ usb_signal_reset_to_host(int restart)
     rcc_periph_clock_enable(RCC_AFIO);
 
     gpio_setv(GPIOA, GPIO11 | GPIO12, 0);
-    gpio_setmode(GPIOA, GPIO11 | GPIO12, GPIO_SETMODE_OUTPUT_PPULL_10);
+    gpio_setmode(GPIOA, GPIO11 | GPIO12, GPIO_SETMODE_OUTPUT_PPULL_50);
 #ifdef DEBUG_NO_USB
     return;
 #endif

@@ -339,14 +339,14 @@ init_screen(void)
  *   5: horizontal pins
  *
  * pen:
- *   0: Background Gray
+ *   0: Light Gray (Background)
  *   1: Black
  *   2: White
  *   3: Lt. Blue
  *   4: Gold
  *   5: Gold Dim
  *   6: Dark Gray
- *   7: unassigned
+ *   7: Mid Gray
  */
 struct drawing {
     uint8_t type;
@@ -1482,6 +1482,7 @@ draw_page(void)
     SetRGB4(vp, 4, 13, 13, 5);  // Pen 4: Gold
     SetRGB4(vp, 5, 10, 9, 2);   // Pen 5: Gold dim
     SetRGB4(vp, 6, 3, 3, 3);    // Pen 6: Dark Gray
+    SetRGB4(vp, 7, 6, 6, 6);    // Pen 7: Mid Gray
 
 #if 0
     if (gadgets) {

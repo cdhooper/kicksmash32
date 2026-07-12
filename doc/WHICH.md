@@ -9,12 +9,12 @@ there were, but I certainly didn't expect this many.
 | :---------- | :-------------------- | :--------------- | :------------------------------------- |
 | A1200       | KickSmash 1200        | 17.60 mm (est.)  | D0-D15 ROM is on right, 42-pin sockets. DO NOT USE WITH CPU ACCELERATOR. |
 | ReA1200     | KickSmash 1200        | 17.76mm (exact)  | D0-D15 ROM is on right, 42-pin sockets. DO NOT USE WITH CPU ACCELERATOR. |
-| A3000       | KickSmash 32          | 19.00 mm (exact) | Older A3000s require ROM Tower adapter https://github.com/cdhooper/amiga_rombankswitcher_a3000_romtower |
+| A3000       | KickSmash 32          | 19.05 mm (est.) | Older A3000s require ROM Tower adapter https://github.com/cdhooper/amiga_rombankswitcher_a3000_romtower |
 | ReA3000     | KickSmash 32          | 19.00 mm (exact) | 42-pin sockets, A20 & A21 not connected to bus |
-| A4000       | KickSmash 32          | 19.00 mm (exact) | |
+| A4000       | KickSmash 32          | 19.05 mm (est.) | |
 | A3000T      | KickSmash 3KT         | 21.38 mm (est.)  | hostsmash -s 1032 |
 | AA3000+     | KickSmash 3KT         | 21.40 mm (exact) | |
-| A4000CR     | KickSmash 4KCR        | 55.40 mm (est.)  | D0-D15 ROM is on top, 40-pin sockets |
+| A4000CR     | KickSmash 4KCR        | 55.56 mm (est.)  | D0-D15 ROM is on top, 40-pin sockets |
 | ReA4000CR   | KickSmash 4KCR        | 55.40 mm (exact) | D0-D15 ROM is on top, 42-pin sockets |
 | A4000T      | KickSmash 4KT         | 20.32 mm (exact) | |
 | A4000TX     | KickSmash 32 (maybe?) | 19.69 mm (exact) | Hese says 0.775" |
