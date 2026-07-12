@@ -1603,7 +1603,8 @@ fail_get_nv:
                     ((info.bi_merge[bank] >> 4) >= ROM_BANKS) ||
                     ((info.bi_merge[bank] & 0xf) >= ROM_BANKS)) {
                     printf("FAIL: BANK_INFO bank=%x longreset=%x merge=%02x\n",
-                           info.bi_longreset_seq[bank], info.bi_merge[bank]);
+                           bank, info.bi_longreset_seq[bank],
+                           info.bi_merge[bank]);
                     errs++;
                 }
             }
@@ -1676,14 +1677,14 @@ fail_msg_state_get:
     /* KS_CMD_MSG_INFO */
     smash_msg_info_t msginfo;
 fail_msg_state:
-    rc = send_cmd(KS_CMD_MSG_INFO, NULL, 0, &msginfo, sizeof (msginfo), NULL);
+    rc = get_msg_info(&msginfo);
     if (rc != 0) {
         printf("FAIL: MSG_INFO (%s)\n", smash_err(rc));
         errs++;
     } else if ((msginfo.smi_state_amiga != mstate.amiga_app_state) ||
                (msginfo.smi_state_usb   != mstate.usb_app_state)) {
         printf("FAIL: MSG_INFO didn't match MSG_STATE "
-               "%04 %s= %04x  %04x %s= %04x\n",
+               "%04x ?= %04x  %04x ?= %04x\n",
                msginfo.smi_state_amiga, mstate.amiga_app_state,
                msginfo.smi_state_usb, mstate.usb_app_state);
         errs++;
@@ -4139,7 +4140,7 @@ get_ks_clock(uint *sec, uint *usec)
     if (rc != 0) {
         printf("Get clock failed: (%s)\n", smash_err(rc));
         if (flag_debug)
-            dump_memory(clock, sizeof (clock), DUMP_VALUE_UNASSIGNED);
+            dump_memory(ks_clock, sizeof (ks_clock), DUMP_VALUE_UNASSIGNED);
         *sec = 0;
         *usec = 0;
     } else {

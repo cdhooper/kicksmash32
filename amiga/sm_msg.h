@@ -9,8 +9,8 @@
  * Amiga-to-Kicksmash message interface functions.
  */
 
-#ifndef _MSG_H
-#define _MSG_H
+#ifndef _SM_MSG_H
+#define _SM_MSG_H
 
 /* Status codes from local message handling */
 #define MSG_STATUS_SUCCESS    0           //   0 No error
@@ -60,4 +60,4 @@ const char *smash_err(uint status);
 
 extern uint smash_cmd_shift;
 
-#endif /* _MSG_H */
+#endif /* _SM_MSG_H */

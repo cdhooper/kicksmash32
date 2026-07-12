@@ -57,7 +57,7 @@ static const pin_config_t pin_config[] =
     { "FLASH_OE",   FLASH_OE_PORT,   FLASH_OE_PIN,   FS_PU, PIN_INPUT },
     { "FLASH_A18",  FLASH_A18_PORT,  FLASH_A18_PIN,  FS_PD, PIN_INPUT },
     { "FLASH_A19",  FLASH_A19_PORT,  FLASH_A19_PIN,  FS_PD, PIN_INPUT },
-    { "SOCKET_D31", SOCKET_D31_PORT, SOCKET_D31_PIN, FS_PU, PIN_INPUT },
+    { "SOCKET_D31", SOCKET_D31_PORT, SOCKET_D31_PIN, FS_IN, PIN_INPUT },
     { "SOCKET_OE",  SOCKET_OE_PORT,  SOCKET_OE_PIN,  FS_PU, PIN_INPUT },
     { "FLASH_OEWE", FLASH_OEWE_PORT, FLASH_OEWE_PIN, FS_0,  PIN_EXT_PULLDOWN },
     { "BOOT1",      GPIOB,           GPIO2,          FS_IN, PIN_EXT_PULLDOWN },
@@ -352,6 +352,7 @@ check_board_standalone(void)
      * board fault, this can cause false detection.
      */
     gpio_setmode(FLASH_D0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    gpio_setmode(FLASH_D16_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);
     saw = 0;
     for (pass = 0; pass <= 1; pass++) {
         gpio_setv(FLASH_D0_PORT, 0xffff, pass);

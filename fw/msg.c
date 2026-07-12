@@ -1170,6 +1170,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             ks_reply(0, KS_STATUS_OK, count * 4, &values[0], 0, NULL);
             ks_reply(KS_REPLY_WE_RAW, 0, datalen, &values[count], 0, NULL);
 
+#undef FLASH_CMD_DEBUG
 #ifdef FLASH_CMD_DEBUG
             printf("FLASH_CMD: count=%u\n", count);
             for (pos = 0; pos < count; pos++)

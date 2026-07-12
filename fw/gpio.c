@@ -708,8 +708,7 @@ gpio_init(void)
 
     /* Amiga D31 is connected to allow sensing of 16-bit or 32-bit mode */
     gpio_setv(SOCKET_D31_PORT, SOCKET_D31_PIN, 1);
-    gpio_setmode(SOCKET_D31_PORT, SOCKET_D31_PIN,
-                 GPIO_SETMODE_INPUT_PULLUPDOWN);
+    gpio_setmode(SOCKET_D31_PORT, SOCKET_D31_PIN, GPIO_SETMODE_INPUT);
 
     /* Weakly pull up socket OE# (output enable) */
     gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
