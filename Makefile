@@ -11,18 +11,20 @@ else
 VERSION := $(VER)
 endif
 
-all: build-sw build-fw build-amiga build-romswitcher
-clean: clean-sw clean-fw clean-amiga clean-romswitcher
+all: build-sw build-fw build-amiga build-romswitcher build-smasherfw
+clean: clean-sw clean-fw clean-amiga clean-romswitcher clean-smasherfw
 
-build-fw build-amiga build-sw build-romswitcher:
+build-fw build-amiga build-sw build-romswitcher build-smasherfw:
 	@echo
 	@echo "* Building in $(@:build-%=%)"
 	@$(MAKE) -C $(@:build-%=%) all
 
-clean-sw clean-fw clean-amiga clean-romswitcher:
+clean-sw clean-fw clean-amiga clean-romswitcher clean-smasherfw:
 	@echo
 	@echo "* Cleaning in $(@:clean-%=%)"
 	@$(MAKE) -C $(@:clean-%=%) clean-all
+
+build-smasherfw: build-fw
 
 # ---------------------------------------------------------------
 
@@ -113,4 +115,4 @@ $(RELEASE_DIRS):
 # These are built by the amiga sub-make via build-amiga.
 amiga/smash amiga/smashftp amiga/romswitch: ;
 
-.PHONY: build-sw build-fw build-amiga clean-sw clean-fw clean-amiga all clean release populating
+.PHONY: build-sw build-fw build-amiga build-smasherfw clean-sw clean-fw clean-smasherfw clean-amiga all clean release populating

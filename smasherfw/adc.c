@@ -1,0 +1,256 @@
+/*
+ * This is free and unencumbered software released into the public domain.
+ * See the LICENSE file for additional details.
+ *
+ * Designed by Chris Hooper in 2020.
+ *
+ * ---------------------------------------------------------------------
+ *
+ * Analog to digital conversion for sensors.
+ */
+
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+#include "board.h"
+#include "cmdline.h"
+#include "printf.h"
+#include "main.h"
+#include "prom_access.h"
+#include "adc.h"
+#include "timer.h"
+#include "gpio.h"
+#include "config.h"
+#include "clock.h"
+#include "pin_tests.h"
+
+#define TEMP_BASE          25000     // Base temperature is 25C
+
+#if defined(STM32F407xx)
+#define TEMP_V25           760       // 0.76V
+#define TEMP_AVGSLOPE      25        // 2.5 mV/C
+#define SCALE_VREF         12100000  // 1.21V
+
+#elif defined(STM32F1)
+/* Verified STM32F103xE and STM32F107xC are identical */
+#define TEMP_V25           1410      // 1.34V-1.52V; 1.41V seems more accurate
+#define TEMP_AVGSLOPE      43        // 4.3 mV/C
+#define SCALE_VREF         12000000  // 1.20V
+
+#define GD32_TEMP_V25      1450      // 1.45V GD32F107 datasheet
+#define GD32_TEMP_AVGSLOPE 41        // 4.1 mV/C
+#define GD32_SCALE_VREF    12000000  // 1.20V
+
+#else
+#error STM32 architecture temp sensor slopes must be known
+#endif
+
+#define V3P3_DIVIDER_SCALE 2 / 10000 // (1k / 1k)
+
+#include <libopencm3/stm32/adc.h>
+#include <libopencm3/stm32/dac.h>
+#include <libopencm3/stm32/dma.h>
+#include <libopencm3/stm32/rcc.h>
+#include <libopencm3/stm32/gpio.h>
+#if defined(STM32F407xx)
+#define ADC_CHANNEL_TEMP ADC_CHANNEL_TEMP_F40
+#endif
+
+static const uint8_t channel_defs[] = {
+    ADC_CHANNEL_VREF,  // 0: Vrefint (used to calibrate other readings
+    ADC_CHANNEL_TEMP,  // 1: Vtemp Temperature sensor
+#if 0
+    8,                 // 2: PB0 - V5          (1k/1k divider)
+    3,                 // 2: PA3 - EEPROM V10  (10k/1k divider)
+    1,                 // 3: PA1 - V3P3        (1k/1k divider)
+    14,                // 4: PC4 - V5          (1k/1k divider)
+    15,                // 5: PC5 - EEPROM V5CL (1k/1k divider)
+    2,                 // 6: PA2 - V10FB (V10 feedback for regulator)
+#endif
+};
+
+#if 0
+typedef struct {
+    uint32_t gpio_port;
+    uint16_t gpio_pin;
+} channel_gpio_t;
+static const channel_gpio_t channel_gpios[] = {
+};
+#endif
+
+#define CHANNEL_COUNT ARRAY_SIZE(channel_defs)
+
+/* Buffer to store the results of the ADC conversion */
+static volatile uint16_t adc_buffer[CHANNEL_COUNT];
+
+static void
+adc_enable(void)
+{
+#if 0
+    int p;
+    for (p = 0; p < ARRAY_SIZE(channel_gpios); p++) {
+        gpio_setmode(channel_gpios[p].gpio_port, channel_gpios[p].gpio_pin,
+                     GPIO_SETMODE_INPUT_ANALOG);
+    }
+#endif
+}
+
+void
+adc_init(void)
+{
+    uint32_t adcbase = ADC1;
+
+    /* STM32F1... */
+    uint32_t dma = DMA1;  // STM32F1xx RM Table 78 Summary of DMA1 requests...
+    uint32_t channel = DMA_CHANNEL1;
+
+    adc_enable();
+
+    rcc_periph_clock_enable(RCC_ADC1);
+    rcc_periph_clock_enable(RCC_DMA1);
+    adc_power_off(adcbase);  // Turn off ADC during configuration
+    rcc_periph_reset_pulse(RST_ADC1);
+    adc_disable_dma(adcbase);
+
+    dma_disable_channel(dma, channel);
+    dma_channel_reset(dma, channel);
+    dma_set_peripheral_address(dma, channel, (uintptr_t)&ADC_DR(adcbase));
+    dma_set_memory_address(dma, channel, (uintptr_t)adc_buffer);
+    dma_set_read_from_peripheral(dma, channel);
+    dma_set_number_of_data(dma, channel, CHANNEL_COUNT);
+    dma_disable_peripheral_increment_mode(dma, channel);
+    dma_enable_memory_increment_mode(dma, channel);
+    dma_set_peripheral_size(dma, channel, DMA_CCR_PSIZE_16BIT);
+    dma_set_memory_size(dma, channel, DMA_CCR_MSIZE_16BIT);
+    dma_enable_circular_mode(dma, channel);
+    dma_set_priority(dma, channel, DMA_CCR_PL_MEDIUM);
+    dma_enable_channel(dma, channel);
+
+    adc_set_dual_mode(ADC_CR1_DUALMOD_IND);  // Independent ADCs
+
+    adc_enable_scan_mode(adcbase);
+
+    adc_set_continuous_conversion_mode(adcbase);
+    adc_set_sample_time_on_all_channels(adcbase, ADC_SMPR_SMP_239DOT5CYC);
+    adc_disable_external_trigger_regular(adcbase);
+    adc_disable_external_trigger_injected(adcbase);
+    adc_set_right_aligned(adcbase);
+    adc_enable_external_trigger_regular(adcbase, ADC_CR2_EXTSEL_SWSTART);
+
+    adc_set_regular_sequence(adcbase, CHANNEL_COUNT, (uint8_t *)channel_defs);
+    adc_enable_temperature_sensor();
+
+    adc_enable_dma(adcbase);
+
+    adc_power_on(adcbase);
+    adc_reset_calibration(adcbase);
+    adc_calibrate(adcbase);
+
+    /* Start the ADC and triggered DMA */
+    adc_start_conversion_regular(adcbase);
+}
+
+void
+adc_shutdown(void)
+{
+    dma_disable_channel(DMA1, DMA_CHANNEL1);
+}
+
+static void
+print_reading(int value, char *suffix)
+{
+    int  units = value / 1000;
+    uint milli = abs(value) % 1000;
+
+    if (*suffix == 'C') {
+        printf("%2d.%u %s", units, milli / 100, suffix);
+    } else {
+        printf("%d.%02u %s", units, milli / 10, suffix);
+    }
+}
+
+/*
+ * adc_get_scale
+ * -------------
+ * Captures the current scale value from the sensor table.  This value is
+ * based on the internal reference voltage and is then used to appropriately
+ * scale all other ADC readings.
+ */
+static uint
+adc_get_scale(uint16_t adc0_value)
+{
+    static int scale = 0;
+    int tscale;
+
+    if (adc0_value == 0)
+        adc0_value = 1;
+
+    if (is_gd32)
+        tscale = GD32_SCALE_VREF / adc0_value;
+    else
+        tscale = SCALE_VREF / adc0_value;
+
+    if (scale == 0)
+        scale = tscale;
+    else
+        scale += (tscale - scale) / 16;
+
+    return (scale);
+}
+
+void
+adc_show_sensors(void)
+{
+    uint     scale;
+    uint16_t adc[CHANNEL_COUNT];
+
+    /*
+     * raw / 4095 * 3.3V = voltage reading * resistor/div scale (2) = reading
+     *
+     * On STM32F407:
+     *     ADC_U1 IN16 is STM32 Temperature (* 10000 / 25 - 279000)
+     *     ADC_U1 IN17 is Vrefint 1.2V
+     *     ADC_U1 IN18 is Vbat (* 2)
+     *
+     *     ADC_CHANNEL_TEMP
+     *     ADC_CHANNEL_VREF
+     *     ADC_CHANNEL_VBAT
+     *
+     *     We could use Vrefin_cal to get a more accurate expected Vrefint
+     *     from factory-calibrated values when Vdda was 3.3V.
+     *
+     * Temperature sensor formula
+     *      Temp = (V25 - VSENSE) / Avg_Slope + 25
+     *
+     *           STM32F407               STM32F1xx
+     *      V25  0.76V                   1.43V
+     * AvgSlope  2.5                     4.3
+     * Calc      * 10000 / 25 - 279000   * 10000 / 43 - 279000
+     *
+     * Channel order (STM32F1):
+     *     adc_buffer[0] = Vrefint
+     *     adc_buffer[1] = Vtemperature
+     *     adc_buffer[2] = 5V sense / 2
+     *
+     * Algorithm:
+     *  * Vrefint tells us what 1.21V (STM32F407) or 1.20V (STM32F1xx) should
+     *  be according to ADCs.
+     *  1. scale = 1.2 / adc_buffer[0]
+     *          Because: reading * scale = 1.2V
+     *  2. Report V5:
+     *          adc_buffer[2] * scale * 2
+     */
+    memcpy(adc, (void *)adc_buffer, sizeof (adc_buffer));
+    scale = adc_get_scale(adc[0]);
+
+    uint calc_temp;
+    uint calc_vref;
+    calc_temp = ((int)(TEMP_V25 * 10000 - adc[1] * scale)) / TEMP_AVGSLOPE +
+                TEMP_BASE;
+    calc_vref = adc[0] * 3300 / 4096;
+
+    printf("Vrefint=%04x scale=%-4u ", adc[0], scale);
+    print_reading(calc_vref, "V\n");
+    printf("  Vtemp=%04x %8u   ", adc[1], adc[1] * scale);
+    print_reading(calc_temp, "C\n");
+}
