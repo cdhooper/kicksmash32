@@ -141,7 +141,7 @@ const char cmd_patt_help[] =
 "   h = hex (32 bytes)\n"
 "   S = swap bytes (endian)\n"
 "   <len> is the length of the area in bytes\n"
-"   <pattern> may be one, zero, blip, rand, strobe, walk0, walk1, addr, or a "
+"   <pattern> may be one, zero, blip, rand, strobe, walk0, walk1, addr, or a\n"
 "             specific value\n";
 const char cmd_patt_patterns[] =
     "<pattern> may be one, zero, blip, rand, strobe, walk0, walk1, addr, or a "

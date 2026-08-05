@@ -126,14 +126,6 @@ sprite_init(void)
     spritex_data[8] = 0x00000000;
     spritex_data[9] = 0x00000000;  // next sprite usage (0x0000000 = last usage)
 
-    *SPR0PTH = (uintptr_t) sprite0_data;
-    *SPR1PTH = (uintptr_t) spritex_data;
-    *SPR2PTH = (uintptr_t) sprite1_data;
-    *SPR3PTH = (uintptr_t) spritex_data;
-    *SPR4PTH = (uintptr_t) spritex_data;
-    *SPR5PTH = (uintptr_t) spritex_data;
-    *SPR6PTH = (uintptr_t) spritex_data;
-    *SPR7PTH = (uintptr_t) spritex_data;
 //  *SPR0POS = 0x2c20;
 //  *SPR0CTL = 0x0800;
 //  *SPR0DATA = 0x0800;

@@ -2001,7 +2001,7 @@ detect_byte_order(uint8_t *bufp)
         { BESWAP(0x11144ef9), BESWAP(0x00f800d2) },  // 2.04+
         { BESWAP(0x11114ef9), BESWAP(0x00fc00d2) },  // 1.3
         { BESWAP(0x612e4447), BESWAP(0x00f80190) },  // DiagROM 2.x Beta
-        { BESWAP(0x11144447), BESWAP(0x00f800d5) },  // DiagROM 2.x
+        { BESWAP(0x11144447), BESWAP(0x00f800d6) },  // DiagROM 2.x
         { BESWAP(0x11144ef9), BESWAP(0x00f80010) },  // ROM Switcher
         { BESWAP(0x11114ef9), BESWAP(0x00f8048c) },  // Logica-Dialoga
         { BESWAP(0x11114ef9), BESWAP(0x00f800f8) },  // AROS
@@ -2209,7 +2209,9 @@ execute_swapmode(uint8_t *buf, uint len, uint dir)
         default:
 unrecognized:
             printf("\n");
-            warnx("Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
+            warnx("Unrecognized Amiga ROM format: %02x %02x %02x %02x\n"
+                  "If the ROM is in byte-order format, the following option "
+                  "may work: -s 3210\n",
                   buf[0], buf[1], buf[2], buf[3]);
             return (1);
     }

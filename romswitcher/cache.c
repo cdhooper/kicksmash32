@@ -116,6 +116,12 @@ cache_data_noncache_16m(uint32_t addr)
 }
 
 void
+cache_flush(void)
+{
+    CacheControl(CACRF_ClearD | CACRF_ClearI, CACRF_ClearD | CACRF_ClearI);
+}
+
+void
 cache_init(void)
 {
     switch (cpu_type) {

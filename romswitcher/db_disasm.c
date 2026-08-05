@@ -2896,7 +2896,7 @@ get_modregstr_mit(dis_buffer_t *dbuf, int bit, int mod, int sz, int dd)
 		/*
 		 * write everything into buf
 		 */
-		/* if base register not suppresed */
+		/* if base register not suppressed */
 		if (mod == AR_IDX && (!bd || !ISBITSET(ext,7)))
 			PRINT_AREG(dbuf, reg);
 		else if (mod == MOD_SPECIAL && ISBITSET(ext,7)) {
@@ -3055,7 +3055,7 @@ get_fpustdGEN(dis_buffer_t *dbuf, u_short ext, const char *name)
 
 	/*
 	 * If bit seven is set, its a 040 s/d opcode, then if bit 2 is
-	 * set its "d".  This is not documented, however thats the way
+	 * set its "d".  This is not documented, however that's the way
 	 * it is.
 	 */
 

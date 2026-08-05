@@ -22,10 +22,10 @@
 static uint32_t *freelist = NULL;
 static uint32_t *freelist_chipmem = NULL;
 
-#define MALLOC_BASE              (RAM_BASE + (512 << 10))
-#define MALLOC_BASE_CHIPMEM      (512 << 10)  // base at 512 KB
-#define MALLOC_AREA_SIZE         (512 << 10)  // 512 KB
-#define MALLOC_CHIPMEM_AREA_SIZE (512 << 10)  // 512 KB
+#define MALLOC_BASE              (RAM_BASE + (256 << 10))
+#define MALLOC_BASE_CHIPMEM      (256 << 10)  // base at 256 KB
+#define MALLOC_AREA_SIZE         (256 << 10)  // 256 KB
+#define MALLOC_CHIPMEM_AREA_SIZE (256 << 10)  // 256 KB
 
 #undef DEBUG_MALLOC
 #ifdef DEBUG_MALLOC
@@ -57,7 +57,7 @@ malloc(size_t size)
     uint32_t *cur;
     uint32_t *prev = NULL;
     if (freelist == NULL) {
-        freelist = ADDR32(MALLOC_BASE);      // Base + 512 KB
+        freelist = ADDR32(MALLOC_BASE);      // Base of memory
         freelist[0] = MALLOC_AREA_SIZE - 4;  // Area size is 512KB - 4 bytes
         freelist[1] = (uintptr_t) NULL;      // Next pointer
     }

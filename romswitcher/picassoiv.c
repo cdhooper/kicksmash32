@@ -5,13 +5,17 @@
  * replacement sufficient to allow programs using some parts of GadTools
  * to function.
  *
- * Copyright 2025 Chris Hooper. This program and source may be used
- * and distributed freely, for any purpose which benefits the Amiga
- * community. All redistributions must retain this Copyright notice.
+ * Portions Copyright 2026 Stefan Reinauer.
+ * Portions Copyright 2026 Chris Hooper.
+ * Structure and some code was generated using AI and is Public Domain.
+ *
+ * This program and source may be used and distributed freely, for any
+ * purpose which benefits the Amiga community. All redistributions must
+ * retain this Copyright notice.
  *
  * DISCLAIMER: THE SOFTWARE IS PROVIDED "AS-IS", WITHOUT ANY WARRANTY.
  * THE AUTHOR ASSUMES NO LIABILITY FOR ANY DAMAGE ARISING OUT OF THE USE
- * OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
+ * OR MISUSE OF THIS SOFTWARE OR INFORMATION REPORTED BY THIS SOFTWARE.
  */
 #include <stdint.h>
 #include "amiga_chipset.h"
@@ -26,37 +30,74 @@
 #define ARRAY_SIZE(x) (sizeof (x) / sizeof ((x)[0]))
 #endif
 
-#define PICASSOIV_MFG          0x0877
-#define PICASSOIV_PRODUCT_Z2FF 0x17
-#define PICASSOIV_PRODUCT_Z3FF 0x18
+#define PICASSOIV_MFG          0x0877   // Village Tronic manufacturer ID
+#define PICASSOIV_PRODUCT_Z2FF 0x17     // Picasso IV Zorro II mode product ID
+#define PICASSOIV_PRODUCT_Z3FF 0x18     // Picasso IV Zorro III mode product ID
 #define P4_RGB_LOAD_NIBBLE     0x0f
 
 typedef struct {
-    uint32_t control_base;
-    uint32_t regs_base;
-    uint32_t post_base;
-    uint32_t mem_base;
-    uint8_t  variant;
-    uint8_t  seq0f_18;
-    uint8_t  product;
+    uint32_t control_base;  // CPLD register base
+    uint32_t regs_base;     // GD5446 register base address
+    uint32_t post_base;     // MMIO address (inside Zorro window)
+    uint32_t mem_base;      // Zorro Memory window base
+    uint8_t  product;       // Zorro Product ID (0x17 or 0x18)
+    uint8_t  bridge_rev;    // PCI Bridge revision (1 or 4 are common)
+    uint8_t  is_aa_video;   // Picasso IV has detected 24-bit video
+    uint8_t  is_zorro2;     // Picasso IV is running in Zorro II mode
+    uint8_t  is_64mb;       // Zorro interface is 64 MB
+    uint8_t  is_gd_revb;    // GD5446 is Rev B
 } p4_ff_t;
 
+/*
+ * VCLK3, HDisplay, HSyncStart, HSyncEnd, HTotal, VDisplay,
+ * VSyncStart, VSyncEnd, VTotal, CaptureWidth, CaptureHeight, Flags
+ */
 static const uint16_t p4_ff_pal[12] = {
-    0x1c1c, 0x02f8, 0x030c, 0x0370, 0x0398, 0x025b,
-    0x025c, 0x025e, 0x0271, 0x0310, 0x0270, 0x0000,
+    0x1c1c,  // 0: CR0E and CR1E VCLK3 numerator and denominator
+    0x02f8,  // 1: CR1 CRTC Horz Display End
+    0x030c,  // 2: CR4 Horz Sync Start and CR1C Horz Sync Start Adjust
+    0x0370,  // 3: CR5 Horz Sync End
+    0x0398,  // 4: CR1C Horz Total Adjust and CR0 Horz Total
+    0x025b,  // 5: CR12 and CR7 Vert Display End
+    0x025c,  // 6: CR10 and CR7 Vert Sync Start
+    0x025e,  // 7: CR11 Vert Sync End
+    0x0271,  // 8: CR6 Vert Total
+    0x0310,  // 9: CR3D Video Buffer Address
+    0x0270,  // 10: CR57 Video Capture Max Height
+    0x0000,  // 11: CR6 CR12 CR10 CR11 CR1A (shift other timing values above)
 };
 
 static const uint16_t p4_ff_ntsc[12] = {
-    0x1c1c, 0x02f8, 0x0310, 0x0370, 0x0398, 0x01e9,
-    0x01f0, 0x01f4, 0x020d, 0x0310, 0x01ea, 0x0000,
+    0x1c1c,  // 0: CR0E and CR1E VCLK3 numerator and denominator
+    0x02f8,  // 1: CR1 CRTC Horz Display End
+    0x030c,  // 2: CR4 Horz Sync Start and CR1C Horz Sync Start Adjust
+    0x0370,  // 3: CR5 Horz Sync End
+    0x0398,  // 4: CR1C Horz Total Adjust and CR0 Horz Total
+    0x01e9,  // 5: CR12 and CR7 Vert Display End
+    0x01f0,  // 6: CR10 and CR7 Vert Sync Start
+    0x01f4,  // 7: CR11 Vert Sync End
+    0x020d,  // 8: CR6 Vert Total
+    0x0310,  // 9: CR3D Video Buffer Address
+    0x01ee,  // 10: CR57 Video Capture Max Height
+    0x0000,  // 11: CR6 CR12 CR10 CR11 CR1A (shift other timing values above)
 };
 
+/*
+ * p4_delay
+ * --------
+ * Perform a bus cycle (CIA A read) which takes approximately 1.4 us
+ */
 static void
 p4_delay(void)
 {
     (void) *CIAA_PRA;
 }
 
+/*
+ * p4_delay_count
+ * --------------
+ * Perform multiple bus cycles (CIA A read) to create a fixed delay.
+ */
 static void
 p4_delay_count(uint count)
 {
@@ -74,15 +115,19 @@ p4_index_write(volatile uint8_t *regs, uint port, uint8_t idx, uint8_t value)
 static uint8_t
 crtc_read(volatile uint8_t *regs, uint8_t idx)
 {
-    regs[0x3d4] = idx;
+    uint8_t value;
+
+    regs[0x3d4] = idx;      // CRTC Index
     p4_delay();
-    return (regs[0x3d5]);
+    value = regs[0x3d5];    // CRTC Data
+    p4_delay();
+    return (value);
 }
 
 static void
 crtc_write(volatile uint8_t *regs, uint8_t idx, uint8_t value)
 {
-    p4_index_write(regs, 0x3d4, idx, value);
+    p4_index_write(regs, 0x3d4, idx, value);  // CRTC Index + Data
 }
 
 static void
@@ -100,21 +145,25 @@ crtc_clear(volatile uint8_t *regs, uint8_t idx, uint8_t bits)
 static uint8_t
 seq_read(volatile uint8_t *regs, uint8_t idx)
 {
-    regs[0x3c4] = idx;
+    uint8_t value;
+
+    regs[0x3c4] = idx;      // VGA SEQ Index
     p4_delay();
-    return (regs[0x3c5]);
+    value = regs[0x3c5];    // VGA SEQ Data
+    p4_delay();
+    return (value);
 }
 
 static void
 seq_write(volatile uint8_t *regs, uint8_t idx, uint8_t value)
 {
-    p4_index_write(regs, 0x3c4, idx, value);
+    p4_index_write(regs, 0x3c4, idx, value);  // VGA SEQ Index + Data
 }
 
 static void
 gc_write(volatile uint8_t *regs, uint8_t idx, uint8_t value)
 {
-    p4_index_write(regs, 0x3ce, idx, value);
+    p4_index_write(regs, 0x3ce, idx, value);  // GFX Index + Data
 }
 
 static void
@@ -123,7 +172,7 @@ p4_wait_input_status(volatile uint8_t *regs, uint8_t bit_set)
     uint timeout;
 
     for (timeout = 0; timeout < 2000; timeout++) {
-        if (((regs[0x3da] & 0x01) != 0) == bit_set)
+        if (((regs[0x3da] & 0x01) != 0) == bit_set)  // VGA Status
             return;
         p4_delay();
     }
@@ -275,10 +324,10 @@ p4_program_video_slot_config(const p4_ff_t *ff)
 static void
 p4_control_cold_init(p4_ff_t *ff)
 {
-    volatile uint8_t *control = VADDR8(ff->control_base);
-    volatile uint8_t *ctrl400 = VADDR8(ff->control_base + 0x400);
-    volatile uint8_t *mem1000 = VADDR8(ff->mem_base + 0x1000);
-    volatile uint8_t *mem0800 = VADDR8(ff->mem_base + 0x0800);
+    volatile uint8_t *control    = VADDR8(ff->control_base);
+    volatile uint8_t *ctrl400    = VADDR8(ff->control_base + 0x400);
+    volatile uint8_t *gd_cfg     = VADDR8(ff->mem_base + 0x1000);
+    volatile uint8_t *bridge_cfg = VADDR8(ff->mem_base + 0x0800);
     uint8_t chip;
     uint8_t ctrl404;
     uint8_t revision;
@@ -291,72 +340,96 @@ p4_control_cold_init(p4_ff_t *ff)
     control[0] = 0x03;
     p4_delay();
 
-    if (ff->product == PICASSOIV_PRODUCT_Z3FF) {
-        *VADDR32(ff->mem_base + 0x1000 + 0x14) = 0xc1030000;
-        *VADDR32(ff->mem_base + 0x1000 + 0x10) = 0x08000080;
-        *VADDR32(ff->mem_base + 0x1000 + 0x08) = 0x00000003;
-        *VADDR32(ff->mem_base + 0x1000 + 0x04) = 0x03000002;
+    /* Check if bit 24 is read-only (GD5446 Rev B) or read-write (Rev A) */
+    gd_cfg[0x13] = 0xff;
+    p4_delay();
+    cache_flush();  // Flush CPU instruction and data cache
+    *VADDR32(gd_cfg + 0x14) = 0x00000000;
+
+    ff->is_gd_revb = (gd_cfg[0x13] != 0xff);
+
+    /* GD5446 PCI Config */
+    if (ff->is_gd_revb) {
+        /* GD5446 Rev B */
+        *VADDR32(gd_cfg + 0x14) = 0x00800b00;  // VGA/BitBLT at 0x000b8000
+        *VADDR32(gd_cfg + 0x18) = 0xc0030000;  // GPIO at 0x3c0
+        ff->post_base += 0x100;                // Rev B MMIO is BAR14 + 0x100
     } else {
-        mem1000[0x13] = 0xff;
-        p4_delay();
-        if (mem1000[0x13] != 0xff) {
-            *VADDR32(ff->mem_base + 0x1000 + 0x14) = 0x00800b00;
-            ff->post_base += 0x100;
-        } else {
-            *VADDR32(ff->mem_base + 0x1000 + 0x14) = 0xc0030000;
-        }
-        *VADDR32(ff->mem_base + 0x1000 + 0x10) = 0x00000080;
-        *VADDR32(ff->mem_base + 0x1000 + 0x04) = 0x03000000;
+        /* GD5446 Rev A */
+        *VADDR32(gd_cfg + 0x14) = 0xc0030000;  // GPIO at 0x3c0
     }
+    *VADDR32(gd_cfg + 0x10) = 0x00000080;      // Display Memory at 0x80000000
+    *VADDR32(gd_cfg + 0x04) = 0x03000000;      // Enable memory and I/O
+    p4_delay();
 
-    *VADDR32(ff->mem_base + 0x0800 + 0x14) = 0x00002080;
-    *VADDR32(ff->mem_base + 0x0800 + 0x10) = 0x00000080;
-    if (ff->product != PICASSOIV_PRODUCT_Z3FF) {
-        *VADDR32(ff->mem_base + 0x0800 + 0x1c) = 0x00000080;
-        *VADDR32(ff->mem_base + 0x0800 + 0x18) = 0x00800b00;
-    }
+    /* Bridge PCI config */
+    *VADDR32(bridge_cfg + 0x1c) = 0x00000080;  // Unknown 0x80000000
+    *VADDR32(bridge_cfg + 0x18) = 0x00800b00;  // GPIO base 0x000b8000
+    *VADDR32(bridge_cfg + 0x14) = 0x00002080;  // BitBLT/MMIO 0x80200000
+    *VADDR32(bridge_cfg + 0x10) = 0x00000080;  // Display Memory 0x80000000
 
-    chip = mem0800[0x02];
+    chip = bridge_cfg[0x02];        // PCI Device ID
     if (chip == 0x02)
-        chip = mem0800[0x08];
+        chip = bridge_cfg[0x08];    // PCI Revision
+    ff->bridge_rev = chip;
 
-    control[0] = 0x07;
+    control[0] = 0x07;  // Bank select
+    p4_delay();
     if (chip >= 0x03) {
         control[0x10] = 0x0c;
         control[0x14] = 0x0c;
         control[0x18] = 0x0c;
         control[0x1c] = 0x0c;
     }
+    if ((chip >= 0x04) && ff->is_64mb) {  // Newer chip and 64 MB Zorro window
+        control[0] = 0x27;  // Bank select
+        p4_delay();
+        control[0] = 0x27;  // Bank select
+        p4_delay();
+    }
 
-    ctrl404 = ctrl400[0x04];
+    ctrl404 = ctrl400[0x04];  // GP_FLICKER_CONTROL
     revision = ctrl404 >> 4;
     if (ctrl404 & 0x04) {
         aa_video = 1;
         if (revision < 4)
             aa_video = 0;
     }
-    ff->variant = aa_video;
+    ff->is_aa_video = aa_video;
 
-    ctrl400[0x00] = 0x00;
-    ctrl400[0x06] = 0x03;
-    p4_delay_count(8);
-    (void) p4_ctrl_wait(&ctrl400[0x06], 0x87, 0x87);
-    ctrl400[0x06] = 0x01;
-    p4_delay_count(8);
-    (void) p4_ctrl_wait(&ctrl400[0x06], 0x87, 0x05);
-    ctrl400[0x06] = 0x00;
-    p4_delay_count(8);
-    (void) p4_ctrl_wait(&ctrl400[0x06], 0x87, 0x00);
-    ctrl400[0x06] = 0x02;
-    p4_delay_count(8);
-    (void) p4_ctrl_wait(&ctrl400[0x06], 0x87, 0x82);
+    ctrl400[0x00] = 0x00;  // GP_AUDIO_CONTROL
 
-    ctrl400[0x06] = 0x00;
+    /* Probe DDC pins (b0=SCL_OUT, b1=SDA_OUT, b2=SCL_IN, b7=SDA_IN) */
+    ctrl400[0x06] = 0x03;  // GP_I2C SCL=1 SDA=1
     p4_delay_count(8);
-    ctrl400[0x06] = 0x01;
+    (void) p4_ctrl_wait(&ctrl400[0x06], 0x87, 0x87);  // SCL_IN=1 SDA_IN=1
+    ctrl400[0x06] = 0x01;  // GP_I2C SCL=1 SDA=0
     p4_delay_count(8);
-    ctrl400[0x06] = 0x03;
+    (void) p4_ctrl_wait(&ctrl400[0x06], 0x87, 0x05);  // SCL_IN=1 SDA_IN=0
+    ctrl400[0x06] = 0x00;  // GP_I2C SCL=0 SDA=0
     p4_delay_count(8);
+    (void) p4_ctrl_wait(&ctrl400[0x06], 0x87, 0x00);  // SCL_IN=0 SDA_IN=0
+    ctrl400[0x06] = 0x02;  // GP_I2C SCL=0 SDA=1
+    p4_delay_count(8);
+    (void) p4_ctrl_wait(&ctrl400[0x06], 0x87, 0x82);  // SCL_IN=0 SDA_IN=1
+
+    /* Restore DDC tri-state sequence by generating I2C STOP */
+    ctrl400[0x06] = 0x00;  // GP_I2C SCL=0 SDA=0
+    p4_delay_count(8);
+    ctrl400[0x06] = 0x01;  // GP_I2C SCL=1 SDA=0
+    p4_delay_count(8);
+    ctrl400[0x06] = 0x03;  // GP_I2C SCL=1 SDA=1
+    p4_delay_count(8);
+
+    printf("GD5446-%c R%u %uMB Zorro%u%s\n", 'A' + ff->is_gd_revb,
+           chip, ff->is_64mb ? 64 : 32,
+           (ff->product == PICASSOIV_PRODUCT_Z3FF) ? 3 : 2,
+           ff->is_aa_video ? " AA" : "");
+#undef DEBUG_OUTPUT
+#ifdef DEBUG_OUTPUT
+    printf("GDPCI=%08x  BrCfg=%08x\n",
+           (uintptr_t) gd_cfg, (uintptr_t) bridge_cfg);
+#endif
 }
 
 static void
@@ -365,25 +438,39 @@ p4_unlock_extended(volatile uint8_t *regs)
     regs[0x3c6] = 0xff;             // Palette Pixel Mask
     p4_delay_count(8);
 
-    seq_write(regs, 0x08, 0x43);    // SR8 DDC2B DDCDAT=1 DDCCLK=1
+    seq_write(regs, 0x08, 0x43);    // SR8 DDC2B DDCCLK=1 DDCDAT=1
     p4_delay_count(8);
     (void) seq_read(regs, 0x08);
-    seq_write(regs, 0x08, 0x41);    // SR8 DDC2B DDCDAT=0 DDCCLK=1
+    seq_write(regs, 0x08, 0x41);    // SR8 DDC2B DDCCLK=1 DDCDAT=0
     p4_delay_count(8);
     (void) seq_read(regs, 0x08);
-    seq_write(regs, 0x08, 0x40);    // SR8 DDC2B DDCDAT=0 DDCCLK=0
+    seq_write(regs, 0x08, 0x40);    // SR8 DDC2B DDCCLK=0 DDCDAT=0
     p4_delay_count(8);
     (void) seq_read(regs, 0x08);
-    seq_write(regs, 0x08, 0x42);    // SR8 DDC2B DDCDAT=1 DDCCLK=0
+    seq_write(regs, 0x08, 0x42);    // SR8 DDC2B DDCCLK=0 DDCDAT=1
     p4_delay_count(8);
     (void) seq_read(regs, 0x08);
 
-    seq_write(regs, 0x08, 0x40);    // SR8 DDC2B DDCDAT=0 DDCCLK=0
+    /* Generate I2C STOP */
+    seq_write(regs, 0x08, 0x40);    // SR8 DDC2B DDCCLK=0 DDCDAT=0
     p4_delay_count(8);
-    seq_write(regs, 0x08, 0x41);    // SR8 DDC2B DDCDAT=0 DDCCLK=1
+    seq_write(regs, 0x08, 0x41);    // SR8 DDC2B DDCCLK=1 DDCDAT=0
     p4_delay_count(8);
-    seq_write(regs, 0x08, 0x43);    // SR8 DDC2B DDCDAT=1 DDCCLK=1
+    seq_write(regs, 0x08, 0x43);    // SR8 DDC2B DDCCLK=1 DDCDAT=1
     p4_delay_count(8);
+}
+
+static void
+p4_dac_hidden_write(volatile uint8_t *regs, uint8_t value)
+{
+    uint8_t old = regs[0x3c6];  // Save Palette Pixel Mask
+    regs[0x3c6] = 0x00;         // Begin sequence
+    p4_delay();
+    p4_dac_hidden_read4(regs);
+    regs[0x3c6] = value;
+    p4_delay();
+    regs[0x3c6] = old;          // Restore Palette Pixel Mask
+    p4_delay();
 }
 
 static void
@@ -440,6 +527,8 @@ p4_vga_cold_init(const p4_ff_t *ff, volatile uint8_t *regs)
         { 0x1b, 0xa2 },  // CR1B Ext Control  [1]=Ext Addr Wrap, [5]=Blank Ctrl
         { 0x1c, 0x00 },  // CR1C Sync Adjust / Genlock
         { 0x1d, 0x40 },  // CR1D Overlay Ext Control: [5]=Overlay Timing Select
+
+        /* Cirrus video-window/capture extensions used by the flicker fixer */
         { 0x3e, 0x20 },  // CR3E Video Win Master Ctrl: [5]=Error Diffision En
         { 0x3f, 0x01 },  // CR3F Misc Ctrl: [0]=Auto-Decimation Mem Page Bit
         { 0x50, 0x01 },  // CR50 Video Cap [1:0]=1=Reserved
@@ -465,19 +554,21 @@ p4_vga_cold_init(const p4_ff_t *ff, volatile uint8_t *regs)
         { 0x08, 0xff },  // GR8 Write Enable [7:0]
         { 0x0b, 0x28 },  // GRB CRTC Text Crsr End[4:0]=01000=d'8, Skew[6:5]=01
         { 0x0e, 0x20 },  // GRE Power Mgmt [5]=Enable Write to GR33
+
         { 0x31, 0x04 },  // GR31 BLT Start [4]=1=Reset
         { 0x31, 0x80 },  // GR31 BLT Start [7]=1=Enable Autostart
+
         { 0x17, 0x0c },  // GR17 Active Display [2]=1=No INTR#, [3]=1=No Feature
         { 0x18, 0x04 },  // GR18 [2]=1=Enable 8-MCLK EDO Timing
         { 0x19, 0x00 },  // GR19 GPIO Port Config
     };
     static const uint8_t attr_init[][2] = {
         /* 0x20 in index is Display Enable */
-        { 0x30, 0x01 },  // AR0 Palette 0 = Dark Blue
-        { 0x31, 0x00 },  // AR1 Palette 1 = Black
-        { 0x32, 0x0f },  // AR2 Palette 2 = Light Blue
-        { 0x33, 0x00 },  // AR3 Palette 3 = Black
-        { 0x34, 0x00 },  // AR4 Palette 4 = Black
+        { 0x30, 0x01 },  // AR10 Attribute Controller Mode = Graphics
+        { 0x31, 0x00 },  // AR11 Overscan (Border) Color = Black
+        { 0x32, 0x0f },  // AR12 Color Plane Enable = Enable Planes [3:0]
+        { 0x33, 0x00 },  // AR13 Pixel Panning = No shift
+        { 0x34, 0x00 },  // AR14 Color Select = No changes to LUT
     };
     uint x;
 
@@ -499,7 +590,7 @@ p4_vga_cold_init(const p4_ff_t *ff, volatile uint8_t *regs)
         p4_delay();
     }
 
-    /* Load some elements of 16-color palette */
+    /* Load Attribute Controller registers (AR10...AR14) */
     (void) regs[0x3da];     // Force 0x3c0 toggle to Index
     for (x = 0; x < ARRAY_SIZE(attr_init); x++) {
         regs[0x3c0] = attr_init[x][0];  // Index
@@ -510,18 +601,11 @@ p4_vga_cold_init(const p4_ff_t *ff, volatile uint8_t *regs)
 
     seq_write(regs, 0x07, 0x21);  // SR7 Ext Seq Mode [0]=En Ext Disp [5]=En FB1
     seq_write(regs, 0x16, 0x00);  // SR16 Display FIFO Threshold [3:0]=0
-    if (ff->seq0f_18)
+    if (ff->is_zorro2)
         seq_write(regs, 0x0f, 0x18);  // SRF DRAM CTRL [4:3]=11 Bus Width=64-bit
 
-    /* XXX: Should call p4_dac_hidden_write() here */
-    regs[0x3c6] = 0x00; // Begin sequence
-    p4_delay();
-    p4_dac_hidden_read4(regs);
-    regs[0x3c6] = 0x00; // Hidden DAC=00 Disable Extended modes, 5:5:5, VGA
-    p4_delay();
-    regs[0x3c6] = 0x00; // Hidden DAC=00 (Bug workaround? Just to be sure??)
-    p4_delay();
-    /* XXX: Should call p4_dac_hidden_write() here */
+    /* Hidden DAC=00 Disable Extended modes, 5:5:5, VGA */
+    p4_dac_hidden_write(regs, 0x00);
 
     p4_wait_input_status(regs, 1);
     p4_wait_input_status(regs, 0);
@@ -539,7 +623,7 @@ p4_vga_cold_init(const p4_ff_t *ff, volatile uint8_t *regs)
     p4_wait_input_status(regs, 0);
 
     if ((regs[0x3c2] & 0x10) == 0) {  // Input Status Register 0 [4]=DAC Sensing
-        /* Dark green */
+        /* Monitor is monochrome -- Use dark green */
         regs[0x3c8] = 0x00; // Palette Address (write-only)
         p4_delay();
         regs[0x3c9] = 0x04; // Palette Data: Red=0x04
@@ -556,11 +640,11 @@ p4_vga_cold_init(const p4_ff_t *ff, volatile uint8_t *regs)
 }
 
 static void
-p4_program_vga_timing(volatile uint8_t *regs, const uint16_t timing[12],
-                      uint variant)
+p4_program_vga_timing(p4_ff_t *ff, volatile uint8_t *regs,
+                      const uint16_t timing[12], uint variant)
 {
     static const uint8_t cfg[2][4] = {
-        {           // VARIANT 0
+        {           // VARIANT 0 (not aa_video)
             0x02,   // CR13 Timing divisor = 4
             0x01,   // CR13 CRTC Offset (putch) = 1 * timing / 4
             0xa0,   // Hidden DAC=ExtColor, Clk2, 5:5:5 Sierra
@@ -583,28 +667,24 @@ p4_program_vga_timing(volatile uint8_t *regs, const uint16_t timing[12],
         0x18,  // [5:3]=011 = -1 VCLKs
     };
     const uint8_t *cur_cfg = cfg[variant ? 1 : 0];
-    uint8_t old;
     uint8_t value;
     uint x;
     uint shift;
+    (void) ff;
 
-    regs[0x3c6] = 0xff;        // Palette Pixel Mask
+    regs[0x3c6] = 0xff;         // Palette Pixel Mask
+
+    /* Unprotect the CRTC and select the graphics mode used by the ROM */
     crtc_write(regs, 0x14, crtc_read(regs, 0x14) & 0x9f);
-                               // CR14 Disable DoubleWord Mode and CounntByFour
+                                // CR14 Disable DoubleWord Mode and CountByFour
     crtc_write(regs, 0x17, 0xc3); // CR17 Timing Enable, Byte Mode, CGA Support
     gc_write(regs, 0x05, 0x40);   // GR5 [6]=256-color Mode
 
-    /* XXX: Should turn below into p4_dac_hidden_write() */
-    old = regs[0x3c6];         // Save Palette Pixel Mask
-    regs[0x3c6] = 0x00;        // Begin sequence
-    p4_delay();
-    p4_dac_hidden_read4(regs);
-    regs[0x3c6] = cur_cfg[2];  // Hidden DAC=0xa0 ExtColor, Clk2, 5:5:5 Sierra
-                               // Hidden DAC=0xe5 ExtColor, Ext, Clk2, 8:8:8 16M
-    p4_delay();
-    regs[0x3c6] = old;         // Palette Pixel Mask
-    p4_delay();
-    /* XXX: Should turn above into p4_dac_hidden_write() */
+    /*
+     * Hidden DAC=0xa0 ExtColor, Clk2, 5:5:5 Sierra
+     * Hidden DAC=0xe5 ExtColor, Ext, Clk2, 8:8:8 16M
+     */
+    p4_dac_hidden_write(regs, cur_cfg[2]);
 
     seq_write(regs, 0x02, 0xff);            // SR2 Seq Plane [3:0]=1111 En All
     seq_write(regs, 0x04, seq_read(regs, 0x04) | 0x08);
@@ -612,8 +692,21 @@ p4_program_vga_timing(volatile uint8_t *regs, const uint16_t timing[12],
     seq_write(regs, 0x07, seq_read(regs, 0x07) | 0x01);
                                             // SR7 Ext Seq [0]=En Packed
 
+    /* Program VCLK3 from the packed timing word */
     x = timing[0];                          // 0x1c1c both PAL and NTSC
-    seq_write(regs, 0x1e, x & 0x3f);        // SR1E VCLK3 Denmoninator
+#undef AMIGEACE_TEST
+#ifdef AMIGEACE_TEST
+    if (ff->is_gd_revb && (ff->bridge_rev == 0x01)) {
+        /*
+         * Test for AmigaACE
+         *      GD5446B RevB BridgeRev1  SRE=0x2c, not 0x1c
+         *      GD5446B RevB BridgeRev1 SR1E=0x28, not 0x1c
+         */
+        x = 0x2c28;  // Clock Multiplier/Divider
+        printf("AmigaACE test\n");
+    }
+#endif
+    seq_write(regs, 0x1e, x & 0x3f);        // SR1E VCLK3 Denoninator
     seq_write(regs, 0x0e, (x >> 8) & 0x7f); // SRE VCLK3 Numerator
     seq_write(regs, 0x07, (seq_read(regs, 0x07) & 0xf1) | cur_cfg[3]);
                                     // SR7 Ext Seq [3:1]=011=16bpp or 010=24bpp
@@ -626,7 +719,18 @@ p4_program_vga_timing(volatile uint8_t *regs, const uint16_t timing[12],
                                         // CR1 CRTC Horz Display End
     crtc_write(regs, 0x04, (timing[2] >> 3) & 0xff);
                                         // CR4 Horz Sync Start
-    crtc_write(regs, 0x1c, timing[2] & 7);
+
+    /* Overwrite previous 0x1c (PicassoIV ROM does this) */
+    crtc_write(regs, 0x1c, timing[2] & 7);  // CR1C Horz Sync Start Adjust
+#ifdef AMIGEACE_TEST
+    if (ff->is_gd_revb && (ff->bridge_rev == 0x01)) {
+        /*
+         * Test for AmigaACE
+         *      GD5446B RevB BridgeRev1 CR1C=0x00, not 0x04
+         */
+        crtc_write(regs, 0x1c, 0x00);  // CR1C Horz Sync Start Adjust
+    }
+#endif
     value = (crtc_read(regs, 0x05) & 0xe0) | ((timing[3] >> 3) & 0x1f);
     crtc_write(regs, 0x05, value);      // CR5 Horz Sync End
 
@@ -651,6 +755,18 @@ p4_program_vga_timing(volatile uint8_t *regs, const uint16_t timing[12],
     crtc_write(regs, 0x07, value);      // CR7 Vert Display End [9,8]
 
     x = (timing[6] >> shift) - 1;
+#ifdef AMIGEACE_TEST
+    if (ff->is_gd_revb && (ff->bridge_rev == 0x01)) {
+        /*
+         * Test for AmigaACE
+         *      GD5446B RevB BridgeRev1 x=0xee, not 0xef
+         *
+         * This one seems to cause a split in the screen on
+         * a Rev B with bridge rev 4.
+         */
+        x = 0xee;
+    }
+#endif
     crtc_write(regs, 0x10, x & 0xff);   // CR10 Vert Sync Start [7:0]
     value = crtc_read(regs, 0x07) & 0x7b;
     if (x & 0x100)
@@ -660,9 +776,19 @@ p4_program_vga_timing(volatile uint8_t *regs, const uint16_t timing[12],
     crtc_write(regs, 0x07, value);      // CR7 Vert Sync Start [9,8]
 
     x = (timing[7] >> shift) - 1;
+#ifdef AMIGEACE_TEST
+    if (ff->is_gd_revb && (ff->bridge_rev == 0x01)) {
+        /*
+         * Test for AmigaACE
+         *      GD5446B RevB BridgeRev1 x=0x32, not 0x33
+         */
+        x = 0x32;
+    }
+#endif
     crtc_write(regs, 0x11, (crtc_read(regs, 0x11) & 0xf0) | (x & 0x0f));
                                         // CR11 Vert Sync End [3:0]
 
+    /* Update VGA_MISC with polarity settings */
     regs[0x3c2] = ((regs[0x3cc] & 0x2f) | ((timing[11] & 3) << 6)) ^ 0xc0;
                                         // Misc Sync Polarity [6]=Horz [7]=Vert
 
@@ -684,11 +810,12 @@ p4_program_vga_timing(volatile uint8_t *regs, const uint16_t timing[12],
 }
 
 static void
-p4_program_ff_ext(volatile uint8_t *regs, const uint16_t timing[12],
-                  uint capture_mode)
+p4_program_ff_ext(const p4_ff_t *ff, volatile uint8_t *regs,
+                  const uint16_t timing[12], uint capture_mode)
 {
     uint x;
     uint8_t value;
+    (void) ff;
 
     crtc_write(regs, 0x5b, crtc_read(regs, 0x5b) & 0x1f);  // CR5B Brightness
     crtc_write(regs, 0x5d, crtc_read(regs, 0x5d) & 0x33);  // Start Addr [1:0]
@@ -715,7 +842,21 @@ p4_program_ff_ext(volatile uint8_t *regs, const uint16_t timing[12],
     crtc_write(regs, 0x51, 0x01);  // CR51 Video Capture [2:0]001=RGB16
     crtc_write(regs, 0x56, 0x00);  // CR56 Capture Vert Delay 0=no delay
     crtc_write(regs, 0x54, 0x00);  // CR54 Capture Horz Delay 0=no delay
-    crtc_write(regs, 0x3e, 0x00);  // CR3E Vid Win Control [0]=0 Disable
+//  crtc_write(regs, 0x3e, 0x00);  // CR3E Vid Win Control [0]=0 Disable
+#ifdef AMIGEACE_TEST
+    if (ff->is_gd_revb && (ff->bridge_rev == 0x01)) {
+        /*
+         * Test for AmigaACE
+         *      GD5446B RevB BridgeRev1  CR3E=0x00, not 0x20
+         */
+        crtc_write(regs, 0x3e, 0x00);  // CR3E Vid Win Control [0]=0 Disable
+    }
+#endif
+
+    /*
+     * Capture mode 0: 0x12 = 16-bit capture port, single-edge clock.
+     * Capture mode 1: 0x0a = 8-bit capture port, double-edge clock.
+     */
     crtc_write(regs, 0x50, capture_mode ? 0x0a : 0x12);  // CR50 Capture Control
                                    // Capture Control [4]=16-bit capture port
                                    // Capture Control [3]=Double Edge
@@ -753,10 +894,9 @@ p4_enable(const p4_ff_t *ff)
     volatile uint8_t *regs = VADDR8(state.regs_base);
     volatile uint32_t *post;
     const uint16_t *timing;
-    uint capture_mode;
+    uint capture_mode = 0;
 
     timing = (vid_type == VID_PAL) ? p4_ff_pal : p4_ff_ntsc;
-    capture_mode = state.variant;
 
     p4_control_cold_init(&state);
     p4_program_rgb_loads(&state);
@@ -766,12 +906,12 @@ p4_enable(const p4_ff_t *ff)
 
     p4_post_init(post);
 
-    p4_program_vga_timing(regs, timing, state.variant);
+    p4_program_vga_timing(&state, regs, timing, capture_mode);
 
-    control[0x404] = (((state.variant ^ 1) << 1) | 1);
+    control[0x404] = (((capture_mode ^ 1) << 1) | 1);
     p4_delay();
 
-    p4_program_ff_ext(regs, timing, capture_mode);
+    p4_program_ff_ext(&state, regs, timing, capture_mode);
 
     p4_post_init(post);
 
@@ -789,20 +929,22 @@ p4_find_ff(p4_ff_t *ff)
         ff->regs_base = dev.ac_addr + 0x00010000;  // GD5446 registers
         ff->post_base = dev.ac_addr + 0x00008000;
         ff->mem_base = dev.ac_addr;
-        ff->variant = 0;
-        ff->seq0f_18 = 1;
+        ff->is_aa_video = 0;
+        ff->is_zorro2 = 1;
         ff->product = dev.ac_product;
+        ff->is_64mb = 0;
         return (1);
     }
 
     if (autoconfig_find(PICASSOIV_MFG, PICASSOIV_PRODUCT_Z3FF, &dev)) {
         ff->control_base = dev.ac_addr;
-        ff->regs_base = dev.ac_addr + 0x00600000;
+        ff->regs_base = dev.ac_addr + 0x00600000;  // GD5446 registers
         ff->post_base = dev.ac_addr + 0x00200000;
         ff->mem_base = dev.ac_addr + 0x00400000;
-        ff->variant = 0;
-        ff->seq0f_18 = 0;
+        ff->is_aa_video = 0;
+        ff->is_zorro2 = 0;
         ff->product = dev.ac_product;
+        ff->is_64mb = (dev.ac_size == 0x04000000);
         return (1);
     }
 
@@ -820,7 +962,7 @@ picassoiv_enable_flicker_fixer(void)
     if (ff.control_base >= 0x10000000)
         cache_data_noncache_16m(ff.control_base);
 
-    printf("PicassoIV flicker fixer: product 0x%02x regs=%08x %s\n",
+    printf("PicassoIV flicker fixer: product 0x%02x %08x %s ",
            ff.product, ff.regs_base, (vid_type == VID_PAL) ? "PAL" : "NTSC");
     p4_enable(&ff);
     return (RC_SUCCESS);

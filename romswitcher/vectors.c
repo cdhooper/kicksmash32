@@ -255,31 +255,31 @@ VBlank(void)
     SAVE_A4();
     GET_A4();
 
-    static uint16_t mouse_quad_last;
+    static uint16_t mouse_quad_last = 0xffff;
     uint16_t mouse_quad_cur;
 
     /*
-     * Reset bitplane DMA pointers. This could also be done by the copper.
-     *
-     *   AddrPlanexH = address of bit plane x, bits 16-18
-     *   AddrPlanexL = address of bit plane x, bits 0-15
-     *   MOVE #AddrPlanelH,BPLlPTH initialize pointer to bit plane 1
-     *   MOVE #AddrPlanelL,BPLlPTL
-     *   MOVE #AddrPlane2H,BPLlPTH initialize pointer to bit plane 2
-     *   MOVE #AddrPlane2L,BPLlPTL
-     *   MOVE #AddrPlane3H,BPLlPTH initialize pointer to bit plane 3
-     *   MOVE #AddrPlane3L,BPLlPTL
-     *   MOVE #AddrPlane4H,BPLlPTH initialize pointer to bit plane 4
-     *   MOVE #AddrPlane4L,BPLlPTL
-     *   WAIT ($FF,$FE)
-     *   ;end of the Copper list (wait for an impossible screen position)
+     * The main job of this function is to the reset the bitplane and
+     * sprite DMA pointers. This operation must be done at each vertical
+     * blank. These two operations are also done by the Copper. It is
+     * implemented this way in the ROM Switcher so that if either interrupt
+     * service stops (CPU hang) or the Copper stops (Agnus register
+     * corruption or severe memory fetch failures) that video continues
+     * to be updated.
      */
-#ifdef COPPER_DISABLED
+    if (*ADKCONR & 0x0400) {
+        /* Copper is running */
+        *ADKCON = 0x0400;  // Clear "Copper is alive"
+        *COLOR01 = 0x000;  // Black when VBlank and Copper are working
+    } else {
+        /* Copper didn't run */
+        *COLOR01 = 0x721;  // Copper color when Copper is not working
+    }
+
     /* Bitplane pointers are normally updated by the Copper */
     *BPL1PT = BITPLANE_0_BASE;  // Bitplane 0 base address
     *BPL2PT = BITPLANE_1_BASE;  // Bitplane 1 base address
     *BPL3PT = BITPLANE_2_BASE;  // Bitplane 2 base address
-#endif
 
     *INTREQ = INTREQ_VERTB;
     COUNTER(3)++;  // 0x100c
@@ -294,6 +294,8 @@ VBlank(void)
     int8_t move_x;
     int8_t move_y;
     mouse_quad_cur = *VADDR16(JOY0DAT);  // mouse X and Y counters
+    if (mouse_quad_last == 0xffff)
+        mouse_quad_last = mouse_quad_cur;
     move_x = (mouse_quad_cur & 0xff) - (mouse_quad_last & 0xff);
     move_y = (mouse_quad_cur >> 8) - (mouse_quad_last >> 8);
     mouse_x += move_x * 2;
@@ -344,7 +346,6 @@ VBlank(void)
             sprite1_data[0] = 0x00000000;
         }
 
-// #ifdef COPPER_DISABLED
         /* Sprite pointers are normally updated by the Copper */
         *SPR0PTH = (uintptr_t) sprite0_data;
         *SPR1PTH = (uintptr_t) spritex_data;
@@ -354,7 +355,6 @@ VBlank(void)
         *SPR5PTH = (uintptr_t) spritex_data;
         *SPR6PTH = (uintptr_t) spritex_data;
         *SPR7PTH = (uintptr_t) spritex_data;
-// #endif
     }
 
     if (vblank_ints++ > 180) {  // 3 seconds

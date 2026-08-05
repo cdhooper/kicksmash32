@@ -30,7 +30,6 @@
 #include "printf.h"
 #include "screen.h"
 #include "audio.h"
-#include "sprite.h"
 #include "timer.h"
 #include "util.h"
 #include "vectors.h"
@@ -49,6 +48,7 @@
  *    0x00025000  [0x5000] bitplane 1
  *    0x0002a000  [0x5000] bitplane 2
  *    0x00030000 [0x10000] globals
+ *    0x00040000 [0x10000] malloc RAM
  */
 
 __attribute__ ((section (".romver")))
@@ -96,6 +96,8 @@ chipset_init_early(void)
     *AUD1VOL  = 0;
     *AUD2VOL  = 0;
     *AUD3VOL  = 0;
+
+    *ADDR8(GARY_BTIMEOUT) &= ~BIT(7);  // Disable BERR
 }
 
 void
@@ -103,11 +105,6 @@ chipset_init(void)
 {
     /* Ramsey config */
 //  *RAMSEY_CONTROL = RAMSEY_CONTROL_REFRESH0;  // Clobber burst/page/wrap
-
-    /* Re-enable CIA interrupts (keyboard) */
-    *INTENA   = INTENA_SETCLR |  // Set
-                INTENA_INTEN |   // Enable interrupts
-                INTENA_PORTS;    // CIA-A
 
     /* Enable interrupts for keyboard input */
     *CIAA_ICR = CIA_ICR_SET | CIA_ICR_SP;  // Serial Port input from keyboard
@@ -178,14 +175,14 @@ setup(void)
     memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
     vectors_init((void *)VECTORS_BASE);
     *CIAA_PRA = 0x00;    // Set power LED bright
-    irq_enable();
     cpu_control_init();  // Get CPU type
+    cache_init();        // Enable cache
+    cache_flush();       // Flush cache
+    irq_enable();
     serial_init();
     serial_puts("\n\033[31m");
     serial_puts(RomID + 6);
     serial_puts("\033[0m\n");
-
-    cache_init();        // Enable cache
     serial_putc('A');
     chipset_init();
     serial_putc('B');
@@ -196,31 +193,35 @@ setup(void)
 //  show_string(RomID + 6);
 
     timer_init();
-    serial_init();  // Now that ECLK is known
     serial_putc('D');
-    audio_init();
+    serial_init();  // Now that ECLK is known
     serial_putc('E');
-    BACKGROUND_COLOR(0x008);  // Half Blue background
+    audio_init();
     serial_putc('F');
-    keyboard_init();
+    BACKGROUND_COLOR(0x008);  // Half Blue background
     serial_putc('G');
+    keyboard_init();
+    serial_putc('J');
     mouse_init();
-    serial_putc('H');
-    BACKGROUND_COLOR(0x004);  // Midnight Blue background
-    sprite_init();
     serial_putc('I');
+    BACKGROUND_COLOR(0x004);  // Midnight Blue background
     screen_output_set(0);
-    printf("\n");
     autoconfig_init();
+    *INTREQ = 0x7fff;            // Clear all interrupt requests
+    *INTENA   = INTENA_SETCLR |  // Set
+                INTENA_INTEN |   // Enable interrupts
+                INTENA_VERTB;    // Vertical blank
+    serial_putc('J');
+    printf("\n");
     autoconfig_configure_all();
     picassoiv_enable_flicker_fixer();
     screen_output_set(1);
-    serial_putc('J');
+    serial_putc('K');
 
     gui_wants_all_input = 1;
     rl_initialize();
     using_history();
-    serial_putc('K');
+    serial_putc('L');
     test_draw();
     test_gadget();
     serial_putc('\r');

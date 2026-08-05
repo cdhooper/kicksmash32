@@ -58,6 +58,7 @@
 #define DDFSTRT   VADDR16(0x00dff092)  // Bitplane DMA start
 #define DDFSTOP   VADDR16(0x00dff094)  // Bitplane DMA end
 #define DMACON    VADDR16(0x00dff096)  // DMA enable register (write)
+#define ADKCON    VADDR16(0x00dff09e)  // Audio, disk control (write)
 #define BPL1PT    VADDR32(0x00dff0e0)  // Address of bitplane 1, bits 1-20
 #define BPL1PTH   VADDR16(0x00dff0e0)  // Address of bitplane 1, bits 16-20
 #define BPL1PTL   VADDR16(0x00dff0e2)  // Address of bitplane 1, bits 1-15

@@ -168,8 +168,8 @@ creategadget_scan_again:
                     mx->mx_count = count;
                 }
                 break;
-            case GTCB_Scaled:  // Used on checkbox to scale imagry
-            case GTMX_Scaled:  // Used on MX Radio to scale imagry
+            case GTCB_Scaled:  // Used on checkbox to scale imagery
+            case GTMX_Scaled:  // Used on MX Radio to scale imagery
                 if (mx != NULL)
                     mx->mx_scaled = arg;
                 break;

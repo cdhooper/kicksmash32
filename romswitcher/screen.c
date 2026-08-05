@@ -19,6 +19,7 @@
 #include "util.h"
 #include "screen.h"
 #include "serial.h"
+#include "sprite.h"
 #include "amiga_chipset.h"
 
 #define SCREEN_COLUMNS 80  // SCREEN_WIDTH / 8
@@ -669,6 +670,7 @@ screen_init(void)
     *BPLCON1  = 0;       // Horizontal scroll = 0
 //  *BPLCON2  = 1;       // Sprite (cursor) lower priority than foreground
     *BPLCON2  = 0x0008;  // Mouse Pointer Sprite > foreground > Cursor Sprite
+//  *BPLCON3  = 0x0040;  // High resolution sprite (doesn't work?)
     *BPL1MOD  = 0;       // Modulo for odd bitplanes = 0
 //  *BPL1MOD  = 136;
 //  *BPL2MOD  = 136;
@@ -686,6 +688,7 @@ screen_init(void)
     *BPL2PT   = BITPLANE_1_BASE;  // Bitplane 1 base address
     *BPL3PT   = BITPLANE_2_BASE;  // Bitplane 2 base address
     memset((void *) BITPLANE_0_BASE, 0x00, 0x10000);
+
 
     /*
      * The correct values for DIWSTRT and DIWSTTO are calculated as follows:
@@ -799,6 +802,7 @@ screen_init(void)
     *DIWSTOP  = (y << 8) | (x & 0xff);
 #endif
 
+    sprite_init();
     /*
      * The following Copperlist waits until at the top of the screen
      * and then updates the BPL1PT, BPL2PT, and BPL3PT registers so
@@ -819,11 +823,46 @@ screen_init(void)
         0x00e6, BITPLANE_1_BASE & 0xffff, // BPL2PTL (Low address)
         0x00e8, BITPLANE_2_BASE >> 16,    // BPL3PTH (High address)
         0x00ea, BITPLANE_2_BASE & 0xffff, // BPL3PTL (Low address)
-        0xffff, 0xfffe,                   // End of Copper list
     };
     /* Configure the Copper to handle screen pointer refresh */
-    uint16_t *cp = malloc_chipmem(sizeof (uint16_t) * ARRAY_SIZE(copperlist));
+    uint16_t *cp = malloc_chipmem(sizeof (uint16_t) *
+                                  (ARRAY_SIZE(copperlist) + 8 * 4 + 10));
+    cp = (void *) 0x1100;
     memcpy(cp, copperlist, sizeof (copperlist));
+
+    uint pos = ARRAY_SIZE(copperlist);  // SPR0PTH
+    uint sprite;
+    uint reg = 0x0120;
+    uint32_t data;
+
+    /*
+     * The below is a visual watchdog for the VBlank handler.
+     * If that handler stops executing, the Black will change to Dark Red.
+     */
+    cp[pos++] = 0x0182;  // COLOR01
+    cp[pos++] =  0x90d;  // Set black to Dark Violet (overridden by VBlank)
+
+    for (sprite = 0; sprite < 8; sprite++) {
+        if (sprite == 0) {
+            data = (uintptr_t)sprite0_data;
+        } else if (sprite == 2) {
+            data = (uintptr_t)sprite1_data;
+        } else {
+            data = (uintptr_t)spritex_data;
+        }
+        cp[pos++] = reg;  // SPRxPTH
+        cp[pos++] = (uintptr_t)data >> 16;
+        reg += 2;
+        cp[pos++] = reg;  // SPRxPTL
+        cp[pos++] = (uintptr_t)data & 0xffff;
+        reg += 2;
+    }
+    cp[pos++] = 0x009e;  // ADKCON (used as a pseudo-Watchdog for the Copper)
+    cp[pos++] = 0x8400;  // Indicate "Copper is alive"
+    for (uint i = 0; i < 4; i++) {
+        cp[pos++] = 0xffff;  // End list
+        cp[pos++] = 0xfffe;
+    }
 
     *COP1LC = (uintptr_t) &cp[0x0];
     *COPJMP1 = 0x0000;
@@ -919,9 +958,9 @@ screen_init(void)
     *BPLCON4  = 0x0011;
 #endif
 
-    *INTENA   = INTENA_SETCLR |  // Set
-                INTENA_INTEN |   // Enable interrupts
-                INTENA_VERTB;    // Vertical blank
+#if 0
+    *INTENA   = INTENA_SETCLR | INTENA_VERTB;  // Enable Vertical blank IRQ
+#endif
 
     dbg_all_scroll = 25;  // If scrolling, start by scrolling all bitplanes
 }

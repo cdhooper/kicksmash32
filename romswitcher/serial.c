@@ -33,7 +33,7 @@ uint8_t              serial_active;       // Serial port is active
 volatile uint8_t     gui_wants_all_input; // Non-zero if GUI wants all key input
 static uint8_t       ser_out_wrapped;     // Serial output wrapped buffer
 static uint8_t       ser_out_buf[4096];   // Serial output
-static volatile uint16_t ser_out_prod;    // Serial output producer
+static volatile uint ser_out_prod;        // Serial output producer
 static uint8_t       serial_output_enabled = 1;  // Console text writes serial
 static uint8_t       screen_output_enabled = 1;  // Console text draws to screen
 
@@ -126,12 +126,11 @@ serial_init(void)
     uint vid_clk = (vid_type == VID_NTSC) ? ECLOCK_NTSC : ECLOCK_PAL;
     uint serper_divisor = vid_clk / bps - 1;
 
-    *INTENA = INTENA_INTEN;             // disable internal interrupt
+    *INTENA = INTENA_RBF;                  // disable serial interrupt
     *SERPER = serper_divisor;
-    *CIAB_PRA = 0x4f; // Set DTR
-    *INTENA = INTENA_TBE | INTENA_RBF;  // disable interrupts
-    *INTREQ = INTREQ_TBE | INTREQ_RBF;  // clear interrupts
-    *INTENA = INTENA_SETCLR | INTENA_INTEN | INTENA_RBF;  // enable interrupt
+    *CIAB_PRA = 0x4f;                      // Set DTR
+    *INTREQ = INTREQ_RBF;                  // clear interrupt
+    *INTENA = INTENA_SETCLR | INTENA_RBF;  // enable interrupt
 }
 
 void
