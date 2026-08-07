@@ -229,7 +229,6 @@ Ports(void)
 {
     uint8_t st;
     *INTREQ  = INTREQ_PORTS;  // clear interrupt
-//  *INTENA  = INTENA_PORTS;  // disable interrupt
     st = *CIAA_ICR;
 
     COUNTER(2)++;  // 0x1008
@@ -245,7 +244,10 @@ Ports(void)
     }
     if (st & CIA_ICR_SP) {
         /* Keyboard serial input */
+        SAVE_A4();
+        GET_A4();
         keyboard_irq();
+        RESTORE_A4();
     }
 }
 
@@ -389,6 +391,9 @@ Serial(void)
     RESTORE_A4();
 }
 
+/*
+ * NMI() is Amiga interrupt L7 (Non-Maskable Interrupt)
+ */
 __attribute__ ((interrupt)) void
 NMI(void)
 {
@@ -404,13 +409,6 @@ __attribute__ ((interrupt)) void
 Int6(void)
 {
     irq_debugger_msg("Int6\n");
-    reset_cpu();
-}
-
-__attribute__ ((interrupt)) void
-Int7(void)
-{
-    irq_debugger_msg("Int7\n");
     reset_cpu();
 }
 #endif
@@ -551,16 +549,19 @@ const void *vectors[] =
 void
 vectors_init(void *base)
 {
+#undef VECTOR_BASE_IN_RAM
+#ifdef VECTOR_BASE_IN_RAM
     memcpy(base, vectors, sizeof (vectors));
-
-//  __asm("movec %0,VBR" :: "r" (base));  // Set up vector base in RAM
+    __asm("movec %0,VBR" :: "r" (base));  // Set up vector base in RAM
+#else
+    (void) base;
     __asm("movec %0,VBR" :: "r" (vectors));  // Set up vector base in ROM
+#endif
 
     memset(ADDR32(0x1000), 0, 0x20);  // Wipe interrupt counters
 
     /* Enable interrupts and stay in supervisor mode */
     irq_enable();
-//  __asm("move.w #0x2000, SR");
 }
 
 void
