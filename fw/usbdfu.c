@@ -66,6 +66,12 @@ uart_putc(int ch)
     uart_send_blocking(USART1, (uint16_t) ch);
 }
 
+void uart_putchar(int ch);
+void uart_putchar(int ch)
+{
+    uart_putc(ch);
+}
+
 static void
 uart_puts(const char *str)
 {
@@ -518,4 +524,9 @@ main(void)
         set_powerled(((led_state++) & 0x000000ff) ? 0 : 1);  // flicker
         usbd_poll(usbd_dev);
     }
+}
+
+void timer_delay_usec(unsigned int usec);
+void timer_delay_usec(unsigned int usec)
+{
 }

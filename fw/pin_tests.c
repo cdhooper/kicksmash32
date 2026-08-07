@@ -52,7 +52,7 @@ static const pin_config_t pin_config[] =
 {
     /* In Kicksmash Rev 10, KBRST affects SOCKET_OE and FLASH OE */
 //  { "KBRST",      KBRST_PORT,      KBRST_PIN,      FS_PD, PIN_INPUT },
-    { "FLASH_RB",   FLASH_RB_PORT,   FLASH_RB_PIN,   FS_PU, PIN_INPUT },
+//  { "FLASH_RB",   FLASH_RB_PORT,   FLASH_RB_PIN,   FS_PU, PIN_INPUT },
     { "FLASH_WE",   FLASH_WE_PORT,   FLASH_WE_PIN,   FS_PU, PIN_EXT_PULLUP },
     { "FLASH_OE",   FLASH_OE_PORT,   FLASH_OE_PIN,   FS_PU, PIN_INPUT },
     { "FLASH_A18",  FLASH_A18_PORT,  FLASH_A18_PIN,  FS_PD, PIN_INPUT },
@@ -529,9 +529,25 @@ pin_test_oewe(uint verbose)
         return (1);
     }
 
-    /* Drive SOCKET_OE low */
-    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
-    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+    if (config.flags & CF_OE_GATE) {
+        gpio_setv(KBRST_PORT, KBRST_PIN, 1);
+        gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+        gpio_setv(GPIOB, GPIO15, 1);  // Actual SOCKET_OE in newer boards
+        gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_OUTPUT_PPULL_2);
+
+        gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 0);
+        gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+    } else {
+        /* Drive SOCKET_OE low */
+        gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
+        gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
+                     GPIO_SETMODE_OUTPUT_PPULL_2);
+    }
+    timer_delay_msec(1);
 
     /* FLASH_OE should be low because SOCKET_OE is driving it */
     if (gpio_get(FLASH_OE_PORT, FLASH_OE_PIN) != 0) {
@@ -539,8 +555,14 @@ pin_test_oewe(uint verbose)
         return (1);
     }
 
-    /* Strongly drive FLASH_OE and SOCKET_OE high */
-    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    /* Drive SOCKET_OE high */
+    if (config.flags & CF_OE_GATE) {
+        gpio_setv(GPIOB, GPIO15, 1);  // Actual SOCKET_OE in newer boards
+    } else {
+        gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    }
+
+    /* Drive FLASH_OE high */
     gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
     gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
 
@@ -554,7 +576,12 @@ pin_test_oewe(uint verbose)
         return (1);
     }
 
-    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
+    /* Drive SOCKET_OE low */
+    if (config.flags & CF_OE_GATE) {
+        gpio_setv(GPIOB, GPIO15, 0);  // Actual SOCKET_OE in newer boards
+    } else {
+        gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
+    }
     timer_delay_usec(2);
 
     /* FLASH_WE should be low because SOCKET_OE is low */
@@ -563,7 +590,12 @@ pin_test_oewe(uint verbose)
         return (1);
     }
 
-    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    /* Drive SOCKET_OE high */
+    if (config.flags & CF_OE_GATE) {
+        gpio_setv(GPIOB, GPIO15, 1);  // Actual SOCKET_OE in newer boards
+    } else {
+        gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    }
     timer_delay_msec(10);
 
     /* FLASH_WE should be high because SOCKET_OE is high */
@@ -585,23 +617,43 @@ pin_test_oewe(uint verbose)
     enable_irq();
 
     /* Measure time it takes for Q2 and Q3 to react */
-    disable_irq();
-    for (count = 0; count < 1000; count++) {
-        /* Time to low */
-        start = timer_tick_get_fast();
-        gpio_set_0_fast(SOCKET_OE_PORT, SOCKET_OE_PIN);
-        while (gpio_get_fast(FLASH_WE_PORT, FLASH_WE_PIN) != 0)
-            ;
-        ticks_to_0_total += (uint16_t) (timer_tick_get_fast() - start);
+    if (config.flags & CF_OE_GATE) {
+        disable_irq();
+        for (count = 0; count < 1000; count++) {
+            /* Time to low */
+            start = timer_tick_get_fast();
+            gpio_set_0_fast(GPIOB, GPIO15);
+            while (gpio_get_fast(FLASH_WE_PORT, FLASH_WE_PIN) != 0)
+                ;
+            ticks_to_0_total += (uint16_t) (timer_tick_get_fast() - start);
 
-        /* Time to high */
-        start = timer_tick_get_fast();
-        gpio_set_1_fast(SOCKET_OE_PORT, SOCKET_OE_PIN);
-        while (gpio_get_fast(FLASH_WE_PORT, FLASH_WE_PIN) == 0)
-            ;
-        ticks_to_1_total += (uint16_t) (timer_tick_get_fast() - start);
+            /* Time to high */
+            start = timer_tick_get_fast();
+            gpio_set_1_fast(GPIOB, GPIO15);
+            while (gpio_get_fast(FLASH_WE_PORT, FLASH_WE_PIN) == 0)
+                ;
+            ticks_to_1_total += (uint16_t) (timer_tick_get_fast() - start);
+        }
+        enable_irq();
+    } else {
+        disable_irq();
+        for (count = 0; count < 1000; count++) {
+            /* Time to low */
+            start = timer_tick_get_fast();
+            gpio_set_0_fast(SOCKET_OE_PORT, SOCKET_OE_PIN);
+            while (gpio_get_fast(FLASH_WE_PORT, FLASH_WE_PIN) != 0)
+                ;
+            ticks_to_0_total += (uint16_t) (timer_tick_get_fast() - start);
+
+            /* Time to high */
+            start = timer_tick_get_fast();
+            gpio_set_1_fast(SOCKET_OE_PORT, SOCKET_OE_PIN);
+            while (gpio_get_fast(FLASH_WE_PORT, FLASH_WE_PIN) == 0)
+                ;
+            ticks_to_1_total += (uint16_t) (timer_tick_get_fast() - start);
+        }
+        enable_irq();
     }
-    enable_irq();
 
     ticks_to_0_total -= ticks_overhead;
     ticks_to_1_total -= ticks_overhead;
@@ -634,8 +686,14 @@ pin_test_oewe(uint verbose)
     gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
     gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
 
-    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
-    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    if (config.flags & CF_OE_GATE) {
+        gpio_setv(GPIOB, GPIO15, 1);
+        gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    } else {
+        gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+        gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
+                     GPIO_SETMODE_INPUT_PULLUPDOWN);
+    }
 
     gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
     gpio_setmode(FLASH_OEWE_PORT, FLASH_OEWE_PIN,
@@ -737,6 +795,50 @@ pin_test_flash_data(uint verbose)
     return (errs);
 }
 
+static void
+test_new_style_socket_oe(void)
+{
+    uint16_t got;
+    /*
+     * Determine if this is a new style board
+     * Set OR gate inputs low. FILTERED_OE should be low.
+     */
+    gpio_setv(GPIOB, GPIO15, 0);
+    gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_OUTPUT_PPULL_2);
+    gpio_setv(KBRST_PORT, KBRST_PIN, 1);
+    gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+    timer_delay_msec(1);
+    got = gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN);
+    if (got != 0)
+        goto restore_state;
+
+    /* Low when pulling high -- possibly new style */
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
+    gpio_setv(KBRST_PORT, KBRST_PIN, 0);
+    timer_delay_msec(1);
+    got = gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN);
+    if (got == 0)
+        goto restore_state;
+
+    /* High when pulling low -- must be new style */
+    config.flags |= CF_OE_GATE;
+    printf("New style OE\n");
+
+restore_state:
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+    gpio_setv(KBRST_PORT, KBRST_PIN, 0);
+    gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    if (config.flags & CF_OE_GATE) {
+        gpio_setv(GPIOB, GPIO15, 0);
+        gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    } else {
+        gpio_setv(GPIOB, GPIO15, 1);
+        gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    }
+}
+
 /*
  * pin_tests
  * ---------
@@ -766,6 +868,8 @@ pin_tests(uint verbose, uint force)
 
     /* Set alternate A13 | A14 | A15 to be input */
     gpio_setmode(SOCKET_A13_PORT, GPIO1 | GPIO2 | GPIO3, GPIO_SETMODE_INPUT);
+
+    test_new_style_socket_oe();
 
     /*
      * Stand-alone test:
@@ -831,6 +935,18 @@ pin_tests(uint verbose, uint force)
                            gpio_to_str(curport, curpin), curname,
                            (type == PIN_EXT_PULLUP) ? "up" : "down",
                            state);
+                    continue;
+                }
+            }
+            if (config.flags & CF_OE_GATE) {
+                /*
+                 * FLASH_OE and SOCKET_OE follow OR gate inputs,
+                 * so don't bother checking these.
+                 */
+                 if (((curport == SOCKET_OE_PORT) &&
+                      (curpin == SOCKET_OE_PIN)) ||
+                     ((curport == FLASH_OE_PORT) &&
+                      (curpin == FLASH_OE_PIN))) {
                     continue;
                 }
             }
@@ -993,6 +1109,18 @@ pin_tests(uint verbose, uint force)
                          * FLASH_D31 can affect SOCKET_D31 if SOCKET_OE=0
                          */
                         continue;
+                    }
+                    if (config.flags & CF_OE_GATE) {
+                        /*
+                         * FLASH_OE and SOCKET_OE follow OR gate inputs,
+                         * so don't bother checking these.
+                         */
+                         if (((checkport == SOCKET_OE_PORT) &&
+                              (checkpin == SOCKET_OE_PIN)) ||
+                             ((checkport == FLASH_OE_PORT) &&
+                              (checkpin == FLASH_OE_PIN))) {
+                            continue;
+                        }
                     }
 
                     if (fail++ == 0)

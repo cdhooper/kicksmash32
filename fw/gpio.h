@@ -28,6 +28,8 @@
 
 #define SOCKET_OE_PORT      GPIOA
 #define SOCKET_OE_PIN           GPIO0       // OE# Output Enable (Amiga)
+#define FILTRED_OE_PORT     GPIOA
+#define FILTRED_OE_PIN          GPIO0       // OE# Output Enable after filtering
 
 #define FLASH_RP_PORT       GPIOB
 #define FLASH_RP_PIN            GPIO1       // RP# Reset / Program
