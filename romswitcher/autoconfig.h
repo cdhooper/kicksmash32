@@ -20,13 +20,16 @@
 #include <stdint.h>
 #include "med_cmdline.h"
 
-typedef struct {
-    uint8_t  ac_type;
-    uint8_t  ac_product;
-    uint16_t ac_mfg;
-    uint32_t ac_addr;
-    uint32_t ac_size;
-} autoconfig_dev_t;
+typedef struct autoconfig_dev autoconfig_dev_t;
+struct autoconfig_dev {
+    autoconfig_dev_t *ac_next;
+    uint8_t           ac_type;
+    uint8_t           ac_product;
+    uint16_t          ac_mfg;
+    uint32_t          ac_addr;
+    uint32_t          ac_size;
+    uint32_t          ac_serial;
+};
 
 void autoconfig_init(void);
 void autoconfig_list(void);

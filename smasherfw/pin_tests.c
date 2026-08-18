@@ -2,7 +2,7 @@
  * This is free and unencumbered software released into the public domain.
  * See the LICENSE file for additional details.
  *
- * Designed by Chris Hooper in 2024.
+ * Designed by Chris Hooper in 2026.
  *
  * ---------------------------------------------------------------------
  *
@@ -29,6 +29,7 @@
 
 uint8_t  board_is_standalone = 0;
 
+#define NUM_DATA_ADDR_PINS (32 + 20)
 
 #define PIN_EXT_PULLDOWN 0  // Pin is externally pulled down
 #define PIN_EXT_PULLUP   1  // Pin is externally pulled up
@@ -80,12 +81,6 @@ static const pin_config_t pin_config[] =
 static const char *
 pin_config_get(uint pos, uint32_t *port, uint16_t *pin, char *buf)
 {
-    if (pos < ARRAY_SIZE(pin_config)) {
-        *port = pin_config[pos].port;
-        *pin  = pin_config[pos].pin;
-        return (pin_config[pos].name);
-    }
-    pos -= ARRAY_SIZE(pin_config);
     if (pos < 16) {
         /* D0-D15 */
         *port = SOCKET_D0_PORT;
@@ -117,7 +112,15 @@ pin_config_get(uint pos, uint32_t *port, uint16_t *pin, char *buf)
         sprintf(buf, "A%u", pos + 16);
         return (buf);
     }
-    printf("BUG: pin_config_get(%u)\n", ARRAY_SIZE(pin_config) + 32 + 16 + pos);
+    pos -= 4;
+    if (pos < ARRAY_SIZE(pin_config)) {
+        *port = pin_config[pos].port;
+        *pin  = pin_config[pos].pin;
+        return (pin_config[pos].name);
+    }
+    pos -= ARRAY_SIZE(pin_config);
+    printf("BUG: pin_config_get(%u)\n",
+           ARRAY_SIZE(pin_config) + NUM_DATA_ADDR_PINS + pos);
     *port = 0;
     *pin = 0;
     return (NULL);
@@ -266,7 +269,7 @@ pin_test_ks_data_addr_shorts(void)
         const char *checkname;
 
         /* Set all pins as input pull-up or pull-down */
-        for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {
+        for (cur = 0; cur < NUM_DATA_ADDR_PINS; cur++) {
             curname = pin_config_get(cur, &curport, &curpin, buf0);
             gpio_setmode(curport, curpin, GPIO_SETMODE_INPUT_PULLUPDOWN);
             if ((pass == 0) &&
@@ -278,31 +281,9 @@ pin_test_ks_data_addr_shorts(void)
         usb_poll();
 
         /* Verify pins made it to the expected state */
-        for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {
+        for (cur = 0; cur < NUM_DATA_ADDR_PINS; cur++) {
             curname = pin_config_get(cur, &curport, &curpin, buf0);
             state = !!gpio_get(curport, curpin);
-            if (cur < ARRAY_SIZE(pin_config)) {
-                uint type = pin_config[cur].type;
-                if (((state == 0) && type == PIN_EXT_PULLDOWN) ||
-                    ((state == 1) && type == PIN_EXT_PULLUP)) {
-                    /* Okay to ignore */
-                    continue;
-                }
-                if (((state == 1) && type == PIN_EXT_PULLDOWN) ||
-                    ((state == 0) && type == PIN_EXT_PULLUP)) {
-                    /*
-                     * External pull-up or pull-down is always stronger than
-                     * STM32 internal pull-up or pull-down (~30k).
-                     */
-                    if (errs++ == 0)
-                        printf("FAIL pin short tests\n");
-                    printf("%-4s %s has external pull-%s but state is %u\n",
-                           gpio_to_str(curport, curpin), curname,
-                           (type == PIN_EXT_PULLUP) ? "up" : "down",
-                           state);
-                    continue;
-                }
-            }
             if ((curport == SOCKET_A16_PORT) &&
                 ((curpin == SOCKET_A17_PIN) ||
                  (curpin == SOCKET_A18_PIN) ||
@@ -325,7 +306,7 @@ pin_test_ks_data_addr_shorts(void)
         }
 
         timer_delay_usec(1);
-        for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {
+        for (cur = 0; cur < NUM_DATA_ADDR_PINS; cur++) {
             curname = pin_config_get(cur, &curport, &curpin, buf0);
             usb_poll();
 
@@ -347,7 +328,7 @@ pin_test_ks_data_addr_shorts(void)
             }
 
             /* Check other pins for wrong state */
-            for (check = 0; check < ARRAY_SIZE(pin_config) + 32 + 20; check++) {
+            for (check = 0; check < NUM_DATA_ADDR_PINS; check++) {
                 if (check == cur)
                     continue;
 
@@ -355,14 +336,6 @@ pin_test_ks_data_addr_shorts(void)
 
                 state = !!gpio_get(checkport, checkpin);
                 if (state != !pass) {
-                    if (check < ARRAY_SIZE(pin_config)) {
-                        uint type = pin_config[check].type;
-                        if (((state == 0) && type == PIN_EXT_PULLDOWN) ||
-                            ((state == 1) && type == PIN_EXT_PULLUP)) {
-                            /* Okay to ignore */
-                            continue;
-                        }
-                    }
                     if (((checkport == SOCKET_D0_PORT) ||
                          (checkport == SOCKET_D16_PORT)) &&
                         (gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN) == 0)) {
@@ -425,12 +398,12 @@ pin_test_ks_data_addr_shorts(void)
     usb_poll();
 
     /* Restore all pins to input pull-up/pull-down and final state */
-    for (cur = 0; cur < ARRAY_SIZE(pin_config) + 32 + 20; cur++) {
+    for (cur = 0; cur < NUM_DATA_ADDR_PINS + ARRAY_SIZE(pin_config); cur++) {
         uint final = FS_PD;  // default to pull-down
         uint mode = GPIO_SETMODE_INPUT_PULLUPDOWN;
         curname = pin_config_get(cur, &curport, &curpin, buf0);
-        if (cur < ARRAY_SIZE(pin_config)) {
-            final = pin_config[cur].final_state;
+        if (cur >= NUM_DATA_ADDR_PINS) {
+            final = pin_config[cur - NUM_DATA_ADDR_PINS].final_state;
             switch (final) {
                 case FS_IN:
                     final = 0;
@@ -533,6 +506,7 @@ pin_tests(uint verbose, uint force)
                      GPIO_SETMODE_OUTPUT_PPULL_2);
         gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
         gpio_setv(SOCKET_CE_PORT, SOCKET_CE_PIN, 0);
+        usb_poll();
         timer_delay_msec(10);
         if (__builtin_popcount(data_input()) > 4) {
             /* More than 4 data pins are high */
@@ -545,6 +519,56 @@ pin_tests(uint verbose, uint force)
                      GPIO_SETMODE_INPUT_PULLUPDOWN);
         gpio_setmode(SOCKET_CE_PORT, SOCKET_CE_PIN,
                      GPIO_SETMODE_INPUT_PULLUPDOWN);
+    }
+
+    usb_poll();
+    if (board_is_standalone) {
+        /* Test if something is connected to D31 */
+        gpio_setv(SOCKET_D31_PORT, SOCKET_D31_PIN, 1);
+        timer_delay_msec(10);
+        if (gpio_get(SOCKET_D31_PORT, SOCKET_D31_PIN) == 0) {
+            /* Something pulling D31 down */
+            board_is_standalone = 0;
+            printf("Kicksmash detected (D31 low)\n");
+                gpio_show(-1, 0xffff);
+        } else {
+            gpio_setv(SOCKET_D31_PORT, SOCKET_D31_PIN, 0);
+            timer_delay_msec(10);
+            if (gpio_get(SOCKET_D31_PORT, SOCKET_D31_PIN) != 0) {
+                /* Something pulling D31 high */
+                board_is_standalone = 0;
+                printf("Kicksmash detected (D31 high)\n");
+            }
+            gpio_setv(SOCKET_D31_PORT, SOCKET_D31_PIN, 1);
+        }
+    }
+
+    if (board_is_standalone) {
+        /* Test if something is connected to KBRST */
+        power_set(POWER_STATE_OFF);  // Power off Kicksmash
+        timer_delay_msec(200);
+        /*
+         * Need to power off Kicksmash for this test because when on, the
+         * Kicksmash test board applies a 2.2K pull-up to KBRST.
+         */
+        if (gpio_get(KBRST_PORT, KBRST_PIN) == 0) {
+            /* Something pulling KBRST down */
+            board_is_standalone = 0;
+            printf("Kicksmash detected (KBRST low)\n");
+        } else {
+            gpio_setv(KBRST_PORT, KBRST_PIN, 0);
+            timer_delay_msec(10);
+            if (gpio_get(KBRST_PORT, KBRST_PIN) != 0) {
+                /* Something pulling KBRST high */
+                board_is_standalone = 0;
+                printf("Kicksmash detected (KBRST high)\n");
+                gpio_show(-1, 0xffff);
+            }
+            gpio_setv(KBRST_PORT, KBRST_PIN, 1);
+        }
+        power_set(POWER_STATE_ON);  // Power on Kicksmash
+        timer_delay_msec(100);
+        usb_poll();
     }
 
     if (board_is_standalone) {

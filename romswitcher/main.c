@@ -77,10 +77,10 @@ void
 chipset_init_early(void)
 {
     /* Shut down interrupts and DMA */
+    *DMACON   = 0x7fff;  // Disable all chipset DMA
     *INTENA   = 0x7fff;  // Disable interrupt forwarding to m68k
     *INTREQ   = 0x7fff;  // Reply to all interrupt requests
     *INTREQ   = 0x7fff;  // Reply to all interrupt requests (A4000 bug)
-    *DMACON   = 0x7fff;  // Disable all chipset DMA
 
     *CIAA_ICR = 0x7f;    // Disable interrupt forwarding to chipset
     *CIAB_ICR = 0x7f;    // Disable interrupt forwarding to chipset
@@ -172,13 +172,13 @@ setup(void)
     globals_init();
     BACKGROUND_COLOR(0x00f);  // Bright Blue background
     chipset_init_early();
-    memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
     vectors_init((void *)VECTORS_BASE);
+    irq_enable();
     *CIAA_PRA = 0x00;    // Set power LED bright
     cpu_control_init();  // Get CPU type
     cache_init();        // Enable cache
     cache_flush();       // Flush cache
-    irq_enable();
+    memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
     serial_init();
     serial_puts("\n\033[31m");
     serial_puts(RomID + 6);
@@ -189,8 +189,6 @@ setup(void)
     screen_init();
     BACKGROUND_COLOR(0x00c);  // Medium Blue background
     serial_putc('C');
-
-//  show_string(RomID + 6);
 
     timer_init();
     serial_putc('D');
@@ -212,7 +210,7 @@ setup(void)
                 INTENA_INTEN |   // Enable interrupts
                 INTENA_VERTB;    // Vertical blank
     serial_putc('J');
-    printf("\n");
+    serial_puts("\n");
     autoconfig_configure_all();
     picassoiv_enable_flicker_fixer();
     screen_output_set(1);
@@ -224,8 +222,7 @@ setup(void)
     serial_putc('L');
     test_draw();
     test_gadget();
-    serial_putc('\r');
-    serial_putc('\n');
+    serial_puts("\n");
     BACKGROUND_COLOR(0x999);  // Grey background
 
 #ifdef DEBUG_TIMER

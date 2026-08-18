@@ -34,6 +34,7 @@
 #include "led.h"
 #include "ee_kicksmash.h"
 
+void usb_poll(void);
 static int flash_id(uint32_t *dev1, uint32_t *dev2, uint *mode);
 static int flash_read_mode(uint expect_rom_signature);
 
@@ -238,7 +239,6 @@ static uint8_t flag_quiet = 0;
 static uint8_t flag_yes = 0;
 static uint8_t *test_loopback_buf = NULL;
 static uint8_t  smash_bank_temp = 0xff;
-
 
 #if 0
 #define AllocMem(len, type) malloc(len)
@@ -1631,6 +1631,7 @@ smash_test(uint mask)
 {
     int rc = 0;
     if (mask & BIT(0)) {
+        usb_poll();
         led_status(1);
         rc = smash_test_pattern();
         led_status(0);
@@ -1642,6 +1643,7 @@ smash_test(uint mask)
         return (1);
 
     if (mask & BIT(1)) {
+        usb_poll();
         rc = smash_test_loopback();
         if (rc != 0)
             return (rc);
@@ -1651,6 +1653,7 @@ smash_test(uint mask)
         return (1);
 
     if (mask & BIT(2)) {
+        usb_poll();
         rc = smash_test_loopback_perf();
         if (rc != 0)
             return (rc);
@@ -1660,6 +1663,7 @@ smash_test(uint mask)
         return (1);
 
     if (mask & BIT(3)) {
+        usb_poll();
         rc = smash_test_msg_loopback();
         if (rc != 0)
             return (rc);
@@ -1669,6 +1673,7 @@ smash_test(uint mask)
         return (1);
 
     if (mask & BIT(4)) {
+        usb_poll();
         rc = smash_test_usb_msg_loopback();
         if (rc != 0)
             return (rc);
@@ -1678,6 +1683,7 @@ smash_test(uint mask)
         return (1);
 
     if (mask & BIT(5)) {
+        usb_poll();
         rc = smash_test_flash_id();
         if (rc != 0)
             return (rc);
@@ -1687,6 +1693,7 @@ smash_test(uint mask)
         return (1);
 
     if (mask & BIT(6)) {
+        usb_poll();
         led_status(1);
         rc = smash_test_commands();
         led_status(0);

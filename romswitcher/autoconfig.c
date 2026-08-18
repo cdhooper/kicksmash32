@@ -15,6 +15,7 @@
  */
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 #include "amiga_chipset.h"
 #include "autoconfig.h"
 #include "printf.h"
@@ -83,17 +84,7 @@ static const char * const config_subsizes[] =
 #define AUTOCONFIG_SETTLE_TRIES 5
 #define AUTOCONFIG_SETTLE_MSEC 2
 
-typedef struct ac_t ac_t;
 typedef struct z2_slot_rule_t z2_slot_rule_t;
-
-struct ac_t {
-    ac_t    *ac_next;
-    uint8_t  ac_type;
-    uint8_t  ac_product;
-    uint16_t ac_mfg;
-    uint32_t ac_addr;
-    uint32_t ac_size;
-};
 
 typedef enum {
     AC_CFG_WINDOW_Z2 = 0,
@@ -117,17 +108,7 @@ static const z2_slot_rule_t z2_slot_rules[] =
     {  64, 32 },  // 4 MB
 };
 
-static ac_t *ac_list = NULL;
-
-static void
-autoconfig_dev_export(const ac_t *node, autoconfig_dev_t *dev)
-{
-    dev->ac_type = node->ac_type;
-    dev->ac_product = node->ac_product;
-    dev->ac_mfg = node->ac_mfg;
-    dev->ac_addr = node->ac_addr;
-    dev->ac_size = node->ac_size;
-}
+static autoconfig_dev_t *ac_list = NULL;
 
 static uint32_t
 autoconfig_align_up(uint32_t addr, uint32_t align, uint32_t offset)
@@ -149,13 +130,13 @@ autoconfig_addr_aligned(uint32_t addr, uint32_t align, uint32_t offset)
  * Allocate a Zorro address in the specified address space with an alignment
  * rule matching AmigaOS expansion.library slot allocation.
  */
-static ac_t *
+static autoconfig_dev_t *
 autoconfig_alloc_aligned_range(uint32_t addr, uint32_t size, uint zorro_type,
                                uint32_t align, uint32_t offset,
                                uint32_t range_start, uint32_t range_end,
                                bool report_failure)
 {
-    ac_t *cur;
+    autoconfig_dev_t *cur;
     uint alloc_type = (zorro_type == AC_TYPE_FREE_Z2) ?
                       AC_TYPE_ALLOC_Z2 : AC_TYPE_ALLOC_Z3;
 
@@ -174,8 +155,8 @@ autoconfig_alloc_aligned_range(uint32_t addr, uint32_t size, uint zorro_type,
         uint32_t cur_end;
         uint32_t usable_start;
         uint32_t usable_end;
-        ac_t *alloc_node = NULL;
-        ac_t *after_node = NULL;
+        autoconfig_dev_t *alloc_node = NULL;
+        autoconfig_dev_t *after_node = NULL;
 
         if (cur->ac_type != zorro_type)
             continue;  // Not free
@@ -199,12 +180,12 @@ autoconfig_alloc_aligned_range(uint32_t addr, uint32_t size, uint zorro_type,
         after_size  = cur_end - (alloc_addr + size);
 
         if (before_size != 0) {
-            alloc_node = malloc(sizeof (ac_t));
+            alloc_node = malloc(sizeof (autoconfig_dev_t));
             if (alloc_node == NULL)
                 return (NULL);
         }
         if (after_size != 0) {
-            after_node = malloc(sizeof (ac_t));
+            after_node = malloc(sizeof (autoconfig_dev_t));
             if (after_node == NULL)
                 return (NULL);
         }
@@ -247,20 +228,20 @@ autoconfig_alloc_aligned_range(uint32_t addr, uint32_t size, uint zorro_type,
  * ----------------
  * Allocate a Zorro address in the specified address space
  */
-static ac_t *
+static autoconfig_dev_t *
 autoconfig_alloc(uint32_t addr, uint32_t size, uint zorro_type)
 {
     return (autoconfig_alloc_aligned_range(addr, size, zorro_type, size, 0,
                                            0, UINT32_MAX, true));
 }
 
-static ac_t *
+static autoconfig_dev_t *
 autoconfig_alloc_z2(uint32_t addr, uint size_code)
 {
     const z2_slot_rule_t *rule;
     uint32_t size;
     uint32_t offset;
-    ac_t *node;
+    autoconfig_dev_t *node;
 
     if (size_code >= (sizeof (z2_slot_rules) / sizeof (z2_slot_rules[0])))
         return (NULL);
@@ -290,7 +271,7 @@ autoconfig_alloc_z2(uint32_t addr, uint size_code)
                                            true));
 }
 
-static ac_t *
+static autoconfig_dev_t *
 autoconfig_alloc_board(uint32_t addr, uint32_t devsize, uint size_code,
                        uint is_z3, uint is_z3_size, uint addr_z3)
 {
@@ -310,7 +291,7 @@ autoconfig_alloc_board(uint32_t addr, uint32_t devsize, uint size_code,
 void
 autoconfig_list(void)
 {
-    ac_t *cur;
+    autoconfig_dev_t *cur;
     for (cur = ac_list; cur != NULL; cur = cur->ac_next) {
         if ((cur->ac_type == AC_TYPE_ALLOC_Z2) ||
             (cur->ac_type == AC_TYPE_FREE_Z2))
@@ -322,9 +303,10 @@ autoconfig_list(void)
             (cur->ac_type == AC_TYPE_FREE_Z3)) {
             printf(" FREE\n");
         } else {
-            printf(" Board 0x%04x.0x%02x  %u / %u\n",
+            printf(" Board 0x%04x.0x%02x  %u / %u  0x%08x\n",
                    cur->ac_mfg, cur->ac_product,
-                   cur->ac_mfg, cur->ac_product);
+                   cur->ac_mfg, cur->ac_product,
+                   cur->ac_serial);
         }
     }
 }
@@ -492,16 +474,16 @@ autoconfig_reserved(uint8_t *cfgdata, uint reg)
 }
 
 static void
-autoconfig_assign(ac_t *node, uint is_z3)
+autoconfig_assign(autoconfig_dev_t *node, uint is_z3)
 {
     /* Fill in ac_mfg and ac_product */
-    if (!is_z3) {
-        node->ac_mfg = ~((get_z2_byte(0x10 / 4) << 8) | get_z2_byte(0x14 / 4));
-        node->ac_product = ~get_z2_byte(0x04 / 4);
-    } else {
-        node->ac_mfg = ~((get_z3_byte(0x10 / 4) << 8) | get_z3_byte(0x14 / 4));
-        node->ac_product = ~get_z3_byte(0x04 / 4);
-    }
+    node->ac_mfg     = ~((autoconfig_window_byte(is_z3, 0x10 / 4) << 8) |
+                         autoconfig_window_byte(is_z3, 0x14 / 4));
+    node->ac_product = ~autoconfig_window_byte(is_z3, 0x04 / 4);
+    node->ac_serial  = ~((autoconfig_window_byte(is_z3, 0x18 / 4) << 24) |
+                         (autoconfig_window_byte(is_z3, 0x1c / 4) << 16) |
+                         (autoconfig_window_byte(is_z3, 0x20 / 4) << 8) |
+                         autoconfig_window_byte(is_z3, 0x24 / 4));
 }
 
 static rc_t
@@ -707,7 +689,7 @@ autoconfig_shutup(void)
 }
 
 static void
-show_autoconfig(ac_t *node)
+show_autoconfig(autoconfig_dev_t *node)
 {
     char type;
     switch (node->ac_type) {
@@ -769,7 +751,7 @@ autoconfig_z2_address(uint32_t addr)
     else
         addr_z3 = 0;
 
-    ac_t *node = autoconfig_alloc_board(addr, devsize, cfg0 & 0x7,
+    autoconfig_dev_t *node = autoconfig_alloc_board(addr, devsize, cfg0 & 0x7,
                                         is_z3, is_z3_size, addr_z3);
     if (node == NULL)
         return (RC_BAD_PARAM);
@@ -824,7 +806,7 @@ autoconfig_z3_address(uint32_t addr)
     else
         addr_z3 = 0;
 
-    ac_t *node = autoconfig_alloc_board(addr, devsize, cfg0 & 0x7,
+    autoconfig_dev_t *node = autoconfig_alloc_board(addr, devsize, cfg0 & 0x7,
                                         is_z3, is_z3_size, addr_z3);
 
     if (node == NULL)
@@ -899,7 +881,7 @@ autoconfig_configure_all(void)
 bool
 autoconfig_find(uint16_t mfg, uint8_t product, autoconfig_dev_t *dev)
 {
-    ac_t *cur;
+    autoconfig_dev_t *cur;
 
     for (cur = ac_list; cur != NULL; cur = cur->ac_next) {
         if ((cur->ac_type != AC_TYPE_ALLOC_Z2) &&
@@ -908,7 +890,7 @@ autoconfig_find(uint16_t mfg, uint8_t product, autoconfig_dev_t *dev)
         if ((cur->ac_mfg != mfg) || (cur->ac_product != product))
             continue;
         if (dev != NULL)
-            autoconfig_dev_export(cur, dev);
+            memcpy(dev, cur, sizeof (*dev));
         return (true);
     }
     return (false);
@@ -917,7 +899,7 @@ autoconfig_find(uint16_t mfg, uint8_t product, autoconfig_dev_t *dev)
 static void
 autoconfig_insert(uint8_t type, uint32_t addr, uint32_t size)
 {
-    ac_t *node = malloc(sizeof (ac_t));
+    autoconfig_dev_t *node = malloc(sizeof (autoconfig_dev_t));
     if (node == NULL)
         return;
     node->ac_type = type;

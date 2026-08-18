@@ -559,9 +559,6 @@ vectors_init(void *base)
 #endif
 
     memset(ADDR32(0x1000), 0, 0x20);  // Wipe interrupt counters
-
-    /* Enable interrupts and stay in supervisor mode */
-    irq_enable();
 }
 
 void
