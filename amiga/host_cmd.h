@@ -29,6 +29,12 @@
 #define KM_OP_FSETPERMS       0x19  // File storage set permissions
 #define KM_OP_FSETOWN         0x1a  // File storage set owner / group
 #define KM_OP_FSETDATE        0x1b  // File storage set date
+#define KM_OP_NOPEN           0x20  // Network open
+#define KM_OP_NCLOSE          0x21  // Network close
+#define KM_OP_NWRITE          0x22  // Network send
+#define KM_OP_NREAD           0x23  // Network receive
+#define KM_OP_NGETMAC         0x24  // Network get MAC
+#define KM_OP_NSETMAC         0x25  // Network set MAC
 
 #define KM_OP_REPLY           0x80  // Reply message flag to remote request
 
@@ -72,6 +78,8 @@
 #define HM_MODE_READLINK    0x2001  // Read symlink (composite)
 
 #define HM_FLAG_SEEK0       0x0001  // Seek the start of file before read
+
+/* File operation messages */
 
 typedef uint32_t handle_t;
 
@@ -161,5 +169,21 @@ typedef struct {
  * (each NIL-terminated). The next struct in the directory list
  * will be two-byte aligned following the comment.
  */
+
+
+/* Network operation messages */
+typedef struct {
+    km_msg_hdr_t hm_hdr;     // Standard message header
+} hm_nopenhandle_t;
+
+typedef struct {
+    km_msg_hdr_t hm_hdr;     // Standard message header
+    uint16_t     hm_length;  // Length of request or reply data size
+} hm_nreadwrite_t;
+
+typedef struct {
+    km_msg_hdr_t hm_hdr;     // Standard message header
+    uint8_t      hm_mac[6];  // Ethernet MAC
+} hm_nmac_t;
 
 #endif /* _HOST_CMD_H */

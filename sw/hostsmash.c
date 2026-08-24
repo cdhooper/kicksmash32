@@ -53,6 +53,8 @@ typedef unsigned int uint;
 #include "../fw/smash_cmd.h"
 #include "../amiga/host_cmd.h"
 #include "../fw/version.h"
+#include "hostsmash.h"
+#include "hostsmash_net.h"
 
 #ifdef __clang__
 #define ATTRIBUTE_PRINTF __attribute__((format(printf, 1, 2)))
@@ -75,10 +77,6 @@ typedef unsigned int uint;
 #define msgprintf(args...) do { } while (0)
 #endif
 
-#define SWAP16(x) __builtin_bswap16(x)
-#define SWAP32(x) __builtin_bswap32(x)
-#define SWAP64(x) __builtin_bswap64(x)
-
 #define BIT(x) (1U << (x))
 
 /* Program long format options */
@@ -98,6 +96,7 @@ static const struct option long_opts[] = {
     { "len",      required_argument, NULL, 'l' },
     { "mount",    required_argument, NULL, 'm' },
     { "Mount",    required_argument, NULL, 'M' },
+    { "net",      no_argument,       NULL, 'n' },
     { "read",     no_argument,       NULL, 'r' },
     { "swap",     required_argument, NULL, 's' },
     { "term",     no_argument,       NULL, 't' },
@@ -124,6 +123,7 @@ static char short_opts[] = {
     'l', ':',    // --len <num>
     'm', ':',    // --mount <vol> <dir>
     'M', ':',    // --Mount <vol> <dir>
+    'n',         // --net
     'r',         // --read <filename>
     's', ':',    // --swap <mode>
     't',         // --term
@@ -378,6 +378,8 @@ static bool             force_yes         = FALSE;
 static uint             swapmode          = SWAPMODE_AUTO;
 static uint             kicksmash_mode    = KICKSMASH_MODE_AUTO;
 static char            *terminal_cmd      = NULL;
+static uint             amiga_net_service = 0;
+
 
 #ifdef __MINGW32__
 #define AT_FDCWD 0
@@ -871,7 +873,7 @@ microsleep(__int64 usec)
  *
  * @return      None.
  */
-static void
+void
 time_delay_msec(int msec)
 {
 #ifdef __MINGW32__
@@ -3883,7 +3885,7 @@ mem16_swap(void *buf, uint len)
  * --------
  * Sends a message to the remote Amiga
  */
-static uint
+uint
 send_msg(void *buf, uint len, uint *status)
 {
     uint rc;
@@ -6384,6 +6386,24 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
             case KM_OP_FSETPERMS:
                 rc = sm_fsetprotect((hm_fopenhandle_t *)rxdata, &status);
                 break;
+            case KM_OP_NOPEN:
+                rc = sm_nopen((hm_nopenhandle_t *)rxdata, &status);
+                break;
+            case KM_OP_NCLOSE:
+                rc = sm_nclose((hm_nopenhandle_t *)rxdata, &status);
+                break;
+            case KM_OP_NWRITE:
+                rc = sm_nwrite((hm_nreadwrite_t *)rxdata, &status, rxlen);
+                break;
+            case KM_OP_NREAD:
+                rc = sm_nread((hm_nreadwrite_t *)rxdata, &status);
+                break;
+            case KM_OP_NGETMAC:
+                rc = sm_ngetmac((hm_nmac_t *)rxdata, &status);
+                break;
+            case KM_OP_NSETMAC:
+                rc = sm_nsetmac((hm_nmac_t *)rxdata, &status);
+                break;
             default:
                 rc = sm_unknown(km, &status);
                 break;
@@ -6462,6 +6482,10 @@ run_message_mode(void)
     if (amiga_vol_head != NULL)
         app_state |= MSG_STATE_HAVE_FILE;
 
+    if (amiga_net_service != 0) {
+        app_state |= MSG_STATE_HAVE_NET;
+        netif_start();
+    }
     msgprintf("Message mode\n");
     app_state_send[0] = SWAP16(0xffff);     // Affect all bits
     app_state_send[1] = SWAP16(app_state);  // Message service up
@@ -6489,6 +6513,7 @@ run_message_mode(void)
         return;
     }
 
+    sm_init_queues();
     while (1) {
         if (curtick != 0) {
             if (curtick < 1024)
@@ -6530,6 +6555,7 @@ run_message_mode(void)
                 curtick += curtick / 2;
         }
     }
+    sm_destroy_queues();
 }
 
 /* Amiga time is in seconds since 1978 */
@@ -6932,6 +6958,10 @@ errx(EXIT_FAILURE, "how did we get here?");
                 }
                 volume_add(optarg, argv[optind], (ch == 'M'));
                 optind++;
+                break;
+            case 'n':
+                mode = MODE_MSG;
+                amiga_net_service = 1;
                 break;
             case 'r':
                 if (mode != MODE_UNKNOWN)

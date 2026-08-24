@@ -31,6 +31,7 @@ endif
 OPENCM3_DIR := /usr/lib/libopencm3
 ifeq (,$(wildcard $(OPENCM3_DIR)))
 OPENCM3_DIR := libopencm3
+#OPENCM3_DIR := libopencm3.GD32
 endif
 OPENCM3_HEADER := $(OPENCM3_DIR)/include/libopencm3/stm32/rcc.h
 
@@ -80,15 +81,9 @@ endif
 ST_TOOLS_PATH=$(ST_BUILD_DIR)/build/Release/bin
 OS := $(shell uname -s)
 
-NOW  := $(shell date +%s)
-ifeq ($(OS),Darwin)
-DATE := $(shell date -j -f %s $(NOW)  '+%Y-%m-%d')
-TIME := $(shell date -j -f %s $(NOW)  '+%H:%M:%S')
-else
-DATE := $(shell date -d "@$(NOW)" '+%Y-%m-%d')
-TIME := $(shell date -d "@$(NOW)" '+%H:%M:%S')
-endif
-
+BUILD_TIMESTAMP := $(shell date '+%Y-%m-%d %H:%M:%S')
+DATE := $(word 1,$(BUILD_TIMESTAMP))
+TIME := $(word 2,$(BUILD_TIMESTAMP))
 
 ## Boilerplate
 

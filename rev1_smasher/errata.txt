@@ -1,0 +1,3 @@
+Change buttons to ones which are more reliable
+
+Power LED needs to be brighter

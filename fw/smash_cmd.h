@@ -84,6 +84,7 @@
 #define MSG_STATE_SERVICE_UP    0x0001  // Message service running
 #define MSG_STATE_HAVE_LOOPBACK 0x0002  // Loopback service available
 #define MSG_STATE_HAVE_FILE     0x0004  // File service available
+#define MSG_STATE_HAVE_NET      0x0008  // Network service available
 
 /*
  * All Kicksmash commands are encapsulated within a standard message body

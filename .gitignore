@@ -39,6 +39,7 @@ amiga/smashfs
 amiga/smashftp
 amiga/smashfsrom
 amiga/smashfsrom_d
+amiga/smashnet
 amiga/romswitch
 amiga/romswitch.rom
 sw/crcit
@@ -47,6 +48,8 @@ release/
 sw/hostsmash
 sw/hostsmash.exe
 sw/hostsmash.macos
+sw/hostsmash_netif
+sw/hostsmash_netif.exe
 sw/crcit
 sw/crcit.exe
 sw/crcit.macos

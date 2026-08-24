@@ -1,5 +1,7 @@
 HOSTSMASH_PROG=hostsmash
-HOSTSMASH_SRCS=hostsmash.c ../fw/version.c ../fw/crc32.c
+HOSTSMASH_SRCS=hostsmash.c hostsmash_net.c ../fw/version.c ../fw/crc32.c
+HSNET_PROG=hostsmash_netif
+HSNET_SRCS=hostsmash_netif.c ../fw/version.c
 CRCIT_PROG=crcit
 CRCIT_SRCS=crcit.c ../fw/crc32.c
 CC := gcc
@@ -15,15 +17,13 @@ OS := $(shell uname -s)
 # and accessed by the Amiga
 CFLAGS += -DALLOW_CREATE_LINK
 
-NOW  := $(shell date +%s)
-ifeq ($(OS),Darwin)
-DATE := $(shell date -j -f %s $(NOW)  '+%Y-%m-%d')
-TIME := $(shell date -j -f %s $(NOW)  '+%H:%M:%S')
-else
-DATE := $(shell date -d "@$(NOW)" '+%Y-%m-%d')
-TIME := $(shell date -d "@$(NOW)" '+%H:%M:%S')
+ifneq ($(OS),Darwin)
 USB_HDR := /usr/include/usb.h
 endif
+
+BUILD_TIMESTAMP := $(shell date '+%Y-%m-%d %H:%M:%S')
+DATE := $(word 1,$(BUILD_TIMESTAMP))
+TIME := $(word 2,$(BUILD_TIMESTAMP))
 CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 
 VERSION := $(shell awk '/Version/{print $$2}' ../fw/version.c)
@@ -53,6 +53,7 @@ ifneq (,$(filter $(TARGET_OS),win32))
 endif
 ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
     HOSTSMASH_PROG := $(HOSTSMASH_PROG).exe
+    HSNET_PROG := $(HSNET_PROG).exe
     CRCIT_PROG := $(CRCIT_PROG).exe
 endif
 
@@ -61,6 +62,7 @@ ifeq ($(TARGET_OS),Linux)
     CFLAGS += -DLINUX
     UNAME_M := $(shell uname -m)
     OBJDIR := objs.$(UNAME_M)
+    HSNET_SRCS += netif_linux.c
 endif
 
 # MacOS
@@ -68,12 +70,18 @@ ifeq ($(TARGET_OS),Darwin)
 #   CFLAGS += -DOSX -target x86_64-apple-macos10.12
     CFLAGS += -DOSX #-lxml2 -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/libxml2
     OBJDIR := objs.mac
+    HSNET_SRCS += netif_macos_bpf.c
 endif
 
 #CFLAGS += -fanalyzer
 
 HOSTSMASH_OPROG := $(OBJDIR)/$(HOSTSMASH_PROG)
+HSNET_OPROG := $(OBJDIR)/$(HSNET_PROG)
 CRCIT_OPROG := $(OBJDIR)/$(CRCIT_PROG)
+
+ifeq ($(TARGET_OS),Linux)
+$(HSNET_OPROG):: LDFLAGS += -lcap
+endif
 
 #ifneq ($(TARGET_OS),$(OS))
 #    $(info HOST=$(OS) TARGET=$(TARGET_OS))
@@ -89,13 +97,10 @@ else
 QUIET   :=
 endif
 
-#HOSTSMASH_OBJS  := $(HOSTSMASH_SRCS:%.c=$(OBJDIR)/%.o)
-#CRCIT_OBJS  := $(CRCIT_SRCS:%.c=$(OBJDIR)/%.o)
-
-nativeprog: $(HOSTSMASH_OPROG) $(CRCIT_OPROG)
+nativeprog: $(HOSTSMASH_OPROG) $(HSNET_OPROG) $(CRCIT_OPROG)
 	@:
 
-all: $(HOSTSMASH_OPROG) $(CRCIT_OPROG) win32 win64
+all: $(HOSTSMASH_OPROG) $(HSNET_OPROG) $(CRCIT_OPROG) win32 win64
 	@:
 
 win32:
@@ -112,17 +117,24 @@ $(3) += $(patsubst %,$(2)/%,$(filter-out $(2)/%,$(basename $(notdir $(1))).o))
 endef
 
 $(foreach SRCFILE,$(HOSTSMASH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),HOSTSMASH_OBJS)))
+$(foreach SRCFILE,$(HSNET_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),HSNET_OBJS)))
 $(foreach SRCFILE,$(CRCIT_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),CRCIT_OBJS)))
 
 
-$(HOSTSMASH_OBJS) $(CRCIT_OBJS): Makefile ../fw/version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h
+$(HOSTSMASH_OBJS) $(HSNET_OBJS) $(CRCIT_OBJS): Makefile ../fw/version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h hostsmash.h hostsmash_net.h hostsmash_netif.h
 $(OBJDIR)/hostsmash.o: | $(USB_HDR)
-$(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(HOSTSMASH_OBJS)) Makefile
+$(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(HOSTSMASH_OBJS) $(HSNET_OBJS)) Makefile
 
 $(HOSTSMASH_OPROG): $(HOSTSMASH_OBJS)
 	@echo Building $@
 	$(QUIET)$(CC) -o $@ $(HOSTSMASH_OBJS) $(LDFLAGS)
 	@rm -f $(HOSTSMASH_PROG)
+	@ln -s $@
+
+$(HSNET_OPROG): $(HSNET_OBJS)
+	@echo Building $@
+	$(QUIET)$(CC) -o $@ $(HSNET_OBJS) $(LDFLAGS)
+	@rm -f $(HSNET_PROG)
 	@ln -s $@
 
 $(CRCIT_OPROG): $(CRCIT_OBJS)
@@ -131,7 +143,7 @@ $(CRCIT_OPROG): $(CRCIT_OBJS)
 	@rm -f $(CRCIT_PROG)
 	@ln -s $@
 
-$(sort $(HOSTSMASH_OBJS) $(CRCIT_OBJS)): Makefile | $(OBJDIR)
+$(sort $(HOSTSMASH_OBJS) $(HSNET_OBJS) $(CRCIT_OBJS)): Makefile | $(OBJDIR)
 	@echo Building $@
 	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -o $@
 
@@ -147,7 +159,7 @@ $(USB_HDR):
 
 clean:
 	@echo Cleaning
-	$(QUIET)rm -rf $(HOSTSMASH_OPROG) $(CRCIT_OPROG) $(OBJDIR)
+	$(QUIET)rm -rf $(HOSTSMASH_OPROG) $(HSNET_OPROG) $(CRCIT_OPROG) $(OBJDIR)
 
 clean-all: clean
 	@$(MAKE) TARGET_OS=win32 clean

@@ -222,7 +222,11 @@ host_tag_alloc(void)
 {
     /* XXX: Fake "allocator" for now */
     static uint16_t tag = 0;
-    return (tag++);
+    uint16_t newtag;
+    Disable();
+    newtag = tag++;
+    Enable();
+    return (newtag);
 }
 
 /*

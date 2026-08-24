@@ -8,9 +8,10 @@ FTP_PROG     := smashftp
 FSROM_PROG   := smashfsrom
 FSROM_PROG_D := smashfsrom_d
 SWITCH_PROG  := romswitch
+NET_PROG     := smashnet
 
 ALL_PROGS    := $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) \
-                $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG)
+                $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(SMASHNET_PROG)
 
 OBJDIR       := objs
 ROM_OBJDIR   := objs.rom
@@ -31,6 +32,8 @@ FSROM_SRCS   := fs_rom.c \
 		my_createtask.c sm_msg_core.c fs_rom_end.c
 SWITCH_SRCS  := romswitch.c sm_msg.c cpu_control.c printf.c \
 		sm_msg_core.c fs_rom_end.c
+NET_SRCS     := smashnet.c sm_msg.c cpu_control.c printf.c \
+		sm_msg_core.c fs_rom_end.c sm_net.c $(CRC32_C)
 
 CC      := m68k-amigaos-gcc
 STRIP   := m68k-amigaos-strip
@@ -42,15 +45,9 @@ LDFLAGS_SMASH = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -m
 LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -lgcc -lamiga -lc -noixemul
 LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -mcrt=clib2 -lgcc -lc -lamiga
 
-OS   := $(shell uname -s)
-NOW  := $(shell date +%s)
-ifeq ($(OS),Darwin)
-DATE := $(shell date -j -f %s $(NOW)  '+%Y-%m-%d')
-TIME := $(shell date -j -f %s $(NOW)  '+%H:%M:%S')
-else
-DATE := $(shell date -d "@$(NOW)" '+%Y-%m-%d')
-TIME := $(shell date -d "@$(NOW)" '+%H:%M:%S')
-endif
+BUILD_TIMESTAMP := $(shell date '+%Y-%m-%d %H:%M:%S')
+DATE := $(word 1,$(BUILD_TIMESTAMP))
+TIME := $(word 2,$(BUILD_TIMESTAMP))
 CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 
 # The below makes smashftp huge
@@ -97,13 +94,14 @@ ifeq (, $(shell which $(CC) 2>/dev/null ))
 $(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga13/bin")
 endif
 
-all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG)
+all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(NET_PROG)
 	@:
 
 gdb:
 	m68k-amigaos-gdb $(SMASH_PROG)
 
 TEST :=
+#$(info depend $(patsubst %,$(2)/%,$(filter-out $(2)/%,$(basename $(notdir $(1))).o)) $(filter $(2)/%,$(basename $(1)).o): $(1))
 define DEPEND_SRC
 # The following line creates a rule for an object file to depend on a
 # given source file.
@@ -118,9 +116,11 @@ $(foreach SRCFILE,$(FTP_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),FTP_
 $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR),FSROM_OBJS)))
 $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D),FSROM_OBJS_D)))
 $(foreach SRCFILE,$(SWITCH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D),SWITCH_OBJS)))
+$(foreach SRCFILE,$(NET_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),NET_OBJS)))
 
-OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS))
+OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS) $(NET_OBJS))
 
+# Add special flags for ROMable code
 $(FSROM_OBJS):: CFLAGS += $(CFLAGS_ROMFS) -DNO_DEBUG
 $(FSROM_OBJS_D):: CFLAGS += $(CFLAGS_ROMFS)
 $(SWITCH_OBJS):: CFLAGS += $(CFLAGS_ROMFS)
@@ -168,6 +168,10 @@ $(SWITCH_PROG):
 $(FS_PROG): $(FS_OBJS)
 	@echo Building $@
 	$(QUIET)$(CC) $(FS_OBJS) $(LDFLAGS_FS) -o $@
+
+$(NET_PROG): $(NET_OBJS)
+	@echo Building $@
+	$(QUIET)$(CC) $(NET_OBJS) $(LDFLAGS_FS) -o $@
 
 $(OBJDIR) $(ROM_OBJDIR) $(ROM_OBJDIR_D):
 	mkdir -p $@

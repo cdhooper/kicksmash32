@@ -1,0 +1,8 @@
+#ifndef _HOSTSMASH_NETIF_H
+#define _HOSTSMASH_NETIF_H
+
+#define HS_NETIF_CMD_NOP    0x00
+#define HS_NETIF_CMD_GETMAC 0x01
+#define HS_NETIF_CMD_SETMAC 0x02
+
+#endif /* _HOSTSMASH_NETIF_H */
