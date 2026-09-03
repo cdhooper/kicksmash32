@@ -54,6 +54,8 @@ typedef struct FileHandle FileHandle_t;
 
 #define FL_FLAG_NEEDS_REWIND 0x01 /* EXAMINE_NEXT should rewind dir handle */
 
+#define MAX_NAMELEN          255
+
 /* DOS FileLock with SmashFS extensions */
 typedef struct fs_lock {
     BPTR            fl_Link;      /* next Dos Lock */
@@ -484,6 +486,7 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
     uint rc;
     uint rlen;
     uint entlen;
+    uint len = sizeof (*dent) + MAX_NAMELEN;  // Ent + max filename length
 
     rc = sm_fopen(lock->fl_Key, "", HM_MODE_READDIR | HM_MODE_NOFOLLOW,
                   &type, 0, &handle);
@@ -492,7 +495,7 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
         return (DOSFALSE);
     }
 
-    rc = sm_fread(handle, 256, (void **) &dent, &rlen, 0);
+    rc = sm_fread(handle, len, (void **) &dent, &rlen, 0);
     if (rc != 0) {
         sm_fclose(handle);
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
@@ -529,9 +532,10 @@ action_disk_info(void)
     uint numblks = 1 << 20;
     uint numused = 1 << 19;
     uint blksize = 1024;
+    uint len = sizeof (*dent) + MAX_NAMELEN;  // Ent + max filename length
 
     printf("DISK_INFO %x\n", handle);
-    rc = sm_fread(handle, 256, (void **) &dent, &rlen, HM_FLAG_SEEK0);
+    rc = sm_fread(handle, len, (void **) &dent, &rlen, HM_FLAG_SEEK0);
     if (rc == 0) {
         uint entlen = dent->hmd_elen;
 
@@ -575,6 +579,7 @@ action_examine_next(void)
     uint             rlen;
     uint             entlen;
     uint             read_flag = 0;
+    uint             len = sizeof (*dent) + MAX_NAMELEN;
 
     printf("EXAMINE_NEXT %p %x\n", lock, lock->fl_Key);
     if ((gpack->dp_Type == ACTION_EX_NEXT) && (GARG3 != 0))
@@ -585,7 +590,7 @@ action_examine_next(void)
         read_flag |= HM_FLAG_SEEK0;
     }
 
-    rc = sm_fread(handle, sizeof (*dent), (void **) &dent, &rlen, read_flag);
+    rc = sm_fread(handle, len, (void **) &dent, &rlen, read_flag);
     if (rc != 0) {
         printf("dir read err %x\n", rc);
         gpack->dp_Res2 = km_status_to_amiga_error(rc);

@@ -218,14 +218,6 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
         goto sm_read_fail;
     }
 
-#if 0
-    // Need to remove this so that single dirents can be read
-    if (rcvlen > readsize + sizeof (msg)) {
-        printf("bad rcvlen %x\n", rcvlen);
-        rcvlen = readsize + sizeof (msg);
-    }
-#endif
-
     if (rcvlen >= sizeof (*rdata))
         rcvlen -= sizeof (*rdata);
     else

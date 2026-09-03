@@ -5329,8 +5329,11 @@ sm_fread(hm_freadwrite_t *hm, uint *status)
 #ifdef FILE_DEBUG
     off64_t          fpos = 0;
     if ((hm_flag & HM_FLAG_SEEK0) == 0) {
-        if (handle != NULL)
+        if (handle != NULL) {
             fpos = lseek64(handle->he_fd, 0, SEEK_CUR);
+            if (fpos < 0)
+                fpos = 0;
+        }
     }
     fsprintf("fread(%x p=%jx l=%x)\n",
              hm->hm_handle, (intmax_t) fpos, hm_length);
@@ -5823,8 +5826,11 @@ sm_fwrite(hm_freadwrite_t *hm, uint rxlen, uint *status)
 #ifdef FILE_DEBUG
     off64_t          fpos = 0;
     if ((hm_flag & HM_FLAG_SEEK0) == 0) {
-        if (handle != NULL)
+        if (handle != NULL) {
             fpos = lseek64(handle->he_fd, 0, SEEK_CUR);
+            if (fpos < 0)
+                fpos = 0;
+        }
     }
     fsprintf("fwrite(%x p=%jx l=%x tag=%x)\n",
              hm->hm_handle, (intmax_t)fpos, hm_length, SWAP16(main_tag));
