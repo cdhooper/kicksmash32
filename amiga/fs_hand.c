@@ -242,6 +242,7 @@ show_usage:
     timer_close();
     printf("smashfs exit\n");
 go_exit:
+    host_msg_exit();  // I don't know why atexit() doesn't work
     CloseLibrary((struct Library *)DOSBase);
     return (rc);
 }

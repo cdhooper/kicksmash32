@@ -143,7 +143,7 @@ static uint     fail_cmd_a;     // Invalid command failures from Amiga
 static uint     fail_cmd_u;     // Invalid command failures from USB Host
 
 /* Buffers for DMA from/to GPIOs and Timer event generation registers */
-#define ADDR_BUF_COUNT 1024
+#define ADDR_BUF_COUNT 1200
 #define ALIGN  __attribute__((aligned(16)))
 ALIGN volatile uint16_t buffer_rxa_lo[ADDR_BUF_COUNT];
 ALIGN volatile uint16_t buffer_rxd[ADDR_BUF_COUNT];
@@ -287,8 +287,8 @@ gpio_showbuf(uint count)
  */
 #define SPACE_INUSE_ATOU ((prod_atou - cons_atou) & (sizeof (msg_atou) - 1))
 #define SPACE_INUSE_UTOA ((prod_utoa - cons_utoa) & (sizeof (msg_utoa) - 1))
-#define SPACE_AVAIL_ATOU (sizeof (msg_atou) - 2 - SPACE_INUSE_ATOU)
-#define SPACE_AVAIL_UTOA (sizeof (msg_utoa) - 2 - SPACE_INUSE_UTOA)
+#define SPACE_AVAIL_ATOU (sizeof (msg_atou) - 4 - SPACE_INUSE_ATOU)
+#define SPACE_AVAIL_UTOA (sizeof (msg_utoa) - 4 - SPACE_INUSE_UTOA)
 
 static uint
 atou_add(uint len, void *ptr)
@@ -1713,13 +1713,18 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     }
                 }
             }
+            if (rc == 0) {
+                uint16_t val = *(uint16_t *)buf1;
+                if (val != 0x0204)
+                    printf("MSG corrupt v=%x\n", val);
+            }
             if (rc != 0) {
                 ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
             } else {
 #if 0
                 /*
                  * XXX: This code never worked because the size transferred
-                 *      is noly 2 bytes.
+                 *      is only 2 bytes.
                  */
                 uint16_t space_avail;
                 if ((cmd & KS_MSG_ALTBUF) == 0)
@@ -1924,7 +1929,9 @@ fast_magic_search(uint prod)
             return (0);
         }
         count       -= 2;
-        rx_consumer  = (rx_consumer + 2) % ARRAY_SIZE(buffer_rxa_lo);
+        rx_consumer += 2;
+        if (rx_consumer >= ARRAY_SIZE(buffer_rxa_lo))
+            rx_consumer -= ARRAY_SIZE(buffer_rxa_lo);
         ptr++;
     }
 
@@ -2018,6 +2025,11 @@ new_cmd_post:
                 crc_rx |= buffer_rxa_lo[rx_consumer];
                 uint len1 = cmd_len + 4;
                 uint32_t ncrc;
+
+                /* Stop timer DMA triggers */
+                TIM_CCER(TIM2) = 0;
+                TIM_CCER(TIM5) = 0;
+
                 if (len1 > sizeof (buffer_rxa_lo) - cons_start * 2) {
                     uint len2;
                     len1 = sizeof (buffer_rxa_lo) - cons_start * 2;
@@ -2032,8 +2044,6 @@ new_cmd_post:
                     uint16_t error[2];
                     error[0] = KS_STATUS_CRC;
                     error[1] = crc;
-#define CRC_DEBUG
-#ifdef CRC_DEBUG
                     /* First capture the log */
                     static uint16_t tempcap[16];
                     uint c = rx_consumer;
@@ -2043,13 +2053,11 @@ new_cmd_post:
                         if (c-- == 0)
                             c = ARRAY_SIZE(buffer_rxa_lo) - 1;
                     }
-#endif  // CRC_DEBUG
                     ks_reply(0, KS_STATUS_CRC, sizeof (error), &error, 0, NULL);
                     fail_crc_a++;
 
                     printf("cmd=%x l=%04x CRC %08lx != calc %08lx\n",
                            cmd, cmd_len, crc_rx, crc);
-#ifdef CRC_DEBUG
                     for (pos = 0; pos < ARRAY_SIZE(tempcap); pos++) {
                         printf(" %04x", tempcap[pos]);
                         if (((pos & 0xf) == 0xf) &&
@@ -2057,7 +2065,6 @@ new_cmd_post:
                             printf("\n");
                     }
                     printf("\n");
-#endif  // CRC_DEBUG
                 } else {
                     /* Execution phase */
                     execute_cmd(cmd, cmd_len);
@@ -2094,7 +2101,7 @@ new_cmd_post:
             if (++consumer_wrap - consumer_wrap_last_poll > 1) {
                 /*
                  * Spinning too much in interrupt context.
-                 * Disable interrupt -- it will be re-enabled in ee_poll().
+                 * Disable interrupt -- it will be re-enabled in msg_poll().
                  */
                 nvic_disable_irq(LOG_DMA_NVIC_IRQ);
                 consumer_spin++;
@@ -2600,7 +2607,6 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
                 rc = utoa_add(raw_len, rawbuf);
             else
                 rc = atou_add(raw_len, rawbuf);
-
             if (rc != 0)
                 usb_msg_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
             else

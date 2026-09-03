@@ -92,6 +92,10 @@ irq_disable(void)
 
 #define Enable()  irq_enable()
 #define Disable() irq_disable()
+#define Permit()             // No tasks in ROM Switcher
+#define Forbid()             // No tasks in ROM Switcher
+#define ObtainSemaphore(x)   // No Semaphores in ROM Switcher
+#define ReleaseSemaphore(x)  // No Semaphores in ROM Switcher
 
 /* Enable interrupts */
 static inline uint32_t

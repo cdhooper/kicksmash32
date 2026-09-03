@@ -317,6 +317,10 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     (void) *VADDR32(ROM_BASE + ((crc >> 16) << smash_cmd_shift));
     (void) *VADDR32(ROM_BASE + ((crc & 0xffff) << smash_cmd_shift));
 
+    /* Extra read to kick off handling */
+    cia_spin(2);
+    val32 = *VADDR32(ROM_BASE + 0x1554); // remote addr 0x0555 or 0x0aaa
+
     /*
      * Delay to prevent reads before Kicksmash has set up DMA hardware
      * with the data to send. This is necessary so that the two DMA
@@ -326,7 +330,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      * A3000 68030-25:  10 spins minimum
      * A3000 A3660 50M: 30 spins minimum
      */
-    cia_spin((arglen >> 3) + (replymax >> 5) + 10);
+    cia_spin((arglen >> 3) + (replymax >> 5));
 //  cia_spin(100);  // XXX Debug delay for brief KS output
 
     /*
@@ -337,7 +341,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      *
      *            hi16bits lo16bits hi16bits lo16bits hi16bits lo16bits
      * Example 1: 0x1017   0x0204   0x0117   0x0119   len      status
-     * Example 2: ?        0x0119   0x0117   0x0204   0x1017   len
+     * Example 2: ?        0x1017   0x0204   0x0117   0x0119   len
      */
 #define WAIT_FOR_MAGIC_LOOPS 128
     for (word = 0; word < WAIT_FOR_MAGIC_LOOPS; word++) {
@@ -345,7 +349,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         if (word & 1) {
             val = (uint16_t) val32;
         } else {
-            val32 = *VADDR32(ROM_BASE + 0x1554); // remote addr 0x0555 or 0x0aaa
+            val32 = *VADDR32(ROM_BASE + 0x1110); // remote addr 0x0444 or 0x0888
 #undef SM_MSG_DEBUG
 #ifdef SM_MSG_DEBUG
             *VADDR32(0x77780 + word * 2) = val32;

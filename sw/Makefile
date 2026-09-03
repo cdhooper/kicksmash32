@@ -5,11 +5,10 @@ HSNET_SRCS=hostsmash_netif.c ../fw/version.c
 CRCIT_PROG=crcit
 CRCIT_SRCS=crcit.c ../fw/crc32.c
 CC := gcc
-#CFLAGS  := -O2 -g -pthread -Wall -Wpedantic
-#LDFLAGS := -O2 -g -lpthread
 CFLAGS  := -O2 -pthread -Wall -Wpedantic -Wno-variadic-macros
 LDFLAGS := -O2 -lpthread
-OS := $(shell uname -s)
+#CFLAGS  += -g
+#LDFLAGS += -g
 
 #
 # Allowing links opens security risk for remote mounts because anything
@@ -17,6 +16,7 @@ OS := $(shell uname -s)
 # and accessed by the Amiga
 CFLAGS += -DALLOW_CREATE_LINK
 
+OS := $(shell uname -s)
 ifneq ($(OS),Darwin)
 USB_HDR := /usr/include/usb.h
 endif

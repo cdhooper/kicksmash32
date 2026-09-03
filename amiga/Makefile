@@ -11,7 +11,7 @@ SWITCH_PROG  := romswitch
 NET_PROG     := smashnet
 
 ALL_PROGS    := $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) \
-                $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(SMASHNET_PROG)
+                $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(NET_PROG)
 
 OBJDIR       := objs
 ROM_OBJDIR   := objs.rom

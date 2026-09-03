@@ -174,8 +174,12 @@ static const char usage_text[] =
 #endif
 "";
 
+#define HOST_INTERFACE_VERSION 1
+uint8_t amiga_interface_version = 0;
+
 static uint debug_fs = 0;
 static uint debug_msg = 0;
+static uint ks_message_terminated = 0;  // Stop execution when non-zero
 
 #ifdef FILE_DEBUG
 ATTRIBUTE_PRINTF
@@ -1534,6 +1538,8 @@ receive_ll(void *buf, size_t buflen, int timeout, bool exact_bytes)
         int ch = rx_rb_get();
         if (ch == -1) {
             if (time_has_elapsed(&tv_timeout)) {
+                if (ks_message_terminated)
+                    return (0);
                 if (exact_bytes && ((timeout > 50) || (received == 0))) {
                     printf("Receive timeout (%d ms): got %d of %zu bytes\n",
                            timeout, received, buflen);
@@ -3571,7 +3577,7 @@ send_ks_cmd_core(uint cmd, uint len, void *buf)
 
     crc = crc32r(0, &txlen, 2);
     crc = crc32r(crc, &txcmd, 2);
-#if 0
+#ifdef DEBUG_CRC
     if (len > 0) {
         uint32_t crc1a = crc32s(crc, buf, len & ~1);
         uint32_t crc1b = crc32s(crc1a, (uint8_t *)buf + len, 1);
@@ -3582,7 +3588,7 @@ send_ks_cmd_core(uint cmd, uint len, void *buf)
     }
 #endif
     crc = crc32s(crc, buf, len);
-#if 0
+#ifdef DEBUG_CRC
     if (len > 0) {
         printf("crc2=%08x len=%x buf=", crc, len);
         uint8_t *bufp = (uint8_t *)buf;
@@ -3644,6 +3650,7 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
     uint32_t crc_rx = 0;
     int timeout_count = 0;
     uint8_t  localbuf[4096];
+    uint     was_kicksmash = 0;
 
     if (buf == NULL) {
         bufp = localbuf;
@@ -3654,6 +3661,8 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
     while (1) {
         uint ch = rx_rb_get();
         if ((int)ch == -1) {
+            if (ks_message_terminated)
+                return (0);
             if (timeout_count++ >= timeout) {
                 printf("Receive timeout (%d ms): discarded %u bytes\n",
                        timeout, pos);
@@ -3728,11 +3737,25 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
             case 7:  // Magic
                 if (ch != sm_magic_b[pos]) {
                     pos = 0;
-                    if (debug_msg || !is_printable_ascii(ch))
+                    if (was_kicksmash == 0) {
+                        was_kicksmash = 1;
+                        printf("KS: ");
+                    }
+                    if (!is_printable_ascii(ch))
                         printf("[%02x %c]", ch, printable_ascii(ch));
                     else
                         putchar(ch);
+                    if (ch == " CMD>"[was_kicksmash]) {
+                        was_kicksmash++;
+                        if (was_kicksmash == 5) {
+                            printf("Kicksmash message interface terminated\n");
+                            ks_message_terminated = 1;  // Stop execution
+                            running = 0;
+                            break;
+                        }
+                    }
                 } else {
+                    was_kicksmash = 0;
                     pos++;
                 }
                 break;
@@ -3765,8 +3788,9 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
                     if (flags & BIT(0)) {
                         /* Raw data receive */
                         if (pos >= buflen) {
-                            printf("message len 0x%x > raw buflen 0x%x\n",
-                                   pos, buflen);
+                            printf("message len 0x%x > raw buflen 0x%x for "
+                                   "cmd=%x\n",
+                                   pos, buflen, status);
                             return (MSG_STATUS_BAD_LENGTH);  // too large
                         }
                         crc = crc32s(0, bufp + sizeof (sm_magic), len + 4);
@@ -3774,8 +3798,9 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
                     } else {
                         /* Regular data receive */
                         if (len > buflen) {
-                            printf("message len 0x%x > buflen 0x%x\n",
-                                   len, buflen);
+                            printf("message len 0x%x > buflen 0x%x for "
+                                   "cmd=%x\n",
+                                   pos, buflen, status);
                             return (MSG_STATUS_BAD_LENGTH);  // too large
                         }
                         crc = crc32s(0, &len, 2);       // length
@@ -3878,7 +3903,199 @@ mem16_swap(void *buf, uint len)
     }
 }
 
+#if defined(__MINGW32__)
+#  include <windows.h>
+   typedef unsigned int uint;
+#elif defined(OSX) || defined(LINUX)
+#  include <pthread.h>
+#  include <sys/types.h>       /* uint */
+#else
+#  error "Define one of LINUX, OSX, or __MINGW32__ to select a lock backend"
+#endif
+
+/*
+ * Platform lock backend
+ */
+#if defined(__MINGW32__)
+   /* SRWLOCK has a static initializer, just like PTHREAD_MUTEX_INITIALIZER,
+    * so no explicit init/teardown call is required. */
+   static SRWLOCK queue_lock = SRWLOCK_INIT;
+#  define QUEUE_LOCK()    AcquireSRWLockExclusive(&queue_lock)
+#  define QUEUE_UNLOCK()  ReleaseSRWLockExclusive(&queue_lock)
+#else /* OSX || LINUX */
+   static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+#  define QUEUE_LOCK()    pthread_mutex_lock(&queue_lock)
+#  define QUEUE_UNLOCK()  pthread_mutex_unlock(&queue_lock)
+#endif
+
+/*
+ * Queue node / FIFO
+ */
+#define TAG_QUEUE_ANY  ((uint)-1)  // Give any queued message
+#define TAG_QUEUE_NONE ((uint)-2)  // Just queue a received message
+
+typedef struct msg_tag_queue msg_tag_queue_t;
+struct msg_tag_queue {
+    msg_tag_queue_t *mrg_next;    // Next node in FIFO order
+    void            *mrg_buf;     // Buffer (might be exchanged)
+    uint16_t         mrg_len;     // Length of message (NOT buffer size)
+    uint16_t         mrg_tag;     // Desired reply tag
+    uint8_t          mrg_status;  // Message receive status
+};
+
+/* Head/tail of the FIFO - global, protected by queue_lock */
+static msg_tag_queue_t *mtq_head = NULL;
+static msg_tag_queue_t *mtq_tail = NULL;
+
+/*
+ * tag_queue_add() - Appends a message to the tail of the FIFO.
+ *                   This function is thread-safe.
+ */
+static void
+tag_queue_add(uint16_t tag, void *buf, uint len, uint rx_status)
+{
+    msg_tag_queue_t *node = malloc(sizeof (*node));
+    if (node == NULL) {
+        /* No memory: discard message to avoid leaking the buffer */
+        fprintf(stderr, "tag_queue_add: out of memory\n");
+        free(buf);
+        return;
+    }
+    node->mrg_buf    = buf;
+    node->mrg_len    = (uint16_t)len;
+    node->mrg_tag    = tag;
+    node->mrg_status = rx_status;
+    node->mrg_next   = NULL;
+
+    QUEUE_LOCK();
+    if (mtq_tail == NULL) {
+        mtq_head = node;
+        mtq_tail = node;
+    } else {
+        mtq_tail->mrg_next = node;
+        mtq_tail = node;
+    }
+    QUEUE_UNLOCK();
+}
+
+/*
+ * tag_queue_remove() - Locates the first node in FIFO order whose
+ *                      tag matches. TAG_QUEUE_ANY matches any tag.
+ *                      A pointer to the found node is returned.
+ *                      NULL indicates no node with the specified tag
+ *                      was located. This function is thread-safe.
+ */
+static void *
+tag_queue_remove(uint target_tag, uint *len, uint *rx_status)
+{
+    msg_tag_queue_t *node, *prev = NULL;
+    void *found_buf = NULL;
+
+    if (target_tag == TAG_QUEUE_NONE)
+        return (NULL);
+
+    QUEUE_LOCK();
+    for (node = mtq_head; node != NULL; prev = node, node = node->mrg_next) {
+        if ((target_tag == TAG_QUEUE_ANY) || (node->mrg_tag == target_tag)) {
+            /* Unlink node from the FIFO */
+            if (prev == NULL)
+                mtq_head = node->mrg_next;
+            else
+                prev->mrg_next = node->mrg_next;
+            if (node == mtq_tail)
+                mtq_tail = prev;
+            break;
+        }
+    }
+    QUEUE_UNLOCK();
+
+    if (node != NULL) {
+        found_buf   = node->mrg_buf;
+        *len        = node->mrg_len;
+        *rx_status  = node->mrg_status;
+        free(node);
+    }
+    return (found_buf);
+}
+
+static uint recv_msg(uint tag, void *buf, uint bufsize,
+                     uint *rx_status, uint *rxlen);
+
 #define SEND_MSG_MAX 2000
+
+static uint
+wait_for_send_space(uint sendlen, uint pos, uint len)
+{
+    uint rc;
+    uint status;
+    uint16_t utoa_avail;
+    uint16_t atou_inuse;
+    smash_msg_info_t mi;
+
+    /*
+     * Poll for the required space and then try again.
+     */
+    uint timeout;
+    for (timeout = 2000; timeout > 0; timeout--) {
+        /* Wait for space */
+        rc = send_ks_cmd(KS_CMD_MSG_INFO, NULL, 0, &mi, sizeof (mi),
+                         &status, NULL, 0);
+        utoa_avail = SWAP16(mi.smi_utoa_avail);
+        if ((rc != 0) || (utoa_avail >= sendlen))
+            return (rc);
+        atou_inuse = SWAP16(mi.smi_atou_inuse);
+        if (atou_inuse > 0) {
+            /*
+             * Message(s) pending from Amiga. Read and queue those to prevent
+             * message deadlock where Amiga code is waiting to send more.
+             */
+            uint8_t rxdata[4096];
+            uint rxlen;
+            (void) recv_msg(TAG_QUEUE_NONE, rxdata, sizeof (rxdata), &status,
+                            &rxlen);
+            continue;
+        }
+        time_delay_msec(1);
+    }
+
+    if (timeout == 0) {
+        printf("Send timeout waiting for len=%x buffer at "
+               "%x of %x\n",
+               sendlen, pos - SEND_MSG_MAX, len - SEND_MSG_MAX);
+        return (RC_TIMEOUT);
+    }
+    return (KM_STATUS_OK);
+}
+
+/*
+ * send_msg_wait
+ * -------------
+ * Sends a message to the remote Amiga, waiting for space if necessary.
+ */
+uint
+send_msg_wait(void *buf, uint len, uint *status, uint pos)
+{
+    uint rc;
+    rc = send_ks_cmd(KS_CMD_MSG_SEND, buf, len, NULL, 0, status, NULL, 0);
+    if (*status == KS_STATUS_BADLEN) {
+        /*
+         * The check for space significantly impacts file send time,
+         * reducing performance about 30%. It is not really needed
+         * in the general case, so it's only done on KS_STATUS_BADLEN
+         * like when two requests occur around the same time).
+         */
+        rc = wait_for_send_space(len, pos, len);
+        if (rc == KM_STATUS_OK) {
+            /* Try again now that there is enough space */
+            rc = send_ks_cmd(KS_CMD_MSG_SEND, buf, len, NULL, 0,
+                             status, NULL, 0);
+            if ((rc != 0) || (*status != 0))  {
+                printf("Got fail %x %x\n", rc, *status);
+            }
+        }
+    }
+    return (rc);
+}
 
 /*
  * send_msg
@@ -3897,73 +4114,56 @@ send_msg(void *buf, uint len, uint *status)
 
 #ifdef MSG_DEBUG
     km_msg_hdr_t *km = (km_msg_hdr_t *) buf;
-    msgprintf("  send msg len=%04x op=%02x mstatus=%02x tag=%02x data ",
-              len, km->km_op, km->km_status, km->km_tag);
+    msgprintf("  send msg len=%04x op=%02x mstatus=%02x tag=%02x\n",
+              len, km->km_op, km->km_status, SWAP16(km->km_tag));
 #endif
-    mem16_swap(buf, len);
+    mem16_swap(buf, len);  // Raw messages passed 16 bits at a time to Amiga
     if (sendlen > SEND_MSG_MAX)
         sendlen = SEND_MSG_MAX;
-    rc = send_ks_cmd(KS_CMD_MSG_SEND, buf, sendlen, NULL, 0, status, NULL, 0);
-    if (rc == 0) {
-        pos = sendlen;
-        if (pos < len) {
-            /*
-             * Remaining payload will be sent as additional messages,
-             * waiting for sufficient space available before each one.
-             * Need to repeat a minimal header for each additional packet.
-             */
-            memcpy(msgbuf, buf, sizeof (km_msg_hdr_t));
-            bodylen = pos - sizeof (km_msg_hdr_t);
+    rc = send_msg_wait(buf, sendlen, status, 0);
+
+    if ((sendlen == len) || (rc != 0) || (*status != 0))
+        goto finish;  // Entire message has been sent or error
+
+    /*
+     * Multiple send mode required for the large message.
+     */
+
+    uint8_t curpkt = 0;
+    uint8_t *op = &msgbuf[1];  // km_op
+    pos = sendlen;
+    if (pos < len) {
+        /*
+         * Remaining payload will be sent as additional messages,
+         * waiting for sufficient space available before each one.
+         * Need to repeat a minimal header for each additional packet.
+         */
+        memcpy(msgbuf, buf, sizeof (km_msg_hdr_t));
+        bodylen = pos - sizeof (km_msg_hdr_t);
+    }
+    while (pos < len) {
+        *op = ++curpkt;  // Sequence number, starting a 1
+        if (bodylen > len - pos)
+            bodylen = len - pos;
+        bodylen_rounded = (bodylen + 1) & ~1;
+        memcpy(msgbuf + sizeof (km_msg_hdr_t),
+               (uint8_t *)buf + pos, bodylen_rounded);
+        sendlen = bodylen + sizeof (km_msg_hdr_t);
+
+        rc = send_msg_wait(msgbuf, sendlen, status, pos);
+        if ((rc != 0) || (*status != 0)) {
+            printf("send msg failed at %x of %x\n", pos, len);
+            break;
         }
-        while (pos < len) {
-            if (bodylen > len - pos)
-                bodylen = len - pos;
-            bodylen_rounded = (bodylen + 1) & ~1;
-            memcpy(msgbuf + sizeof (km_msg_hdr_t),
-                   (uint8_t *)buf + pos, bodylen_rounded);
-            sendlen = bodylen + sizeof (km_msg_hdr_t);
-
-#undef DO_REMOTE_SPACE_CHECK
-#ifdef DO_REMOTE_SPACE_CHECK
-            /*
-             * The check for space significantly impacts file send time
-             * (dropping from ~85 KB/sec to ~60 KB/sec. It is not really
-             * needed based on the current protocol, so it is skipped.
-             */
-            uint timeout = 100;
-            do {
-                /* Wait for space */
-                smash_msg_info_t mi;
-                rc = send_ks_cmd(KS_CMD_MSG_INFO, NULL, 0, &mi, sizeof (mi),
-                                 status, NULL, 0);
-                mi.smi_utoa_avail = SWAP16(mi.smi_utoa_avail);
-                if (mi.smi_utoa_avail >= sendlen)
-                    break;
-                time_delay_msec(1);
-            } while (timeout--);
-
-            if (timeout == 0) {
-                printf("Send timeout waiting for len=%x buffer at %x of %x\n",
-                       sendlen, pos - SEND_MSG_MAX, len - SEND_MSG_MAX);
-                rc = RC_TIMEOUT;
-                break;
-            }
-#endif
-            rc = send_ks_cmd(KS_CMD_MSG_SEND, msgbuf, sendlen, NULL, 0,
-                             status, NULL, 0);
-            if (rc != 0) {
-                printf("send msg failed at %x of %x\n", pos, len);
-                break;
-            }
-            pos += bodylen;
+        pos += bodylen;
 #undef DEBUG_SEND_MSG
 #ifdef DEBUG_SEND_MSG
-            printf("send %x (body=%x) pos=%x of %x\n",
-                   sendlen, bodylen, pos, len);
+        printf("send %x (body=%x) pos=%x of %x\n",
+               sendlen, bodylen, pos, len);
 #endif
-        }
     }
 
+finish:
     mem16_swap(buf, len);
     return (rc);
 }
@@ -3974,14 +4174,94 @@ send_msg(void *buf, uint len, uint *status)
  * Receives a message from the remote Amiga
  */
 static uint
-recv_msg(void *buf, uint bufsize, uint *rx_status, uint *rx_len)
+recv_msg(uint tag, void *buf, uint bufsize, uint *rx_status, uint *rxlen)
 {
-    uint rc;
-    rc = send_ks_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, bufsize,
-                     rx_status, rx_len, 0);
-    if (rc == 0)
-        mem16_swap(buf, *rx_len);
-    return (rc);
+    uint     rc;
+    uint16_t msg_tag;
+    uint8_t *localbuf;
+    uint     timeout;
+
+retry:
+    /* Check for buffered message first */
+    localbuf = tag_queue_remove(tag, rxlen, rx_status);
+    if (localbuf != NULL) {
+#undef DEBUG_MSG_FIFO
+#ifdef DEBUG_MSG_FIFO
+        km_msg_hdr_t *hdr = (km_msg_hdr_t *) localbuf;
+        printf("GOT queue %slen=%x tag=%x op=%x status=%x\n",
+               (tag == TAG_QUEUE_ANY) ? "any " : "",
+               *rxlen, SWAP16(hdr->km_tag), hdr->km_op, hdr->km_status);
+#endif
+
+#undef DEBUG_MSG_FIFO_DUMP
+#ifdef DEBUG_MSG_FIFO_DUMP
+        uint pos;
+        printf("   data");
+        for (pos = 0; pos < 16; pos++)
+            printf(" %02x", localbuf[pos]);
+        printf("\n");
+#endif
+        memcpy(buf, localbuf, *rxlen);
+        free(localbuf);
+        return (0);
+    }
+    for (timeout = 0; timeout < 50; timeout++) {
+        rc = send_ks_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, bufsize,
+                         rx_status, rxlen, 0);
+        if ((rc != 0) || (*rxlen == 0))
+            return (rc);
+        if (*rx_status == KS_STATUS_NODATA) {
+            if ((tag == TAG_QUEUE_ANY) || (tag == TAG_QUEUE_NONE))
+                return (rc);  // No message pending
+            continue;  // Poll again
+        }
+        mem16_swap(buf, *rxlen);
+        msg_tag = ((km_msg_hdr_t *)buf)->km_tag;
+
+        if ((tag == TAG_QUEUE_ANY) || (tag == msg_tag)) {
+            /* Got desired message */
+#ifdef DEBUG_MSG_FIFO
+            km_msg_hdr_t *hdr = buf;
+            printf("Recv tag=%x len=%x op=%x status=%x\n",
+                   SWAP16(msg_tag), *rxlen, hdr->km_op, hdr->km_status);
+#endif
+            return (0);
+        }
+
+        localbuf = malloc(*rxlen);
+        if (localbuf == NULL) {
+            perror("malloc");
+            return (RC_FAILURE);
+        }
+        memcpy(localbuf, buf, *rxlen);
+#ifdef DEBUG_MSG_FIFO
+        printf("SAVE Recv tag %x len=%x stat=%x\n", SWAP16(msg_tag), *rxlen, *rx_status);
+#endif
+
+#ifdef DEBUG_MSG_FIFO_DUMP
+        uint pos;
+        uint plen = 16;
+        if (plen > *rxlen)
+            plen = *rxlen;
+        printf("   data");
+        for (pos = 0; pos < plen; pos++)
+            printf(" %02x", localbuf[pos]);
+        printf("\n");
+#endif
+        if (*rxlen < 0x2000) {
+            tag_queue_add(msg_tag, localbuf, *rxlen, *rx_status);
+        } else {
+            return (RC_FAILURE);
+        }
+goto retry;
+        if ((tag == TAG_QUEUE_ANY) || (tag == TAG_QUEUE_NONE))
+            return (rc);
+    }
+    if (tag == TAG_QUEUE_ANY)
+        printf("Timeout waiting for any tag\n");
+    else
+        printf("Timeout waiting for tag %x\n", SWAP16(tag));
+    return (RC_TIMEOUT);
 }
 
 static uint16_t app_state_send[2];
@@ -4701,7 +4981,7 @@ sm_loopback(km_msg_hdr_t *km, uint8_t *rxdata, uint rxlen, uint *status)
     /* Need to send back reply */
     km->km_status = KM_STATUS_OK;
     km->km_op |= KM_OP_REPLY;
-#if 0
+#ifdef DEBUG_CMD_LOOPBACK
     printf("lb l=%x s=%04x data=%02x %02x\n",
              rxlen, *status, rxdata[0], rxdata[1]);
     int rc = send_msg(rxdata, rxlen, status);
@@ -4753,6 +5033,22 @@ sm_id(km_msg_hdr_t *km, uint *status)
     memset(reply->si_unused, 0, sizeof (reply->si_unused));
     return (send_msg(km, sizeof (*km) + sizeof (*reply), status));
 }
+
+static uint
+sm_version(hm_version_t *hm, uint *status)
+{
+    amiga_interface_version = hm->hm_version;
+    printf("Amiga interface version %x\n", amiga_interface_version);
+
+    hm->hm_hdr.km_op |= KM_OP_REPLY;
+    hm->hm_hdr.km_status = KM_STATUS_OK;
+    hm->hm_version       = HOST_INTERFACE_VERSION;
+    hm->hm_unused[0]     = 0;
+    hm->hm_unused[1]     = 0;
+    hm->hm_unused[2]     = 0;
+    return (send_msg(hm, sizeof (*hm), status));
+}
+
 
 static uint
 sm_fopen(hm_fopenhandle_t *hm, uint *status)
@@ -5026,10 +5322,19 @@ sm_fread(hm_freadwrite_t *hm, uint *status)
     handle_ent_t    *handle = handle_get(hm->hm_handle);
     uint             pathlen = 0;
     char             pathbuf[2048];
+    ssize_t          readcnt = 0;
 
     hm->hm_hdr.km_op |= KM_OP_REPLY;
 
-    fsprintf("fread(%x, l=%x)\n", hm->hm_handle, hm_length);
+#ifdef FILE_DEBUG
+    off64_t          fpos = 0;
+    if ((hm_flag & HM_FLAG_SEEK0) == 0) {
+        if (handle != NULL)
+            fpos = lseek64(handle->he_fd, 0, SEEK_CUR);
+    }
+    fsprintf("fread(%x p=%jx l=%x)\n",
+             hm->hm_handle, (intmax_t) fpos, hm_length);
+#endif
     if (handle == NULL) {
         fsprintf("handle get %x failed\n", hm->hm_handle);
 reply_read_fail:
@@ -5469,20 +5774,20 @@ dir_read_common:
                 (void) lseek64(handle->he_fd, 0, SEEK_SET);
             }
 
-            rc = read(handle->he_fd, ndata, len);
+            readcnt = read(handle->he_fd, ndata, len);
 #ifdef DEBUG_READ
             fsprintf("read %d bytes from fd=%d %s\n",
                      rc, handle->he_fd, handle->he_name);
 #endif
-            if (rc <= 0) {
-                if (rc == 0) {
+            if (readcnt <= 0) {
+                if (readcnt == 0) {
                     rc = KM_STATUS_EOF;
-                } else {
+                } else if (readcnt < 0) {
                     rc = errno_to_km_status();
                 }
                 break;
             }
-            pos += rc;
+            pos += readcnt;
             rc = 0;
         }
     }
@@ -5507,13 +5812,23 @@ dir_read_common:
 static uint
 sm_fwrite(hm_freadwrite_t *hm, uint rxlen, uint *status)
 {
-    uint             rc;
+    uint             rc        = 0;
     uint             hm_length = SWAP32(hm->hm_length);
     uint             hm_flag   = SWAP16(hm->hm_flag);
     handle_ent_t    *handle    = handle_get(hm->hm_handle);
     uint8_t         *ndata     = (uint8_t *)(hm + 1);
+    ssize_t          writecnt  = 0;
+    uint16_t         main_tag  = hm->hm_hdr.km_tag;
 
-    fsprintf("fwrite(%x, l=%x)\n", hm->hm_handle, hm_length);
+#ifdef FILE_DEBUG
+    off64_t          fpos = 0;
+    if ((hm_flag & HM_FLAG_SEEK0) == 0) {
+        if (handle != NULL)
+            fpos = lseek64(handle->he_fd, 0, SEEK_CUR);
+    }
+    fsprintf("fwrite(%x p=%jx l=%x tag=%x)\n",
+             hm->hm_handle, (intmax_t)fpos, hm_length, SWAP16(main_tag));
+#endif
     hm->hm_hdr.km_op |= KM_OP_REPLY;
 
     if (handle == NULL) {
@@ -5564,28 +5879,32 @@ reply_write_fail:
         ndata = (uint8_t *) ((km_msg_hdr_t *) rxdata + 1);
         while (rdatapos < hm_length) {
             uint rxmax = hm_length - rdatapos + sizeof (km_msg_hdr_t);
-            rc = recv_msg(rxdata, rxmax, status, &rxlen);
+            rc = recv_msg(main_tag, rxdata, sizeof (rxdata), status, &rxlen);
             if (rc != RC_SUCCESS)
                 break;
+
             if (rxlen == 0) {
-                if (++timeout < 20)
+                if (++timeout < 1000) {
+                    time_delay_msec(1);
                     continue;
-                fsprintf("fwrite(%x) data timeout at pos=%x\n",
-                         hm->hm_handle, rdatapos);
+                }
+                printf("fwrite(%x) tag=%x data timeout at pos=%x\n",
+                       hm->hm_handle, main_tag, rdatapos);
                 rc = RC_FAILURE;
                 break;
             }
             timeout = 0;
+            if (rxlen > rxmax) {
+                printf("fwrite(%x) tag=%x receive len %x > max %x\n",
+                       hm->hm_handle, main_tag, rxlen, rxmax);
+                rc = RC_FAILURE;
+                break;
+            }
+
             if (rxlen >= sizeof (km_msg_hdr_t))
                 rxlen -= sizeof (km_msg_hdr_t);
             else
                 rxlen = 0;
-            if (((km_msg_hdr_t *)rxdata)->km_tag != hm->hm_hdr.km_tag) {
-                fsprintf("tag mismatch: %04x != expected %04x\n",
-                         ((km_msg_hdr_t *)rxdata)->km_tag, hm->hm_hdr.km_tag);
-                rc = RC_FAILURE;
-                break;
-            }
             memcpy(rdata + rdatapos, ndata, rxlen);
             rdatapos += rxlen;
         }
@@ -5594,17 +5913,17 @@ reply_write_fail:
                 hm_flag &= ~HM_FLAG_SEEK0;
                 (void) lseek64(handle->he_fd, 0, SEEK_SET);
             }
-            rc = write(handle->he_fd, rdata, hm_length);
+            writecnt = write(handle->he_fd, rdata, hm_length);
         }
         free(rdata);
     } else {
-        rc = write(handle->he_fd, ndata, hm_length);
+        writecnt = write(handle->he_fd, ndata, hm_length);
     }
-    if (rc < 0) {
-        fsprintf("write rc=%d errno=%d\n", rc, errno);
-        rc = errno_to_km_status();
-    } else {
-        rc = KM_STATUS_OK;
+    if (rc == KM_STATUS_OK) {
+        if (writecnt < 0) {
+            fsprintf("write rc=%d errno=%d\n", rc, errno);
+            rc = errno_to_km_status();
+        }
     }
 
     hm->hm_hdr.km_status = rc;
@@ -6318,9 +6637,10 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
     uint retry = 1;
 
 #ifdef MSG_DEBUG
+    uint rxmax = (rxlen > 32) ? 32 : rxlen;
     msgprintf("  got msg %04x len=%04x op=%02x mstatus=%02x tag=%02x data ",
-              status, rxlen, km->km_op, km->km_status, km->km_tag);
-    for (pos = sizeof (*km); pos < 32; pos++) {
+              status, rxlen, km->km_op, km->km_status, SWAP16(km->km_tag));
+    for (pos = sizeof (*km); pos < rxmax; pos++) {
         msgprintf(" %02x", rxdata[pos]);
     }
     msgprintf("\n");
@@ -6349,6 +6669,9 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
                 break;
             case KM_OP_ID:
                 rc = sm_id(km, &status);
+                break;
+            case KM_OP_VERSION:
+                rc = sm_version((hm_version_t *)rxdata, &status);
                 break;
             case KM_OP_FOPEN:
                 rc = sm_fopen((hm_fopenhandle_t *)rxdata, &status);
@@ -6414,8 +6737,8 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
         if (rc == 0)
             break;
 
-        printf("KS process_msg failure op=%x status=%02x: %d (%s)\n",
-               km->km_op, status, rc, smash_err(rc));
+        printf("process_msg failure op=%x,%x status=%02x: %x (%s)\n",
+               op, km->km_op, status, rc, smash_err(rc));
         time_delay_msec(100);
     } while (retry-- > 0);
 }
@@ -6424,6 +6747,7 @@ static uint
 handle_atou_messages(void)
 {
     uint8_t   rxdata[4096];
+//  void     *buf;
     uint      status;
     uint      rxlen;
     uint      rc;
@@ -6435,8 +6759,7 @@ handle_atou_messages(void)
      * and recv_msg() functions take care of this byte swapping.
      */
     while (1) {
-        rc = recv_msg(rxdata, sizeof (rxdata), &status, &rxlen);
-
+        rc = recv_msg(TAG_QUEUE_ANY, rxdata, sizeof (rxdata), &status, &rxlen);
         if (rc != 0) {
             printf("KS recv_msg failure: %d (%s)\n", rc, smash_err(rc));
             return (rc);
@@ -6447,11 +6770,13 @@ handle_atou_messages(void)
         } else if ((status == KS_STATUS_NODATA) ||
                    (status == KS_STATUS_LOCKED)) {
             break;
-        } else {
-            printf("status=%04x len=%x", status, rxlen);
+        } else if (status != 0) {
+            printf("recv_msg rc=%x status=%04x len=%x", rc, status, rxlen);
             if (rxlen > 0) {
                 uint pos;
                 printf(" data=");
+                if (rxlen > 16)
+                    rxlen = 16;
                 for (pos = 0; pos < rxlen; pos++) {
                     if (pos > 0)
                         printf(" ");
@@ -6528,11 +6853,15 @@ run_message_mode(void)
         }
 
         if (curtick > 1000) {
+            if (ks_message_terminated)
+                break;
             rc = send_ks_cmd(KS_CMD_MSG_INFO, NULL, 0, &mi, sizeof (mi),
                              &status, NULL, 0);
+            if (ks_message_terminated)
+                break;
             if (rc != 0) {
                 printf("KS message failure: %d (%s)\n", rc, smash_err(rc));
-                break;
+                continue;
             }
             if ((mi.smi_atou_inuse != 0) || (mi.smi_utoa_inuse != 0)) {
                 msgprintf("  atou inuse=%u avail=%u  utoa inuse=%u avail=%u\n",

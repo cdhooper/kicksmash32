@@ -53,11 +53,13 @@ uint host_recv_msg_cont(uint tag, void *buf, uint buf_len);
 
 uint host_tag_alloc(void);
 void host_tag_free(uint tag);
+void host_msg_exit(void);
 
 void dump_memory(void *buf, uint len, uint dump_base);
 
 const char *smash_err(uint status);
 
-extern uint smash_cmd_shift;
+extern uint     smash_cmd_shift;
+extern uint8_t  host_interface_version;
 
 #endif /* _SM_MSG_H */

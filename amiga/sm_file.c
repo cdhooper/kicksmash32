@@ -197,13 +197,15 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
     hm_freadwrite_t msg;
     hm_freadwrite_t *rdata;
     uint rcvlen;
+    uint tag;
 
     if ((sm_file_active == 0) && (sm_fservice() == 0))
         return (KM_STATUS_UNAVAIL);
 
+    tag = host_tag_alloc();
     msg.hm_hdr.km_op     = KM_OP_FREAD;
     msg.hm_hdr.km_status = 0;
-    msg.hm_hdr.km_tag    = host_tag_alloc();
+    msg.hm_hdr.km_tag    = tag;
     msg.hm_handle        = handle;
     msg.hm_length        = readsize;
     msg.hm_flag          = flags;
@@ -230,10 +232,19 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
         rcvlen = 0;
     *data = (void *) (rdata + 1);
 
+    uint total_len = rdata->hm_length;
+    if (total_len > readsize) {
+        printf("corrupt: fread(received %x > readsize %x) "
+               "cmd=%x status=%x tag=%x,%x\n",
+               total_len, readsize, rdata->hm_hdr.km_op,
+               rdata->hm_hdr.km_status,
+               rdata->hm_hdr.km_tag, tag);
+        rc = MSG_STATUS_BAD_DATA;
+        goto sm_read_fail;
+    }
+
     if (rcvlen != rdata->hm_length) {
         /* More packets are inbound */
-        uint total_len = rdata->hm_length;
-        uint tag = msg.hm_hdr.km_tag;
 
         if ((sm_mbuf == NULL) || (total_len >= sm_mbuf_size))  {
             if (sm_mbuf != NULL)

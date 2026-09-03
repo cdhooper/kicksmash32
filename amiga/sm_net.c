@@ -117,7 +117,7 @@ uint
 sm_nwrite(ethhdr_t *ehdr, void *buf, uint writelen, uint padded_header)
 {
     uint msglen;
-    uint rcvlen;
+    uint rlen;
     uint rc;
     uint ehdr_len = (ehdr != NULL) ? sizeof (*ehdr) : 0;
     uint8_t *dptr;
@@ -143,11 +143,11 @@ sm_nwrite(ethhdr_t *ehdr, void *buf, uint writelen, uint padded_header)
     if (padded_header) {
         /* Send entire message in one shot */
         msglen = sizeof (*msg) + ehdr_len + writelen;
-        rc = host_msg(msg, msglen, (void **) &rdata, &rcvlen);
+        rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
     } else {
         memcpy(dptr + ehdr_len, buf, writelen);
         msglen = sizeof (*msg) + ehdr_len + writelen;
-        rc = host_msg(msg, msglen, (void **) &rdata, &rcvlen);
+        rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
     }
     host_tag_free(msg->hm_hdr.km_tag);
 
@@ -160,7 +160,7 @@ uint
 sm_nread(void **data, uint *readlen)
 {
     uint rc;
-    uint rcvlen;
+    uint rlen;
     hm_nreadwrite_t msg;
     hm_nreadwrite_t *rdata;
 
@@ -172,21 +172,21 @@ sm_nread(void **data, uint *readlen)
     msg.hm_hdr.km_tag    = host_tag_alloc();
     msg.hm_length        = 0;
 
-    rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rcvlen);
+    rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
     if (rc != KM_STATUS_OK) {
-        rcvlen = 0;
+        rlen = 0;
         goto sm_recv_fail;
-    } else if (rcvlen > sizeof (msg)) {
-        rcvlen -= sizeof (msg);
+    } else if (rlen > sizeof (msg)) {
+        rlen -= sizeof (msg);
     } else {
-        rcvlen = 0;
+        rlen = 0;
     }
 
     *data = (void *) (rdata + 1);
 
 sm_recv_fail:
     if (readlen != NULL)
-        *readlen = rcvlen;
+        *readlen = rlen;
 
     host_tag_free(msg.hm_hdr.km_tag);
 
