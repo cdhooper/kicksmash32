@@ -754,8 +754,8 @@ uint
 gadget_string_calc_y(Gadget *gad)
 {
     uint y = gad->TopEdge + 1;
-    if (gad->Height > FONT_HEIGHT + 3)
-        y = gad->TopEdge + (gad->Height - FONT_HEIGHT) / 2;
+    if (gad->Height > FONT_HEIGHT + 1)
+        y = gad->TopEdge + (gad->Height - FONT_HEIGHT + 1) / 2;
     return (y);
 }
 
@@ -785,7 +785,7 @@ static void
 gadget_draw_string(Gadget *gad)
 {
     uint x = gad->LeftEdge;
-    uint y = gad->TopEdge;
+    uint y = gadget_string_calc_y(gad);
     struct IntuiText *it = gad->GadgetText;
 
     /*
@@ -805,7 +805,7 @@ gadget_draw_string(Gadget *gad)
         }
         // XXX: Maybe this clipping intelligence should be built into
         //      render_text_at() so it can always trim to the screen borders.
-        render_text_at(it->IText + rstart, 0, rpos, y + it->TopEdge,
+        render_text_at(it->IText + rstart, 0, rpos, y + it->TopEdge - 1,
                        it->FrontPen, it->BackPen);
     }
     gadget_update_string(gad, GADGET_STRING_UPDATE_ALL);

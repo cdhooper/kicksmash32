@@ -1330,7 +1330,7 @@ show_bank_timeout(void)
     ng.ng_VisualInfo = visualInfo;
 
     ng.ng_Width      = 30;
-    ng.ng_Height     = 10;
+    ng.ng_Height     = 11;
     ng.ng_TopEdge    = 43;
     ng.ng_LeftEdge   = 541;
     ng.ng_GadgetText = "Bank";
@@ -1343,8 +1343,8 @@ show_bank_timeout(void)
     gadget_timeout_bank = LastAdded;
 
     ng.ng_Width      = 52;
-    ng.ng_Height     = 10;
-    ng.ng_TopEdge    = 56;
+    ng.ng_Height     = 11;
+    ng.ng_TopEdge    = 57;
     ng.ng_LeftEdge   = 541;
     ng.ng_GadgetText = "Timeout";
     ng.ng_GadgetID   = ID_BANK_TIMEOUT;
