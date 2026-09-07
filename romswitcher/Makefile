@@ -126,7 +126,7 @@ $(OBJDIR)/main.o: ../fw/version.c $(filter-out $(OBJDIR)/main.o,$(OBJS))
 
 $(OBJS): amiga_chipset.h screen.h printf.h util.h serial.h timer.h
 $(OBJDIR)/serial.o: keyboard.h
-$(OBJDIR)/sprite.o: sprite.h
+$(OBJDIR)/sprite.o $(OBJDIR)/vectors.o: sprite.h
 $(OBJDIR)/main.o: sprite.h keyboard.h reset.h picassoiv.h
 $(OBJDIR)/picassoiv.o: autoconfig.h picassoiv.h timer.h cache.h
 $(OBJDIR)/draw.o: draw.h intuition.h

@@ -404,6 +404,7 @@ DrawBevelBox(RastPort *rp, long left, long top, long width, long height,
         }
         tag1 = va_arg(ap, ULONG);
     }
+    va_end(ap);
 
     switch (boxtype) {
         default:
@@ -426,24 +427,19 @@ DrawBevelBox(RastPort *rp, long left, long top, long width, long height,
             /* box for STRING_KIND and INTEGER_KIND gadgets */
             int x1 = left;
             int x2 = left + width - 1;
-            int y1 = top + 1;
-            int y2 = top + height;
-            if (y1 - y2 > FONT_HEIGHT + 1) {
-                draw_line(bot_pen, x1, y2 + 1, x2, y2 + 1);
-                draw_line(bot_pen, x2, y1 - 1, x2, y2 + 1);
-                draw_line(top_pen, x1, y2, x2 - 1, y2);
-                draw_line(top_pen, x2 - 1, y1 - 1, x2 - 1, y2);
-            } else {
-                draw_line(bot_pen, x1, y2, x2 - 1, y2);
-                draw_line(bot_pen, x2 - 1, y1 - 1, x2 - 1, y2);
-            }
-// printf("[%u]", y2 - y1);
-            if (y1 - y2 > FONT_HEIGHT + 1) {
-                draw_line(bot_pen, x1 + 1, y1, x2 - 1, y1 + 1);
-                draw_line(bot_pen, x1 + 1, y1, x1 + 1, y2 + 1);
-            }
-            draw_line(top_pen, x1, y1 - 1, x2, y1 - 1);
-            draw_line(top_pen, x1, y1 - 1, x1, y2 + 1);
+            int y1 = top;
+            int y2 = top + height - 1;
+
+            if ((width < 4) || (height < 2))
+                break;
+
+            /* Split the two-pixel corner joins between light and dark. */
+            draw_line(top_pen, x1, y1, x2 - 1, y1);
+            draw_line(top_pen, x1, y1, x1, y2);
+            draw_line(top_pen, x1 + 1, y1, x1 + 1, y2 - 1);
+            draw_line(bot_pen, x1 + 1, y2, x2, y2);
+            draw_line(bot_pen, x2 - 1, y1 + 1, x2 - 1, y2);
+            draw_line(bot_pen, x2, y1, x2, y2);
             break;
         }
     }
@@ -464,9 +460,7 @@ gadget_draw_bounding_box(Gadget *gad, uint boxtype, uint is_recessed)
 // "KickSmash ROM switcher" top box has black on top/left and white on bot/right
 //      GTBB_Recessed
 // Save/Cancel/Reboot buttons have white on top/left and black on bot/right
-// Board name box has two layers of different colors at each border.
-//      White is always left/top
-//      Black is always right/bottom
+// String fields have black top/left and white bottom/right borders.
 // Table exterior box has two layers, maybe done manually
 //      Outside has black left/top
 
@@ -760,8 +754,8 @@ uint
 gadget_string_calc_y(Gadget *gad)
 {
     uint y = gad->TopEdge + 1;
-    if (gad->Height > FONT_HEIGHT + 3)
-        y = gad->TopEdge + (gad->Height - FONT_HEIGHT) / 2;
+    if (gad->Height > FONT_HEIGHT + 1)
+        y = gad->TopEdge + (gad->Height - FONT_HEIGHT + 1) / 2;
     return (y);
 }
 
@@ -791,7 +785,7 @@ static void
 gadget_draw_string(Gadget *gad)
 {
     uint x = gad->LeftEdge;
-    uint y = gad->TopEdge;
+    uint y = gadget_string_calc_y(gad);
     struct IntuiText *it = gad->GadgetText;
 
     /*
@@ -811,14 +805,14 @@ gadget_draw_string(Gadget *gad)
         }
         // XXX: Maybe this clipping intelligence should be built into
         //      render_text_at() so it can always trim to the screen borders.
-        render_text_at(it->IText + rstart, 0, rpos, y + it->TopEdge,
+        render_text_at(it->IText + rstart, 0, rpos, y + it->TopEdge - 1,
                        it->FrontPen, it->BackPen);
     }
     gadget_update_string(gad, GADGET_STRING_UPDATE_ALL);
 
     /* Default is to draw border, turn off using GTTX_BORDER tag */
     if (gad->Flags & GFLG_GADGHBOX)
-        gadget_draw_bounding_box(gad, BBFT_RIDGE, FALSE);
+        gadget_draw_bounding_box(gad, BBFT_RIDGE, TRUE);
 }
 
 static void
