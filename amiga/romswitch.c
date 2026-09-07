@@ -838,6 +838,12 @@ sbox(uint x, uint y, uint w, uint h)
 {
     struct RastPort *rp = &screen->RastPort;
     WORD da[8];
+
+    /* Bottom-button keyboard outlines must fit the 200-line screen. */
+    if (y >= SCREEN_HEIGHT)
+        return;
+    h = MIN(h, SCREEN_HEIGHT - 1 - y);
+
     da[0] = x + w;
     da[1] = y;
     da[2] = x + w;
