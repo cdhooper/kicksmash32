@@ -817,6 +817,12 @@ screen_init(void)
      */
     static const uint16_t copperlist[] = {
         0x0001, 0xff00,                   // Wait VPOS=0, HPOS=0
+        /*
+         * Visual watchdog for the VBlank handler, first thing after the
+         * wait so it always lands before the handler can run: if that
+         * handler stops executing, the Black will change to Dark Violet.
+         */
+        0x0182, 0x090d,                   // COLOR01 Dark Violet (overridden by VBlank)
         0x00e0, BITPLANE_0_BASE >> 16,    // BPL1PTH (High address)
         0x00e2, BITPLANE_0_BASE & 0xffff, // BPL1PTL (Low address)
         0x00e4, BITPLANE_1_BASE >> 16,    // BPL2PTH (High address)
@@ -834,13 +840,6 @@ screen_init(void)
     uint sprite;
     uint reg = 0x0120;
     uint32_t data;
-
-    /*
-     * The below is a visual watchdog for the VBlank handler.
-     * If that handler stops executing, the Black will change to Dark Red.
-     */
-    cp[pos++] = 0x0182;  // COLOR01
-    cp[pos++] =  0x90d;  // Set black to Dark Violet (overridden by VBlank)
 
     for (sprite = 0; sprite < 8; sprite++) {
         if (sprite == 0) {

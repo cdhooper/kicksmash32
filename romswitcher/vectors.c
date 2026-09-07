@@ -259,6 +259,7 @@ VBlank(void)
 
     static uint16_t mouse_quad_last = 0xffff;
     uint16_t mouse_quad_cur;
+    static uint8_t cop_miss;
 
     /*
      * The main job of this function is to the reset the bitplane and
@@ -272,10 +273,21 @@ VBlank(void)
     if (*ADKCONR & 0x0400) {
         /* Copper is running */
         *ADKCON = 0x0400;  // Clear "Copper is alive"
+        cop_miss = 0;
         *COLOR01 = 0x000;  // Black when VBlank and Copper are working
     } else {
-        /* Copper didn't run */
-        *COLOR01 = 0x721;  // Copper color when Copper is not working
+        /*
+         * A single miss is normal on a fast CPU: this handler can run
+         * before the Copper has reached its "alive" write in the current
+         * frame, right after having cleared the previous frame's flag.
+         * Two misses in a row mean the Copper really stopped. The counter
+         * saturates so a long outage cannot wrap it back to a single miss.
+         * Either way this handler ran, so override the Copper's Dark
+         * Violet unless the Copper is gone.
+         */
+        if (cop_miss < 2)
+            cop_miss++;
+        *COLOR01 = (cop_miss >= 2) ? 0x721 : 0x000;  // Copper color when Copper is not working
     }
 
     /* Bitplane pointers are normally updated by the Copper */
