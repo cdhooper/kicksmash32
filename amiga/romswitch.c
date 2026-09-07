@@ -77,8 +77,10 @@
 
 #define SCREEN_WIDTH         640
 #define SCREEN_HEIGHT        200
-#define BANK_TABLE_YPOS      92
-#define BUTTONS_YPOS         186
+#define BANK_TABLE_XPOS      32
+#define BANK_TABLE_YPOS      88
+#define BANK_ROW_HEIGHT      10  // Eight text pixels plus top/bottom borders
+#define BUTTONS_YPOS         188
 
 #define ID_BOARD_NAME        1
 #define ID_POWERON_RADIO     2
@@ -800,6 +802,17 @@ banktable_widths[] = {
 
 uint banktable_pos[ARRAY_SIZE(banktable_widths)];
 
+static uint
+banktable_width(void)
+{
+    uint width = 0;
+    uint col;
+
+    for (col = 0; col < ARRAY_SIZE(banktable_widths); col++)
+        width += banktable_widths[col] * 8 + 8;
+    return (width);
+}
+
 /*
  * box
  * ---
@@ -854,7 +867,7 @@ show_bank_cell(uint bank, uint col)
     char text[20];
     struct RastPort *rp = &screen->RastPort;
     uint xoff = banktable_pos[col];
-    uint y = BANK_TABLE_YPOS + 2;
+    uint y = bank_box_top + 8;
     uint chars = banktable_widths[col];
 
     memset(text, ' ', chars);
@@ -893,11 +906,11 @@ show_bank_cell(uint bank, uint col)
                 text[4] = '0' + p;
             }
             /* Text between the + and - buttons */
-            Move(rp, xoff + 7 + 4 * 8, y + 21 + bank * 9);
+            Move(rp, xoff + 7 + 4 * 8, y + bank * BANK_ROW_HEIGHT);
             Text(rp, text + 4, 1);
 
             /* Text to the right of the + button */
-            Move(rp, xoff + 3 + 8 * 8, y + 21 + bank * 9);
+            Move(rp, xoff + 3 + 8 * 8, y + bank * BANK_ROW_HEIGHT);
             Text(rp, text, 2);
 
             /* Text to the left of the - button */
@@ -908,7 +921,7 @@ show_bank_cell(uint bank, uint col)
             chars = 2;
 skip_center_button:
             /* Text to the right of the button */
-            Move(rp, xoff + 35 + chars * 8, y + 21 + bank * 9);
+            Move(rp, xoff + 35 + chars * 8, y + bank * BANK_ROW_HEIGHT);
             Text(rp, text, chars);
             break;
         case 5: // Current
@@ -921,7 +934,7 @@ skip_center_button:
             chars = 3;
             goto skip_center_button;
     }
-    Move(rp, xoff + 3, y + 21 + bank * 9);
+    Move(rp, xoff + 3, y + bank * BANK_ROW_HEIGHT);
     Text(rp, text, chars);
 }
 
@@ -994,38 +1007,37 @@ static void
 show_banks(void)
 {
     uint col;
-    uint x = 32;
+    uint x = BANK_TABLE_XPOS;
     uint y = BANK_TABLE_YPOS;
     uint xoff;
-    uint width;
+    uint width = banktable_width();
     struct RastPort *rp = &screen->RastPort;
-
-    for (width = 0, col = 0; col < ARRAY_SIZE(banktable_widths); col++)
-        width += banktable_widths[col] * 8 + 8;
 
     SetAPen(&screen->RastPort, 1);  // Black
     Print("Bank       Name         Merge  LongReset  PowerOn  Current  ",
-          x + 10, y + 10, FALSE);
+          x + 10, y + 11, FALSE);
     Print("SwitchTo",
-          x + width - banktable_widths[col - 1] * 8 + 6, y + 10, FALSE);
+          x + width - banktable_widths[ARRAY_SIZE(banktable_widths) - 1] * 8 + 6,
+          y + 11, FALSE);
 
     SetAPen(rp, 1);
-    box(x, y, width + 6, 18 + ROM_BANKS * 9, GTBB_Recessed);
+    box(x, y, width + 6, 17 + ROM_BANKS * BANK_ROW_HEIGHT, GTBB_Recessed);
     y += 2;
     xoff = x + 3;
-    bank_box_top = y + 14;
-    bank_box_bottom = y + 12 + 4 + ROM_BANKS * 9;
+    bank_box_top = y + 12;
+    bank_box_bottom = bank_box_top + ROM_BANKS * BANK_ROW_HEIGHT;
     bank_box_left = xoff;
     bank_box_right = xoff + width;
     for (col = 0; col < ARRAY_SIZE(banktable_widths); col++) {
         uint pwidth = banktable_widths[col] * 8 + 8;
         banktable_pos[col] = xoff;
 
-        /* Title box */
-        box(xoff, y, pwidth, 12, TAG_IGNORE);
+        /* End above the column's white top edge. */
+        box(xoff, y, pwidth, 11, TAG_IGNORE);
 
-        /* Column box */
-        box(xoff, y + 12, pwidth, 3 + ROM_BANKS * 9, TAG_IGNORE);
+        /* Keep the column borders clear of the first and last rows. */
+        box(xoff, bank_box_top - 1, pwidth,
+            ROM_BANKS * BANK_ROW_HEIGHT + 2, TAG_IGNORE);
 
         show_bank_table_column(col);
 
@@ -1042,7 +1054,7 @@ show_banks(void)
 static void
 bank_mouseover(uint pos)
 {
-    uint bank = pos / 9;
+    uint bank = pos / BANK_ROW_HEIGHT;
     uint col;
     struct RastPort *rp;
 
@@ -1446,7 +1458,7 @@ cleanup_bank_name_gadgets(void)
         sbox(x1 + 2, y, 0, 7);
         sbox(x2, y, 1, 7);
         sbox(x2 + 2, y, 0, 7);
-        y += 9;
+        y += BANK_ROW_HEIGHT;
     }
 }
 #endif
@@ -1496,7 +1508,7 @@ draw_page(void)
     char buf[32];
     sprintf(buf, "KickSmash ROM switcher %3s", VERSION);
     Print(buf, 0, 10, TRUE);
-    box(40, 0, 560, 14, GTBB_Recessed);
+    box(BANK_TABLE_XPOS, 0, banktable_width() + 6, 14, GTBB_Recessed);
 
     gadgets = CreateContext(&LastAdded);
 
@@ -1513,7 +1525,7 @@ draw_page(void)
     ng.ng_Width = 14;
     ng.ng_Height     = 8;
     for (bank = 0; bank < ROM_BANKS; bank++) {
-        ng.ng_TopEdge = bank_box_top + 9 * bank;
+        ng.ng_TopEdge = bank_box_top + 1 + BANK_ROW_HEIGHT * bank;
         ng.ng_LeftEdge = banktable_pos[3] + 6 + 2 * 8;
         ng.ng_GadgetID = ID_LONGRESET_MINUS_0 + bank;
         ng.ng_GadgetText = "-";
@@ -1529,7 +1541,8 @@ draw_page(void)
     char *current_sel_labels[] = { "", NULL };
     ng.ng_Width      = 26;
     ng.ng_Height     = 8;
-    ng.ng_TopEdge  = bank_box_top + 9 * info.bi_bank_current;
+    ng.ng_TopEdge  = bank_box_top + 1 +
+                     BANK_ROW_HEIGHT * info.bi_bank_current;
     ng.ng_LeftEdge = (banktable_pos[6] + banktable_pos[5] -
                       ng.ng_Width) / 2 - 1;
     ng.ng_GadgetID = ID_CURRENT_RADIO;
@@ -1537,19 +1550,19 @@ draw_page(void)
     LastAdded = CreateGadget(MX_KIND, LastAdded, NewGadget,
                              GTMX_Labels, (ULONG) current_sel_labels,
                              GTMX_Active, (UWORD) 0,
-                             GTMX_Spacing, (UWORD) 1,
+                             GTMX_Spacing, (UWORD) (BANK_ROW_HEIGHT - 8),
                              GTMX_Scaled, TRUE,
                              TAG_DONE);
 
     /* ROM bank names */
-    ng.ng_Height     = 9;
+    ng.ng_Height     = BANK_ROW_HEIGHT;
     ng.ng_GadgetText = NULL;
     ng.ng_LeftEdge   = banktable_pos[1];
     ng.ng_Width      = banktable_pos[2] - banktable_pos[1];
     for (bank = 0; bank < ROM_BANKS; bank++) {
         sptr = info.bi_name[bank];
         ng.ng_GadgetID   = ID_BANK_NAME_0 + bank;
-        ng.ng_TopEdge    = bank_box_top + bank * 9;
+        ng.ng_TopEdge    = bank_box_top + bank * BANK_ROW_HEIGHT;
 
         LastAdded = CreateGadget(STRING_KIND, LastAdded, NewGadget,
                                  GTST_MaxChars, sizeof (info.bi_name[0]) - 1,
@@ -1598,6 +1611,9 @@ draw_page(void)
                              GA_DISABLED, disabled_save,
                              GT_Underscore, '_',
                              TAG_DONE);
+#ifdef STANDALONE
+    LastAdded->GadgetText->TopEdge = 0;
+#endif
     gadget_save = LastAdded;
     gadget_save_x = ng.ng_LeftEdge - 3;
     gadget_save_y = ng.ng_TopEdge - 2;
@@ -1610,6 +1626,9 @@ draw_page(void)
     ng.ng_GadgetText = "_Cancel";
     ng.ng_GadgetID   = ID_CANCEL;
     LastAdded = create_gadget(BUTTON_KIND);
+#ifdef STANDALONE
+    LastAdded->GadgetText->TopEdge = 0;
+#endif
     gadget_cancel_x = ng.ng_LeftEdge - 3;
     gadget_cancel_y = ng.ng_TopEdge - 2;
     gadget_cancel_w = ng.ng_Width + 5;
@@ -1626,6 +1645,9 @@ draw_page(void)
                              GA_DISABLED, disabled_switch,
                              GT_Underscore, '_',
                              TAG_DONE);
+#ifdef STANDALONE
+    LastAdded->GadgetText->TopEdge = 0;
+#endif
     gadget_switch_x = ng.ng_LeftEdge - 3;
     gadget_switch_y = ng.ng_TopEdge - 2;
     gadget_switch_w = ng.ng_Width + 5;
@@ -1703,7 +1725,7 @@ draw_page(void)
 
     /* PowerOn select radio */
     char *poweron_sel_labels[] = { "", "", "", "", "", "", "", "", NULL };
-    ng.ng_TopEdge    = bank_box_top;
+    ng.ng_TopEdge    = bank_box_top + 1;
     ng.ng_Width      = 26;
     ng.ng_LeftEdge   = (banktable_pos[5] + banktable_pos[4] -
                         ng.ng_Width) / 2 - 1;
@@ -1713,7 +1735,7 @@ draw_page(void)
     LastAdded = CreateGadget(MX_KIND, LastAdded, NewGadget,
                              GTMX_Labels, (ULONG) poweron_sel_labels,
                              GTMX_Active, (UWORD) info.bi_bank_poweron,
-                             GTMX_Spacing, (UWORD) 1,
+                             GTMX_Spacing, (UWORD) (BANK_ROW_HEIGHT - 8),
                              GTMX_Scaled, TRUE,
                              GA_Immediate, TRUE,
 //                           GA_DISABLED, TRUE,
@@ -1722,14 +1744,14 @@ draw_page(void)
     /* SwitchTo select radio */
     gadget_switchto_pre = LastAdded;
     ng.ng_Width      = 26;
-    ng.ng_TopEdge = bank_box_top;
+    ng.ng_TopEdge = bank_box_top + 1;
     ng.ng_LeftEdge = banktable_pos[6] +
                      (banktable_widths[6] * 8 - ng.ng_Width) / 2 + 3;
     ng.ng_GadgetID = ID_SWITCHTO_RADIO;
     LastAdded = CreateGadget(MX_KIND, LastAdded, NewGadget,
                              GTMX_Labels, (ULONG) poweron_sel_labels,
                              GTMX_Active, (UWORD) bank_switchto,
-                             GTMX_Spacing, (UWORD) 1,
+                             GTMX_Spacing, (UWORD) (BANK_ROW_HEIGHT - 8),
                              GTMX_Scaled, TRUE,
                              TAG_DONE);
     gadget_switchto = LastAdded;
