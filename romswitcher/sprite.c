@@ -66,29 +66,21 @@ sprite_init(void)
      */
 
     /*
-     *      Mouse         White         Black
-     * W W . . . . . .    11000000 c0   00000000 00
-     * W B W . . . . .    10100000 a0   01000000 40
-     * W B B W . . . .    10010000 90   01100000 60
-     * W B B B W . . .    10001000 88   01110000 70
-     * W B B W W W . .    10011100 9c   01100000 60
-     * W W B B W . . .    11001000 c8   00110000 30
-     * W . W B B W . .    10100100 a4   00011000 18
-     * . . W B B W . .    00100100 24   00011000 18
-     * . . . W W . . .    00011000 18   00000000 00
+     * Mouse pointer bitmap, interleaved for sprite DMA.
+     * The last five rows are transparent.
      */
+    static const uint32_t mouse_image[MOUSE_SPRITE_HEIGHT] = {
+        0xc0004000, 0x7000b000, 0x3c004c00, 0x3f004300,
+        0x1fc020c0, 0x1fc02000, 0x0f001100, 0x0d801280,
+        0x04c00940, 0x046008a0, 0x00200040, 0x00000000,
+        0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    };
+
     sprite0_data = (uint32_t *) 0x1080;  // chip RAM address
-    sprite0_data[0] = 0x2c494000;  // HSTART, VSTART, VSTOP, control bits
-    sprite0_data[1] = 0xc0000000;
-    sprite0_data[2] = 0xa0004000;
-    sprite0_data[3] = 0x90006000;
-    sprite0_data[4] = 0x88007000;
-    sprite0_data[5] = 0x9c006000;
-    sprite0_data[6] = 0xc8003000;
-    sprite0_data[7] = 0xa4001800;
-    sprite0_data[8] = 0x24001800;
-    sprite0_data[9] = 0x18000000;
-    sprite0_data[10] = 0x00000000;
+    sprite0_data[0] = sprite_calcpos(0x80 + MOUSE_SPRITE_XOFFSET,
+                                    0x2c, 0x2c + MOUSE_SPRITE_HEIGHT);
+    memcpy(sprite0_data + 1, mouse_image, sizeof (mouse_image));
+    sprite0_data[MOUSE_SPRITE_HEIGHT + 1] = 0x00000000;
 
     /*
      *     Cursor
@@ -102,7 +94,7 @@ sprite_init(void)
      * O O O O O O O O
      * O O O O O O O O
      */
-    sprite1_data = sprite0_data + 11;
+    sprite1_data = sprite0_data + MOUSE_SPRITE_HEIGHT + 2;
     sprite1_data[0] = 0x2c403400;  // HSTART, VSTART, VSTOP, control bits
     sprite1_data[1] = 0xf000f000;
     sprite1_data[2] = 0xf000f000;
@@ -114,28 +106,14 @@ sprite_init(void)
     sprite1_data[8] = 0xf000f000;  // next sprite usage (0x0000000 = last usage)
     sprite1_data[9] = 0x00000000;
 
+    /* A disabled sprite only needs its zero position/control pair. */
     spritex_data = sprite1_data + 10;
-    spritex_data[0] = 0x00000000;  // HSTART, VSTART, VSTOP, control bits
-    spritex_data[1] = 0x00000000;
-    spritex_data[2] = 0x00000000;
-    spritex_data[3] = 0x00000000;
-    spritex_data[4] = 0x00000000;
-    spritex_data[5] = 0x00000000;
-    spritex_data[6] = 0x00000000;
-    spritex_data[7] = 0x00000000;
-    spritex_data[8] = 0x00000000;
-    spritex_data[9] = 0x00000000;  // next sprite usage (0x0000000 = last usage)
+    spritex_data[0] = 0x00000000;
 
-//  *SPR0POS = 0x2c20;
-//  *SPR0CTL = 0x0800;
-//  *SPR0DATA = 0x0800;
-//  *SPR0DATB = 0x0800;
-
-    // 0xdc0 is yellow, 0x840 is orange-brown
-    // Sprite color 0 is always transparent mode
-    *COLOR17 = 0xfff;  // Sprite 0 and 1 color 1   white
+    /* Mouse pointer colors. */
+    *COLOR17 = 0xe44;  // Sprite 0 and 1 color 1   red
     *COLOR18 = 0x000;  // Sprite 0 and 1 color 2   black
-    *COLOR19 = 0x44f;  // Sprite 0 and 1 color 3
+    *COLOR19 = 0xeec;  // Sprite 0 and 1 color 3   cream
 
     *COLOR21 = 0x04f;  // Sprite 2 and 3 color 1
     *COLOR22 = 0x4f0;  // Sprite 2 and 3 color 2

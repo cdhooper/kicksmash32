@@ -337,9 +337,9 @@ VBlank(void)
      */
 
     /* Position mouse pointer */
-    uint x_start = mouse_x / 2 + 0x80;  // Sprite X position is lowres
+    uint x_start = mouse_x / 2 + 0x80 + MOUSE_SPRITE_XOFFSET;
     uint y_start = mouse_y + 0x2c;
-    uint y_end   = y_start + 9;
+    uint y_end   = y_start + MOUSE_SPRITE_HEIGHT;
 
     /* Mouse pointer */
     if (sprite0_data != NULL) {

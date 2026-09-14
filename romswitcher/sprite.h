@@ -16,6 +16,9 @@
 #ifndef _SPRITE_H
 #define _SPRITE_H
 
+#define MOUSE_SPRITE_HEIGHT 16
+#define MOUSE_SPRITE_XOFFSET (-1)
+
 void sprite_init(void);
 uint sprite_calcpos(uint x_start, uint y_start, uint y_end);
 
