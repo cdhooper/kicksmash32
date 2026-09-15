@@ -19,6 +19,7 @@
 #include "uart.h"
 #include "timer.h"
 #include "cmdline.h"
+#include "clock.h"
 
 #undef DEBUG_NO_USB
 
@@ -27,6 +28,7 @@
 #include <libopencm3/stm32/f1/gpio.h>
 #include <libopencm3/stm32/f1/rcc.h>
 #include <libopencm3/stm32/f1/nvic.h>
+#include "gd32f107_usb.h"
 #ifdef STM32F103xE
 #include <libopencm3/cm3/common.h>
 #include <libopencm3/stm32/rcc.h>
@@ -679,17 +681,24 @@ usb_startup(void)
     gpio_mode_setup(GPIOA, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO11 | GPIO12);
     gpio_set_af(GPIOA, GPIO_AF10, GPIO11 | GPIO12);
 
-#define USB_DRIVER otgfs_usb_driver
+#define USB_DRIVER &otgfs_usb_driver
 
 #elif defined(STM32F103xE)
-#define USB_DRIVER st_usbfs_v1_usb_driver
+#define USB_DRIVER &st_usbfs_v1_usb_driver
 
 #else
-#define USB_DRIVER stm32f107_usb_driver
+#define USB_DRIVER driver
+    const usbd_driver *driver;
+    if (is_gd32) {
+        gd32f107_usb_init();
+        driver = &gd32f107_usb_driver;
+    } else {
+        driver = &stm32f107_usb_driver;
+    }
 #endif
 
     usb_signal_reset_to_host(2);
-    usbd_gdev = usbd_init(&USB_DRIVER,
+    usbd_gdev = usbd_init(USB_DRIVER,
                           (const struct usb_device_descriptor *)
                              &USBD_FS_DeviceDesc[0], &config,
                           usb_strings, ARRAY_SIZE(usb_strings),

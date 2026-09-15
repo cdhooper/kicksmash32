@@ -16,6 +16,7 @@
 #include <libopencm3/usb/dfu.h>
 #include <libopencm3/stm32/usart.h>
 #include "clock.h"
+#include "gd32f107_usb.h"
 
 #define ADDR8(x)    ((uint8_t *)  ((uintptr_t)(x)))
 #define STM32_UDID_LEN                  12    // 96 bits
@@ -23,6 +24,13 @@
 
 #define UART_DEBUG
 #ifdef UART_DEBUG
+int sprintf(char *buf, const char *fmt, ...);
+int sprintf(char *buf, const char *fmt, ...)
+{
+    strcpy(buf, fmt);
+    return (0);
+}
+
 static void
 uart_wait_done(uint32_t usart)
 {
@@ -72,7 +80,8 @@ void uart_putchar(int ch)
     uart_putc(ch);
 }
 
-static void
+void uart_puts(const char *str);
+void
 uart_puts(const char *str)
 {
     while (*str != '\0')
@@ -516,7 +525,16 @@ main(void)
     usbd_usr_serial(usb_serial_str);
     usb_strings[2] = (char *)usb_serial_str;
 
-    usbd_dev = usbd_init(&stm32f107_usb_driver, &dev, &config, usb_strings,
+    const usbd_driver *driver;
+    if (SCB_CPUID == 0x412fc231) {
+        /* GD32F1xx */
+        gd32f107_usb_init();
+        driver = &gd32f107_usb_driver;
+    } else {
+        /* STM32F1xx */
+        driver = &stm32f107_usb_driver;
+    }
+    usbd_dev = usbd_init(driver, &dev, &config, usb_strings,
                          4, usbd_control_buffer, sizeof(usbd_control_buffer));
     usbd_register_set_config_callback(usbd_dev, usbdfu_set_config);
 

@@ -6,8 +6,8 @@
 SRCS   := main.c clock.c gpio.c printf.c timer.c uart.c usb.c version.c \
 	  led.c irq.c mem_access.c readline.c cmdline.c cmds.c pcmds.c \
 	  prom_access.c m29f160xt.c utils.c crc32.c adc.c kbrst.c scanf.c \
-	  pin_tests.c stm32flash.c config.c msg.c
-USRCS  := usbdfu.c clock.c
+	  pin_tests.c stm32flash.c config.c msg.c gd32f107_usb.c
+USRCS  := usbdfu.c clock.c gd32f107_usb.c
 
 OBJDIR := objs
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
@@ -160,6 +160,9 @@ flashbmp: $(BINARY).flashbmp
 
 GENERATED_BINARIES=$(BINARY).elf $(BINARY).bin $(BINARY).hex $(BINARY).srec $(BINARY).list $(BINARY).map $(UBINARY).elf $(UBINARY).bin
 
+$(OBJDIR)/gd32f107_usb.o:: CFLAGS += -I$(OPENCM3_DIR)/lib/usb
+$(OBJDIR)/gd32f107_usb.o: $(OPENCM3_DIR)/lib/usb/usb_private.h
+
 $(OBJDIR)/%.bin: $(OBJDIR)/%.elf
 	@echo Building $@
 	$(QUIET)$(OBJCOPY) -Obinary $< $@
@@ -238,11 +241,11 @@ $(OBJDIR):
 $(OPENCM3_DIR)/Makefile:
 	@echo Cloning $@
 	$(QUIET)git clone https://github.com/libopencm3/libopencm3
-	$(QUIET)(cd $(OPENCM3_DIR); git checkout 201f5bcfb3fa70ee34818152463e7139f24db377)
+	$(QUIET)(cd $(OPENCM3_DIR); git checkout 2da12dc96e0b9e42a3332348dd9b02a0a17981f8)
 
-$(OPENCM3_DIR)/include/%: $(OPENCM3_DIR)/Makefile
+$(OPENCM3_DIR)/include/% $(OPENCM3_DIR)/lib/usb/%.h: $(OPENCM3_DIR)/Makefile
 	@echo Building $@
-	$(QUIET)make -C $(OPENCM3_DIR) -j8
+	$(QUIET)make -C $(OPENCM3_DIR)
 	$(QUIET)touch $@
 
 $(OPENCM3_LIB): $(OPENCM3_HEADER)

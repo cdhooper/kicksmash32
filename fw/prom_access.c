@@ -242,6 +242,8 @@ prom_write(uint32_t addr, uint width, void *bufp)
 rc_t
 prom_erase(uint mode, uint32_t addr, uint32_t len)
 {
+#define DO_PROM_ERASE
+#ifdef DO_PROM_ERASE
     rc_t rc;
     if (warn_amiga_not_in_reset())
         return (RC_BUSY);
@@ -254,6 +256,9 @@ prom_erase(uint mode, uint32_t addr, uint32_t len)
         rc = ee_erase(mode, addr >> 1, len >> 1, 1);
     gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 0);
     return (rc);
+#else
+    return (RC_SUCCESS);
+#endif
 }
 
 void
@@ -305,28 +310,39 @@ getchar_wait(uint pos)
     return (ch);
 }
 
-static int
-check_crc(uint32_t crc, uint spos, uint epos, bool send_rc)
+static rc_t
+check_crc(uint32_t crc, uint spos, uint epos)
 {
     int      ch;
+    int      puts_rc;
+    rc_t     rc = RC_SUCCESS;
+    char     errbuf[80];
     size_t   pos;
     uint32_t compcrc;
 
     for (pos = 0; pos < sizeof (compcrc); pos++) {
         ch = getchar_wait(200);
         if (ch == -1) {
-            printf("Receive timeout waiting for CRC %08lx at 0x%x\n",
+            sprintf(errbuf, "Receive timeout waiting for CRC %08lx at 0x%x\n",
                    crc, epos);
-            return (RC_TIMEOUT);
+            rc = RC_TIMEOUT;
+            break;
         }
         ((uint8_t *)&compcrc)[pos] = ch;
     }
-    if (crc != compcrc) {
-        printf("Received CRC %08lx doesn't match %08lx at 0x%x-0x%x\n",
+    if ((rc == RC_SUCCESS) && (crc != compcrc)) {
+        sprintf(errbuf, "Received CRC %08lx doesn't match %08lx at 0x%x-0x%x\n",
                compcrc, crc, spos, epos);
-        return (1);
+        rc = RC_FAILURE;
     }
-    return (0);
+
+    puts_rc = puts_binary(&rc, 1);
+    if (rc != RC_SUCCESS) {
+        printf("%s", errbuf);
+    } else if (puts_rc != 0) {
+        rc = RC_TIMEOUT;
+    }
+    return (rc);
 }
 
 static int
@@ -454,6 +470,7 @@ prom_write_binary(uint32_t addr, uint32_t len)
     uint8_t  buf[128];
     int      ch;
     rc_t     rc;
+    uint64_t timeout;
     uint32_t crc = 0;
     uint32_t saddr = addr;
     uint     crc_next = DATA_CRC_INTERVAL;
@@ -465,62 +482,70 @@ prom_write_binary(uint32_t addr, uint32_t len)
     while (len > 0) {
         uint32_t tlen    = len;
         uint32_t rem     = addr & (sizeof (buf) - 1);
-        uint64_t timeout = timer_tick_plus_msec(1000);
         uint32_t pos;
         uint8_t *ptr = buf;
 
         if (tlen > sizeof (buf) - rem)
             tlen = sizeof (buf) - rem;
 
+        timeout = timer_tick_plus_msec(1000);
         for (pos = 0; pos < tlen; pos++) {
             while ((ch = getchar()) == -1)
                 if (timer_tick_has_elapsed(timeout)) {
                     printf("Data receive timeout at %lx\n", addr + pos);
                     rc = RC_TIMEOUT;
-                    goto fail;
+                    goto fail_send;
                 }
             timeout = timer_tick_plus_msec(1000);
             *(ptr++) = ch;
             crc = crc32(crc, ptr - 1, 1);
             if (--crc_next == 0) {
-                if (check_crc(crc, saddr, addr + pos + 1, false)) {
-                    rc = RC_FAILURE;
-                    goto fail;
-                }
-                rc = RC_SUCCESS;
-                if (puts_binary(&rc, 1)) {
-                    rc = RC_TIMEOUT;
-                    goto fail;
-                }
+                rc = check_crc(crc, saddr, addr + pos + 1);
+                if (rc != RC_SUCCESS)
+                    goto fail_send;
+
                 crc_next = DATA_CRC_INTERVAL;
                 saddr = addr + pos + 1;
             }
         }
+#define DO_PROM_WRITE
+#ifdef DO_PROM_WRITE
         rc = prom_write(addr, tlen, buf);
-        if (rc != RC_SUCCESS) {
-fail:
-            (void) puts_binary(&rc, 1);  // Inform remote side
-            timeout = timer_tick_plus_msec(2000);
-            while (!timer_tick_has_elapsed(timeout))
-                (void) getchar();  // Discard input
-            return (rc);
+        if (rc != RC_SUCCESS)
+            goto fail_send;
+#elif 0
+        {
+            uint cur;
+            for (cur = 0; cur < tlen; cur += 4) {
+                uint32_t maddr = addr & 0x7ffff;
+                uint32_t value = __builtin_bswap32(*(uint32_t *) (buf + cur));
+                if (value != maddr + cur) {
+                    printf("Bad value %08lx at %lx, expected %08lx\n",
+                           value, addr + cur, maddr + cur);
+                    rc = RC_FAILURE;
+                    goto fail_send;
+                }
+            }
         }
+#endif
         addr += tlen;
         len  -= tlen;
         led_poll();  // Blink power LED if it needs to be blinked
     }
     if (crc_next != DATA_CRC_INTERVAL) {
-        if (check_crc(crc, saddr, addr, false)) {
-            rc = RC_FAILURE;
-            goto fail;
-        }
+        rc = check_crc(crc, saddr, addr);
+    } else {
+        rc = RC_SUCCESS;
     }
-    rc = RC_SUCCESS;
+fail_send:
     if (puts_binary(&rc, 1)) {
-        rc = RC_TIMEOUT;
-        goto fail;
+        if (rc == RC_SUCCESS)
+            rc = RC_TIMEOUT;
+        timeout = timer_tick_plus_msec(2000);
+        while (!timer_tick_has_elapsed(timeout))
+            (void) getchar();       // Discard input
     }
-    return (RC_SUCCESS);
+    return (rc);
 }
 
 rc_t

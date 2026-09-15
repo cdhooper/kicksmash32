@@ -1624,7 +1624,7 @@ check_rc(uint pos)
     }
     if (rc != 0) {
         printf("Remote sent error %d\n", rc);
-        discard_input(250);
+//      discard_input(250);
         return (1);
     }
     return (0);
@@ -2555,36 +2555,34 @@ file_read(const char *filename, uint len)
 static void
 show_rx_peek(void)
 {
-    char buf[256];
+    char buf[1024];
     uint len = rx_rb_peek(buf, sizeof (buf));
     uint pos;
-    uint last_printed = 0;
     uint print_count = 0;
     uint last_was_space = 1;
-    printf("Kicksmash FW: ");
+    printf("KS FW: ");
     for (pos = 0; pos < len; pos++) {
         char ch = buf[pos];
-        if (print_count == 72) {
+        if (print_count == 80) {
             print_count = 0;
-            printf("\n              ");
+            printf("\n       ");
         }
         if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\0') {
-            if (last_was_space == 0) {
+            if (ch == '\r' || ch == '\n') {
+                if (print_count != 0) {
+                    last_was_space = 1;
+                    print_count = 0;
+                    printf("\n       ");
+                }
+            } else if (last_was_space == 0) {
                 last_was_space = 1;
                 putchar(' ');
                 print_count++;
-                last_printed = 1;
             }
         } else if (ch > ' ' && ch <= '~') {
             putchar(ch);
             print_count++;
-            last_printed = 1;
             last_was_space = 0;
-        } else if (last_printed) {
-            putchar('.');
-            print_count++;
-            last_printed = 0;
-            last_was_space = 1;
         }
     }
     if (print_count > 0)
@@ -2618,6 +2616,7 @@ eeprom_write(const uint8_t *filebuf, uint addr, uint len)
         return (-1); // "timeout" was reported in this case
 
     if (send_ll_crc(filebuf, len)) {
+        time_delay_msec(100);
         show_rx_peek();
         errx(EXIT_FAILURE, "Send failure");
     }

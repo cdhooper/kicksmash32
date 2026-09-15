@@ -636,6 +636,7 @@ ee_status_clear(void)
 static int
 ee_wait_for_done_status(uint32_t timeout_usec, int verbose, int mode)
 {
+    uint     iters = 0;
     uint     report_time = 0;
     uint64_t start;
     uint64_t now;
@@ -647,7 +648,7 @@ ee_wait_for_done_status(uint32_t timeout_usec, int verbose, int mode)
     int      see_fail_count = 0;
 
     start = timer_tick_get();
-    while (usecs < timeout_usec) {
+    while ((usecs < timeout_usec) || (iters++ < 4)) {
         now = timer_tick_get();
         usecs = timer_tick_to_usec(now - start);
         ee_read_word(0x000000000, &status);
@@ -723,8 +724,10 @@ ee_wait_for_done_status(uint32_t timeout_usec, int verbose, int mode)
 
     ee_status = (mode == EE_MODE_ERASE) ? EE_STATUS_ERASE_TIMEOUT :
                                           EE_STATUS_PROG_TIMEOUT;
-    printf("    %s Timeout\n",
-           (mode == EE_MODE_ERASE) ? "Erase" : "Program");
+    ee_read_word(0x000000000, &status);
+    printf("    %s Timeout (cstatus=%08x status=%08x)\n",
+           (mode == EE_MODE_ERASE) ? "Erase" : "Program",
+           (uint) cstatus, (uint) status);
     ee_status_clear();
     return (1);
 }
