@@ -7,11 +7,18 @@
  * equivalent of Linux's macvtap:
  *
  *   Linux   - bridge-mode macvtap character device (existing code)
- *   macOS   - vmnet.framework in VMNET_BRIDGED_MODE (this backend)
- *             NOTE: requires Apple's com.apple.vm.networking entitlement.
- *             Without it, use the BPF (/dev/bpfN) backend instead.
- *   Windows - Npcap raw capture/injection on the physical adapter, or
- *             TAP-Windows6 if a virtual adapter is acceptable.
+ *   macOS   - BPF (/dev/bpfN) promiscuous capture on the physical NIC
+ *             (vmnet.framework's bridged mode would be the "native"
+ *             choice, but needs Apple's com.apple.vm.networking
+ *             entitlement, which isn't obtainable here)
+ *   Windows - Npcap (WinPcap-API-compatible) promiscuous capture on
+ *             the physical NIC -- see netif_windows.c. This is the
+ *             same shape as the macOS BPF backend: there is no
+ *             Windows equivalent of macvtap either, and a TAP-Windows6
+ *             virtual adapter would require the user to install and
+ *             bind a separate virtual NIC, so raw capture/injection on
+ *             the real adapter (already the mechanism libpcap/Npcap
+ *             and Wireshark use) is used instead.
  *
  * main.c's poll() loop only needs a pollable fd plus read/write calls,
  * so every backend -- however it actually receives frames internally --
@@ -20,6 +27,17 @@
  * the backend fakes this with an internal pipe: the delivery callback
  * writes queued frames into the pipe's write end, and backend_fd()
  * returns the read end for poll().
+ *
+ * Windows is the one platform where this "real pollable fd" contract
+ * can't be honored cleanly: an Npcap capture handle surfaces as a
+ * Windows HANDLE (via pcap_getevent()), not a fd poll()/select()
+ * understands, and there is no poll()/WSAPoll() that spans both a
+ * pcap HANDLE and a CRT stdio pipe at once. So on Windows,
+ * pollable_fd() is a stub (returns -1, see netif_windows.c) and
+ * hostsmash_netif.c's main() uses a Windows-specific thread-based loop
+ * instead of poll() for that platform only; every other backend call
+ * (open/close/read_frame/write_frame/get_mac/set_mac/ensure_privilege)
+ * is used identically across all three platforms.
  */
 
 #ifndef NETIF_BACKEND_H
@@ -27,7 +45,10 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+#ifndef __MINGW32__
 #include <net/if.h>
+#endif
 
 struct netif_backend {
     /*
@@ -88,9 +109,25 @@ struct netif_backend {
      * Optional: NULL if a backend needs no elevation step of its own.
      */
     int (*ensure_privilege)(int argc, char *argv[]);
+
+    int (*parse_args)(int argc, char *argv[]);
 };
 
 /* Returns the backend for the current platform. */
 const struct netif_backend *netif_backend_get(void);
+
+typedef enum {
+    NETIF_MODE_TAP = 0, /* Default: Windows TAP Adapter */
+    NETIF_MODE_PCAP = 1 /* Original Npcap path */
+} netif_mode_t;
+
+typedef struct {
+    netif_mode_t mode;
+    uint8_t virtual_mac[6];
+    uint8_t host_phys_mac[6];
+    /* Existing netif fields... */
+} netif_config_t;
+
+extern netif_config_t g_netif_cfg;
 
 #endif /* NETIF_BACKEND_H */

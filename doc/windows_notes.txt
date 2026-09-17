@@ -4,6 +4,7 @@ In this document:
 * Windows COM port driver
 * Hostsmash debugging
 * Hostsmash under Wine
+* Windows network packet capture
 
 -------------------------------------------------------------------
 DFU Programming
@@ -171,3 +172,21 @@ If you are running Windows XP, you might try an older release of Zadig:
 To keep the same Windows COM port across multiple Kicksmash boards, run
 the following command:
     REG ADD "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\COM Name Arbiter" /v ComDB /t REG_BINARY /d 0206 /f
+
+-------------------------------------------------------------------
+
+
+Windows network packet capture
+------------------------------
+The hostsmash network interface relies on Npcap for access to the physical
+hardware. This requires installation of the npcap application, which is
+compatible with most recent versions of Windows. Download the installer
+from the Npcap website:
+    https://npcap.com/#download
+If you are building hostsmash for Windows, you might also require the
+Npcap SDK available from the same website.
+
+If you are hoping to run on Windows XP, you may be able to use WinPcap.
+This is untested, and there are likely other parts of hostsmash which
+will also not run on Windows XP:
+    https://www.winpcap.org/

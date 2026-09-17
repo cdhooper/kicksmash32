@@ -9,5 +9,7 @@ typedef unsigned int uint;
 
 uint send_msg(void *buf, uint len, uint *status);
 void time_delay_msec(int msec);
+int netprintf(const char *fmt, ...);
+extern uint debug_net;
 
 #endif /* _HOSTSMASH_H */

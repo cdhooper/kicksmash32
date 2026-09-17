@@ -17,9 +17,6 @@ LDFLAGS := -O2 -lpthread
 CFLAGS += -DALLOW_CREATE_LINK
 
 OS := $(shell uname -s)
-ifneq ($(OS),Darwin)
-USB_HDR := /usr/include/usb.h
-endif
 
 BUILD_TIMESTAMP := $(shell date '+%Y-%m-%d %H:%M:%S')
 DATE := $(word 1,$(BUILD_TIMESTAMP))
@@ -43,7 +40,24 @@ ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
     LDFLAGS += -lws2_32 -lwinmm -static
     OBJDIR := objs.win64
     HOSTSMASH_SRCS += mingw-realpath.c
+    HSNET_SRCS += netif_windows.c
     CC := x86_64-w64-mingw32-gcc
+
+    # netif_windows.c talks to the physical NIC via Npcap (the current
+    # WinPcap-API-compatible driver/library -- https://npcap.com/),
+    # which must be installed on the machine that runs hostsmash_netif.
+    # wpcap.dll itself is loaded at *runtime* (LoadLibrary), not linked
+    # here, so that a missing Npcap install pops our own explanatory
+    # dialog instead of the OS loader's generic "missing DLL" error --
+    # see ensure_wpcap_loaded() in netif_windows.c. The Npcap SDK is
+    # still needed at build time for pcap.h's type/constant
+    # declarations, though. Download the separate "Npcap SDK" zip from
+    # https://npcap.com/#download, unpack it somewhere, and point this
+    # at it, e.g.:
+    #   make win64 NPCAP_SDK_DIR=/path/to/npcap-sdk
+    NPCAP_SDK_DIR ?= npcap-sdk
+    CFLAGS  += -I$(NPCAP_SDK_DIR)/Include
+    LDFLAGS += -liphlpapi -lshell32 -ladvapi32 -luser32
 endif
 ifneq (,$(filter $(TARGET_OS),win32))
     # Windows 32-bit
@@ -63,6 +77,10 @@ ifeq ($(TARGET_OS),Linux)
     UNAME_M := $(shell uname -m)
     OBJDIR := objs.$(UNAME_M)
     HSNET_SRCS += netif_linux.c
+    USB_HDR := /usr/include/usb.h
+    ifeq (,$(wildcard /usr/include/sys/capability.h))
+    $(error sys/capability.h missing - need libcap-devel)
+    endif
 endif
 
 # MacOS
@@ -104,9 +122,9 @@ all: $(HOSTSMASH_OPROG) $(HSNET_OPROG) $(CRCIT_OPROG) win32 win64
 	@:
 
 win32:
-	$(MAKE) TARGET_OS=win32
+	$(MAKE) --no-print-directory TARGET_OS=win32
 win win64:
-	$(MAKE) TARGET_OS=win64
+	$(MAKE) --no-print-directory TARGET_OS=win64
 
 define DEPEND_SRC
 # The following line creates a rule for an object file to depend on a
@@ -120,6 +138,7 @@ $(foreach SRCFILE,$(HOSTSMASH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR
 $(foreach SRCFILE,$(HSNET_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),HSNET_OBJS)))
 $(foreach SRCFILE,$(CRCIT_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),CRCIT_OBJS)))
 
+$(OBJDIR)/netif_windows.o: | $(NPCAP_HDR)
 
 $(HOSTSMASH_OBJS) $(HSNET_OBJS) $(CRCIT_OBJS): Makefile ../fw/version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h hostsmash.h hostsmash_net.h hostsmash_netif.h
 $(OBJDIR)/hostsmash.o: | $(USB_HDR)
@@ -152,10 +171,16 @@ $(OBJDIR):
 	$(QUIET)mkdir $@
 
 $(USB_HDR):
-	echo "You must install the libusb development package"
-	echo "On Fedora:   dnf install libusb-devel"
-	echo "On Raspbian: apt-get install libusb-dev"
+	@echo "You must install the libusb development package"
+	@echo "On Fedora:   dnf install libusb-devel"
+	@echo "On Raspbian: apt-get install libusb-dev"
 	exit 1
+
+NPCAP_SDK_ZIP := npcap-sdk-1.16.zip
+$(NPCAP_HDR):
+	@echo Getting the Windows Npcap SDK
+	wget https://npcap.com/dist/$(NPCAP_SDK_ZIP)
+	unzip npcap-sdk-*.zip -d $(NPCAP_SDK_DIR)
 
 clean:
 	@echo Cleaning

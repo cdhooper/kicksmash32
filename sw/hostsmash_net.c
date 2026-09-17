@@ -7,7 +7,13 @@
 #include <signal.h>
 #include <pthread.h>
 
-#ifndef __MINGW32__
+#ifdef __MINGW32__
+#include <windows.h>
+#define handle_t winhandle_t
+#include <shlwapi.h>
+#include <io.h>         /* _open_osfhandle */
+typedef unsigned int uint;
+#else
 #include <sys/wait.h>
 #endif
 
@@ -22,12 +28,14 @@
 static volatile uint netif_getmac = 0; // GETMAC pending from device
 static uint      netif_up = 0;         // Network interface is up
 static int       netif_write_fd = -1;  // Pipe end to write TO the gateway
+static int       netif_read_fd = -1;   // Pipe end to read FROM the gateway
 static int       netif_capture = 0;    // Capture packets from net
 static uint8_t  netif_hw_mac[6];  // Cached MAC from lower level
-#ifndef __MINGW32__
-static int       netif_read_fd = -1;   // Pipe end to read FROM the gateway
-static pid_t     gateway_pid = -1;     // PID of the gateway child process
 static pthread_t read_thread;
+#ifdef __MINGW32__
+static HANDLE    gateway_process = NULL;  // Handle of the gateway child process
+#else
+static pid_t     gateway_pid = -1;        // PID of the gateway child process
 #endif
 
 /* ---- Queue node and state ------------------------------------------- */
@@ -92,7 +100,6 @@ sm_destroy_queues(void)
     sm_queue_destroy(&sm_pkt_q);
 }
 
-#ifndef __MINGW32__
 /*
  * sm_queue_packet() enqueues a single network packet to be received by
  *                   a subsequent sm_nread().
@@ -133,7 +140,6 @@ sm_queue_packet(uint8_t *pkt, uint pktlen)
 
     return (0);
 }
-#endif
 
 /*
  * sm_dequeue_packet() removes the oldest network packet and copies its
@@ -195,9 +201,11 @@ static void
 dump_packet(uint8_t *data, uint packet_len)
 {
     uint pos;
+    if (!debug_net)
+        return;
     for (pos = 0; pos < packet_len; pos++)
-        printf(" %02x", data[pos]);
-    printf("\n");
+        netprintf(" %02x", data[pos]);
+    netprintf("\n");
 }
 #endif
 
@@ -426,7 +434,7 @@ static void
 netif_request_mac(void)
 {
     uint8_t cmd_mac = HS_NETIF_CMD_GETMAC;
-    printf("Send GETMAC\n");
+    netprintf("Send GETMAC\n");
     netif_getmac = 1;
     netif_write(0xff01, sizeof (cmd_mac), &cmd_mac);
 #if 0
@@ -442,7 +450,6 @@ netif_request_mac(void)
 #endif
 }
 
-#ifndef __MINGW32__
 static void
 handle_cmd(uint8_t *data, uint len)
 {
@@ -457,15 +464,66 @@ handle_cmd(uint8_t *data, uint len)
             cmd_mac[0] = HS_NETIF_CMD_SETMAC;
             memcpy(&cmd_mac[1], netif_hw_mac, 6);
             netif_write(0xff07, sizeof (cmd_mac), cmd_mac);
-            fprintf(stderr, "GET MAC\n");
+            netprintf("GET MAC\n");
             break;
         }
         case HS_NETIF_CMD_SETMAC:   // Set MAC
-            fprintf(stderr, "SET MAC\n");
             memcpy(netif_hw_mac, data + 1, 6);
+            netprintf("SET MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+                      netif_hw_mac[0], netif_hw_mac[1], netif_hw_mac[2],
+                      netif_hw_mac[3], netif_hw_mac[4], netif_hw_mac[5]);
             netif_getmac = 0;  // Mark as no longer waiting
             break;
     }
+}
+
+/*
+ * netif_mark_down() tears down pipe/process state after the netif
+ *                   helper has gone away (EOF or read error on the
+ *                   pipe), so that a subsequent netif_start() call
+ *                   will treat the interface as down and retry
+ *                   spawning the helper, instead of silently writing
+ *                   into a dead pipe forever.
+ *
+ * This is called from *inside* netif_read_thread() itself on its way
+ * out, so unlike netif_stop() it must NOT pthread_join(read_thread) --
+ * that would be a self-join deadlock. Joining (if the thread is ever
+ * looked at again) is left to a real netif_stop() call.
+ */
+static void
+netif_mark_down(void)
+{
+    if (!netif_up)
+        return;
+
+    netif_capture = 0;
+    netif_up = 0;
+
+    if (netif_write_fd >= 0) {
+        close(netif_write_fd);
+        netif_write_fd = -1;
+    }
+    if (netif_read_fd >= 0) {
+        close(netif_read_fd);
+        netif_read_fd = -1;
+    }
+
+#ifdef __MINGW32__
+    if (gateway_process != NULL) {
+        CloseHandle(gateway_process);
+        gateway_process = NULL;
+    }
+#else
+    if (gateway_pid > 0) {
+        /*
+         * Reap opportunistically without blocking -- we're running
+         * on the reader thread and the helper may already be gone
+         * (that's how we got here) or may still be exiting.
+         */
+        waitpid(gateway_pid, NULL, WNOHANG);
+        gateway_pid = -1;
+    }
+#endif
 }
 
 /*
@@ -527,9 +585,9 @@ netif_read_thread(void *arg)
         }
     }
 read_thread_exit:
+    netif_mark_down();
     return (NULL);
 }
-#endif
 
 /*
  * netif_start() opens the pipe to the virtual network interface and
@@ -538,15 +596,99 @@ read_thread_exit:
 uint
 netif_start(void)
 {
+    if (netif_up)
+        return (0);
+
 #ifdef __MINGW32__
-    perror("No Windows support for networking");
-    return (1);
+    /*
+     * Windows has no fork()/pipe()/execlp(). The equivalent is:
+     * CreatePipe() twice (one direction each), CreateProcessW() with
+     * STARTUPINFO's hStdInput/hStdOutput pointed at the ends the child
+     * should inherit, and then _open_osfhandle() to wrap our own ends
+     * of the pipes as ordinary CRT file descriptors -- which is what
+     * lets netif_write() and netif_read_thread() below stay identical
+     * on every platform, since they only ever see plain fds.
+     */
+    HANDLE p2c_read = NULL, p2c_write = NULL;
+    HANDLE c2p_read = NULL, c2p_write = NULL;
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    wchar_t cmdline[] = L"hostsmash_netif.exe";
+
+    memset(&sa, 0, sizeof (sa));
+    sa.nLength = sizeof (sa);
+    sa.bInheritHandle = TRUE;
+
+    if (!CreatePipe(&p2c_read, &p2c_write, &sa, 0)) {
+        fprintf(stderr, "Error creating transmission pipeline\n");
+        return (1);
+    }
+    if (!CreatePipe(&c2p_read, &c2p_write, &sa, 0)) {
+        fprintf(stderr, "Error creating reception pipeline\n");
+        CloseHandle(p2c_read);
+        CloseHandle(p2c_write);
+        return (1);
+    }
+
+    /* Only the ends the child inherits should be inheritable */
+    SetHandleInformation(p2c_write, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(c2p_read, HANDLE_FLAG_INHERIT, 0);
+
+    memset(&si, 0, sizeof (si));
+    si.cb = sizeof (si);
+    si.dwFlags   |= STARTF_USESTDHANDLES;
+    si.hStdInput  = p2c_read;
+    si.hStdOutput = c2p_write;
+    si.hStdError  = GetStdHandle(STD_ERROR_HANDLE);
+    memset(&pi, 0, sizeof (pi));
+
+    if (!CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL,
+                         &si, &pi)) {
+        fprintf(stderr, "Failed launching hostsmash_netif.exe (%lu)\n",
+                (unsigned long)GetLastError());
+        CloseHandle(p2c_read);
+        CloseHandle(p2c_write);
+        CloseHandle(c2p_read);
+        CloseHandle(c2p_write);
+        return (1);
+    }
+
+    CloseHandle(pi.hThread);
+    gateway_process = pi.hProcess;
+
+    /* The child owns its copies now; drop ours. */
+    CloseHandle(p2c_read);
+    CloseHandle(c2p_write);
+
+    /*
+     * _O_BINARY matters here: this is a binary length-prefixed framing
+     * protocol (arbitrary byte values, including 0x0A), and the CRT's
+     * default text mode would mangle it with newline translation.
+     */
+    netif_write_fd = _open_osfhandle((intptr_t)p2c_write,
+                                     _O_WRONLY | _O_BINARY);
+    netif_read_fd  = _open_osfhandle((intptr_t)c2p_read, _O_RDONLY | _O_BINARY);
+    if (netif_write_fd < 0 || netif_read_fd < 0) {
+        fprintf(stderr, "Error wrapping pipe handles as file descriptors\n");
+        TerminateProcess(gateway_process, 1);
+        CloseHandle(gateway_process);
+        gateway_process = NULL;
+        if (netif_write_fd >= 0)
+            close(netif_write_fd);
+        else
+            CloseHandle(p2c_write);
+        if (netif_read_fd >= 0)
+            close(netif_read_fd);
+        else
+            CloseHandle(c2p_read);
+        netif_write_fd = -1;
+        netif_read_fd  = -1;
+        return (1);
+    }
 #else
     int parent_to_child[2];
     int child_to_parent[2];
-
-    if (netif_up)
-        return (0);
 
     if (pipe(parent_to_child) < 0) {
         perror("Error creating transmission pipeline");
@@ -591,6 +733,8 @@ netif_start(void)
 
     netif_write_fd = parent_to_child[1];
     netif_read_fd  = child_to_parent[0];
+#endif
+
     netif_up = 1;
 
     /* Start the frame reader thread */
@@ -598,18 +742,23 @@ netif_start(void)
         perror("Error creating netif reader thread");
         close(netif_write_fd);
         close(netif_read_fd);
-        kill(gateway_pid, SIGTERM);
-        waitpid(gateway_pid, NULL, 0);
         netif_write_fd = -1;
         netif_read_fd  = -1;
-        gateway_pid    = -1;
-        netif_up       = 0;
+#ifdef __MINGW32__
+        TerminateProcess(gateway_process, 1);
+        CloseHandle(gateway_process);
+        gateway_process = NULL;
+#else
+        kill(gateway_pid, SIGTERM);
+        waitpid(gateway_pid, NULL, 0);
+        gateway_pid = -1;
+#endif
+        netif_up = 0;
         return (1);
     }
     netif_request_mac();
 
     return (0);
-#endif
 }
 
 /*
@@ -622,8 +771,6 @@ netif_stop(void)
     if (!netif_up)
         return;
 
-#ifdef __MINGW32__
-#else
     /* Tell the thread to shut down */
     netif_capture = 0;
     netif_up = 0;
@@ -641,21 +788,29 @@ netif_stop(void)
         netif_read_fd = -1;
     }
 
+#ifdef __MINGW32__
+    if (gateway_process != NULL) {
+        if (WaitForSingleObject(gateway_process, 3000) == WAIT_TIMEOUT)
+            TerminateProcess(gateway_process, 0);
+        CloseHandle(gateway_process);
+        gateway_process = NULL;
+    }
+#else
     if (gateway_pid > 0) {
         kill(gateway_pid, SIGTERM);
         waitpid(gateway_pid, NULL, 0);
         gateway_pid = -1;
     }
+#endif
 
     /* Wait for thread to terminate */
     pthread_join(read_thread, NULL);
-#endif
 }
 
 uint
 sm_nopen(hm_nopenhandle_t *hm, uint *status)
 {
-    printf("NOPEN\n");
+    netprintf("NOPEN\n");
     netif_request_mac();
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     hm->hm_hdr.km_status = KM_STATUS_OK;
@@ -665,7 +820,7 @@ sm_nopen(hm_nopenhandle_t *hm, uint *status)
 uint
 sm_nclose(hm_nopenhandle_t *hm, uint *status)
 {
-    printf("NCLOSE\n");
+    netprintf("NCLOSE\n");
     hm->hm_hdr.km_op |= KM_OP_REPLY;
     hm->hm_hdr.km_status = KM_STATUS_OK;
     return (send_msg(hm, sizeof (*hm), status));
@@ -782,10 +937,10 @@ sm_nclose(hm_nopenhandle_t *hm, uint *status)
 uint
 sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
 {
-    uint     hm_length = SWAP32(hm->hm_length);
+    uint     hm_length = hm->hm_length;
     uint8_t *ndata     = (uint8_t *)(hm + 1);
 
-    printf("NWRITE(l=%u rl=%u)", hm_length, rxlen);
+    netprintf("NWRITE(l=%u rl=%u)", hm_length, rxlen);
     if (netif_start()) {
         hm->hm_hdr.km_op |= KM_OP_REPLY;
         hm->hm_hdr.km_status = KM_STATUS_NOEXIST;
@@ -799,7 +954,7 @@ sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
 #ifdef DUMP_PACKET
     dump_packet(ndata, hm_length);
 #else
-    printf("\n");
+    netprintf("\n");
 #endif
 
     netif_write(hm_length, hm_length, ndata);
@@ -823,7 +978,7 @@ sm_nread(hm_nreadwrite_t *hm, uint *status)
     node = sm_dequeue_packet();
     if (node != NULL) {
         uint rc;
-        printf("NREAD(l=%u)", node->pktlen);
+        netprintf("NREAD(l=%u)", node->pktlen);
         memcpy(&node->hdr, &hm->hm_hdr, sizeof (node->hdr));
         node->hdr.hm_hdr.km_op    |= KM_OP_REPLY;
         node->hdr.hm_hdr.km_status = KM_STATUS_OK;
@@ -831,7 +986,7 @@ sm_nread(hm_nreadwrite_t *hm, uint *status)
 #ifdef DUMP_PACKET
         dump_packet(node->pkt, node->pktlen);
 #else
-        printf("\n");
+        netprintf("\n");
 #endif
         rc = send_msg(&node->hdr, sizeof (node->hdr) + node->pktlen, status);
         free(node);
@@ -853,7 +1008,7 @@ sm_ngetmac(hm_nmac_t *hm, uint *status)
     uint rc;
     uint8_t *mac;
 
-printf("sm_ngetmac\n");
+netprintf("sm_ngetmac\n");
     if (netif_start()) {
         hm->hm_hdr.km_status = KM_STATUS_NOEXIST;
         return (send_msg(hm, sizeof (*hm), status));
@@ -869,16 +1024,16 @@ printf("sm_ngetmac\n");
     mac = hm->hm_mac;
     memcpy(mac, netif_hw_mac, 6);
 
-    printf("GETMAC %02x:%02x:%02x:%02x:%02x:%02x\n",
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    netprintf("GETMAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     hm->hm_hdr.km_status = KM_STATUS_OK;
     rc = send_msg(hm, sizeof (*hm), status);
     if (rc != KM_STATUS_OK) {
-        printf("Failed to send reply: %d\n", rc);
+        netprintf("Failed to send reply: %d\n", rc);
         /* Try again */
         rc = send_msg(hm, sizeof (*hm), status);
         if (rc != KM_STATUS_OK)
-            printf("Failed again to send reply: %d\n", rc);
+            netprintf("Failed again to send reply: %d\n", rc);
     }
     return (rc);
 }
@@ -898,8 +1053,8 @@ sm_nsetmac(hm_nmac_t *hm, uint *status)
         return (send_msg(hm, sizeof (*hm), status));
     }
 
-    printf("SETMAC %02x:%02x:%02x:%02x:%02x:%02x\n",
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    netprintf("SETMAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     cmd_mac[0] = HS_NETIF_CMD_SETMAC;
     memcpy(&cmd_mac[1], mac, 6);

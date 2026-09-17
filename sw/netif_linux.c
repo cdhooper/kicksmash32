@@ -38,7 +38,7 @@
 
 #include "netif_backend.h"
 
-static unsigned  cfg_by_ext_prog = 0; /* 0 = netlink (default), 1 = external "ip" */
+static unsigned  cfg_by_ext_prog = 0; // 0=netlink (default), 1=external ip
 static char      g_tap_name[IFNAMSIZ];
 static int       g_tap_fd = -1;
 
@@ -50,7 +50,7 @@ netif_linux_set_use_external_ip(int use_external)
 }
 
 /* ------------------------------------------------------------------ */
-/* Netlink helpers                                                     */
+/* Netlink helpers                                                    */
 /* ------------------------------------------------------------------ */
 
 static int
@@ -280,11 +280,12 @@ nl_delete_link(const char *name)
 }
 
 /* ------------------------------------------------------------------ */
-/* Macvtap allocation / teardown                                       */
+/* Macvtap allocation / teardown                                      */
 /* ------------------------------------------------------------------ */
 
 static int
-allocate_macvtap(const char *lower_dev, char *dev_name_buffer, size_t dev_name_buffer_sz)
+allocate_macvtap(const char *lower_dev, char *dev_name_buffer,
+                 size_t dev_name_buffer_sz)
 {
     static int counter = 0;
     char name[IFNAMSIZ];
@@ -382,7 +383,7 @@ delete_macvtap(const char *dev_name, unsigned by_ext)
 }
 
 /* ------------------------------------------------------------------ */
-/* Privilege elevation                                                 */
+/* Privilege elevation                                                */
 /* ------------------------------------------------------------------ */
 
 static int
@@ -497,7 +498,7 @@ linux_ensure_privilege(int argc, char *argv[])
 }
 
 /* ------------------------------------------------------------------ */
-/* MAC get/set                                                         */
+/* MAC get/set                                                        */
 /* ------------------------------------------------------------------ */
 
 static void
@@ -588,14 +589,14 @@ get_mac_macvtap(uint8_t *mac)
 }
 
 /* ------------------------------------------------------------------ */
-/* netif_backend implementation                                        */
+/* netif_backend implementation                                       */
 /* ------------------------------------------------------------------ */
 
 static int
 linux_open(const char *lower_dev, char *name_out, size_t name_out_sz)
 {
     char tap_name[IFNAMSIZ];
-    int fd = allocate_macvtap(lower_dev, tap_name, sizeof(tap_name));
+    int fd = allocate_macvtap(lower_dev, tap_name, sizeof (tap_name));
     if (fd < 0)
         return (-1);
 
@@ -625,7 +626,7 @@ linux_close(void)
 static int
 linux_pollable_fd(void)
 {
-    return g_tap_fd;
+    return (g_tap_fd);
 }
 
 /*
@@ -637,21 +638,21 @@ static int
 linux_read_frame(uint8_t *buf, size_t buflen)
 {
     unsigned char raw[2000];
-    ssize_t nread = read(g_tap_fd, raw, sizeof(raw));
+    ssize_t nread = read(g_tap_fd, raw, sizeof (raw));
     if (nread < 0) {
         if (errno == EAGAIN || errno == EINTR)
             return (0);
         perror("Error: netif read failed");
         return (-1);
     }
-    if (nread <= (ssize_t)sizeof(struct virtio_net_hdr))
+    if (nread <= (ssize_t)sizeof (struct virtio_net_hdr))
         return (0);
 
-    size_t frame_len = nread - sizeof(struct virtio_net_hdr);
+    size_t frame_len = nread - sizeof (struct virtio_net_hdr);
     if (frame_len > buflen)
         return (-1);
 
-    memcpy(buf, raw + sizeof(struct virtio_net_hdr), frame_len);
+    memcpy(buf, raw + sizeof (struct virtio_net_hdr), frame_len);
     return ((int)frame_len);
 }
 
@@ -664,10 +665,10 @@ static int
 linux_write_frame(const uint8_t *buf, size_t len)
 {
     struct virtio_net_hdr vnet_hdr;
-    memset(&vnet_hdr, 0, sizeof(vnet_hdr));
+    memset(&vnet_hdr, 0, sizeof (vnet_hdr));
     struct iovec iov[2];
     iov[0].iov_base = &vnet_hdr;
-    iov[0].iov_len  = sizeof(vnet_hdr);
+    iov[0].iov_len  = sizeof (vnet_hdr);
     iov[1].iov_base = (void *)buf;
     iov[1].iov_len  = len;
 
@@ -689,7 +690,7 @@ linux_set_mac(const uint8_t mac[6])
 static int
 linux_get_mac(uint8_t mac[6])
 {
-    return get_mac_macvtap(mac) == 0 ? 0 : -1;
+    return ((get_mac_macvtap(mac) == 0) ? 0 : -1);
 }
 
 static const struct netif_backend linux_backend = {
@@ -706,5 +707,5 @@ static const struct netif_backend linux_backend = {
 const struct netif_backend *
 netif_backend_get(void)
 {
-    return &linux_backend;
+    return (&linux_backend);
 }

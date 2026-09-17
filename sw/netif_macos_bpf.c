@@ -49,19 +49,19 @@
 #include "netif_backend.h"
 
 #define MAX_FRAME     2048
-#define BPF_BUFSIZE_REQUEST 131072   /* requested; kernel may adjust */
+#define BPF_BUFSIZE_REQUEST 131072  // requested; kernel may adjust
 
 static int      g_bpf_fd = -1;
 static char     g_lower_dev[IFNAMSIZ];
-static uint8_t *g_rdbuf     = NULL; /* malloc'd to exactly match BIOCGBLEN */
-static size_t   g_rdbuf_cap = 0;    /* the size read() must be called with,
-                                        on macOS this MUST equal the value
-                                        BIOCGBLEN reports or read() fails
-                                        with EINVAL -- it is not merely a
-                                        "large enough" ceiling */
-static ssize_t  g_rdbuf_len = 0;   /* bytes currently valid in g_rdbuf */
-static ssize_t  g_rdbuf_pos = 0;   /* cursor into g_rdbuf for the next frame */
-static uint8_t  g_virtual_mac[6];  /* the "Amiga's" MAC for filtering purposes */
+static uint8_t *g_rdbuf     = NULL; // malloc'd to exactly match BIOCGBLEN
+static size_t   g_rdbuf_cap = 0;    // the size read() must be called with,
+                                    //  on macOS this MUST equal the value
+                                    //  BIOCGBLEN reports or read() fails
+                                    //  with EINVAL -- it is not merely a
+                                    //  "large enough" ceiling.
+static ssize_t  g_rdbuf_len = 0;    // bytes currently valid in g_rdbuf
+static ssize_t  g_rdbuf_pos = 0;    // cursor into g_rdbuf for the next frame
+static uint8_t  g_virtual_mac[6];   // the "Amiga's" MAC for filtering purposes
 static int      g_have_virtual_mac = 0;
 
 /*
@@ -76,15 +76,15 @@ open_bpf_device(void)
 {
     char path[32];
     for (int i = 0; i < 256; i++) {
-        snprintf(path, sizeof(path), "/dev/bpf%d", i);
+        snprintf(path, sizeof (path), "/dev/bpf%d", i);
         int fd = open(path, O_RDWR);
         if (fd >= 0)
-            return fd;
+            return (fd);
         if (errno == ENOENT)
             break;      /* no more device nodes to try */
         /* EBUSY (already claimed) or EACCES -- try the next one */
     }
-    return -1;
+    return (-1);
 }
 
 /* Read the physical interface's own MAC via getifaddrs/AF_LINK. */
@@ -96,7 +96,7 @@ get_physical_mac(const char *ifname, uint8_t mac[6])
 
     if (getifaddrs(&ifap) != 0) {
         perror("netif_macos_bpf: getifaddrs");
-        return -1;
+        return (-1);
     }
 
     for (ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
@@ -115,7 +115,7 @@ get_physical_mac(const char *ifname, uint8_t mac[6])
     }
 
     freeifaddrs(ifap);
-    return found;
+    return (found);
 }
 
 static int
@@ -126,12 +126,12 @@ bpf_open(const char *lower_dev, char *name_out, size_t name_out_sz)
         fprintf(stderr,
             "netif_macos_bpf: could not open any /dev/bpfN (all busy, or "
             "insufficient permission -- run as root)\n");
-        return -1;
+        return (-1);
     }
 
     struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, lower_dev, sizeof(ifr.ifr_name) - 1);
+    memset(&ifr, 0, sizeof (ifr));
+    strncpy(ifr.ifr_name, lower_dev, sizeof (ifr.ifr_name) - 1);
 
     /*
      * BIOCSBLEN MUST be set before BIOCSETIF on macOS -- once the fd
@@ -142,11 +142,13 @@ bpf_open(const char *lower_dev, char *name_out, size_t name_out_sz)
      * called with a length that doesn't match what the kernel
      * actually allocated.
      */
-    u_int blen = BPF_BUFSIZE_REQUEST;
+    uint blen = BPF_BUFSIZE_REQUEST;
     if (ioctl(g_bpf_fd, BIOCSBLEN, &blen) < 0) {
         perror("netif_macos_bpf: BIOCSBLEN");
-        /* non-fatal -- we still query and honor whatever the kernel
-           actually has via BIOCGBLEN below */
+        /*
+         * non-fatal -- we still query and honor whatever the kernel
+         * actually has via BIOCGBLEN below
+         */
     }
 
     if (ioctl(g_bpf_fd, BIOCSETIF, &ifr) < 0) {
@@ -159,20 +161,21 @@ bpf_open(const char *lower_dev, char *name_out, size_t name_out_sz)
      * ignored it outright -- BIOCGBLEN is the only source of truth
      * for the size read() must be called with from here on.
      */
-    u_int actual_blen = 0;
+    uint actual_blen = 0;
     if (ioctl(g_bpf_fd, BIOCGBLEN, &actual_blen) < 0) {
         perror("netif_macos_bpf: BIOCGBLEN");
         goto fail;
     }
     g_rdbuf = malloc(actual_blen);
     if (!g_rdbuf) {
-        fprintf(stderr, "netif_macos_bpf: malloc(%u) for capture buffer failed\n",
+        fprintf(stderr,
+                "netif_macos_bpf: malloc(%u) for capture buffer failed\n",
                 actual_blen);
         goto fail;
     }
     g_rdbuf_cap = actual_blen;
 
-    u_int dlt;
+    uint dlt;
     if (ioctl(g_bpf_fd, BIOCGDLT, &dlt) < 0) {
         perror("netif_macos_bpf: BIOCGDLT");
         goto fail;
@@ -184,7 +187,7 @@ bpf_open(const char *lower_dev, char *name_out, size_t name_out_sz)
         goto fail;
     }
 
-    u_int enable = 1;
+    uint enable = 1;
     if (ioctl(g_bpf_fd, BIOCPROMISC, &enable) < 0) {
         perror("netif_macos_bpf: BIOCPROMISC");
         goto fail;
@@ -197,27 +200,29 @@ bpf_open(const char *lower_dev, char *name_out, size_t name_out_sz)
         perror("netif_macos_bpf: BIOCIMMEDIATE");
         goto fail;
     }
-    u_int disable = 0;
+    uint disable = 0;
     if (ioctl(g_bpf_fd, BIOCSSEESENT, &disable) < 0) {
         perror("netif_macos_bpf: BIOCSSEESENT");
-        /* non-fatal -- worst case we see our own injected frames
-           echoed back and main.c's frame_filter()/dest-MAC check
-           will typically discard them anyway */
+        /*
+         * non-fatal -- worst case we see our own injected frames
+         * echoed back and main.c's frame_filter()/dest-MAC check
+         * will typically discard them anyway
+         */
     }
 
-    strncpy(g_lower_dev, lower_dev, sizeof(g_lower_dev) - 1);
-    g_lower_dev[sizeof(g_lower_dev) - 1] = '\0';
+    strncpy(g_lower_dev, lower_dev, sizeof (g_lower_dev) - 1);
+    g_lower_dev[sizeof (g_lower_dev) - 1] = '\0';
     g_rdbuf_len = g_rdbuf_pos = 0;
 
     snprintf(name_out, name_out_sz, "bpf(%s)", lower_dev);
     fprintf(stderr, "netif_macos_bpf: bound to %s via /dev/bpfN, promiscuous\n",
             lower_dev);
-    return 0;
+    return (0);
 
 fail:
     close(g_bpf_fd);
     g_bpf_fd = -1;
-    return -1;
+    return (-1);
 }
 
 static void
@@ -236,7 +241,7 @@ bpf_close(void)
 static int
 bpf_pollable_fd(void)
 {
-    return g_bpf_fd;
+    return (g_bpf_fd);
 }
 
 /*
@@ -257,20 +262,20 @@ bpf_read_frame(uint8_t *buf, size_t buflen)
         ssize_t n = read(g_bpf_fd, g_rdbuf, g_rdbuf_cap);
         if (n < 0) {
             if (errno == EAGAIN || errno == EINTR)
-                return 0;
+                return (0);
             perror("netif_macos_bpf: read");
-            return -1;
+            return (-1);
         }
         if (n == 0)
-            return 0;
+            return (0);
         g_rdbuf_len = n;
         g_rdbuf_pos = 0;
     }
 
-    if (g_rdbuf_pos + (ssize_t)sizeof(struct bpf_hdr) > g_rdbuf_len) {
+    if (g_rdbuf_pos + (ssize_t)sizeof (struct bpf_hdr) > g_rdbuf_len) {
         /* malformed/truncated trailing header -- resync on next read */
         g_rdbuf_len = g_rdbuf_pos = 0;
-        return 0;
+        return (0);
     }
 
     struct bpf_hdr *bh = (struct bpf_hdr *)(void *)(g_rdbuf + g_rdbuf_pos);
@@ -279,7 +284,7 @@ bpf_read_frame(uint8_t *buf, size_t buflen)
 
     if (g_rdbuf_pos + (ssize_t)hdrlen + (ssize_t)caplen > g_rdbuf_len) {
         g_rdbuf_len = g_rdbuf_pos = 0;
-        return 0;
+        return (0);
     }
 
     int ret;
@@ -292,25 +297,25 @@ bpf_read_frame(uint8_t *buf, size_t buflen)
 
     ssize_t consumed = hdrlen + caplen;
     g_rdbuf_pos += BPF_WORDALIGN(consumed);
-    return ret;
+    return (ret);
 }
 
 static int
 bpf_write_frame(const uint8_t *buf, size_t len)
 {
     if (g_bpf_fd < 0 || len == 0 || len > MAX_FRAME)
-        return -1;
+        return (-1);
 
     ssize_t w = write(g_bpf_fd, buf, len);
     if (w < 0) {
         perror("netif_macos_bpf: write");
-        return -1;
+        return (-1);
     }
     if ((size_t)w != len) {
         fprintf(stderr, "netif_macos_bpf: short write (%zd of %zu)\n", w, len);
-        return -1;
+        return (-1);
     }
-    return 0;
+    return (0);
 }
 
 /*
@@ -329,7 +334,7 @@ bpf_set_mac(const uint8_t mac[6])
         "netif_macos_bpf: virtual MAC set to %02x:%02x:%02x:%02x:%02x:%02x "
         "(filtering identity only -- %s's real MAC is unchanged)\n",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], g_lower_dev);
-    return 0;
+    return (0);
 }
 
 static int
@@ -337,16 +342,18 @@ bpf_get_mac(uint8_t mac[6])
 {
     if (g_have_virtual_mac) {
         memcpy(mac, g_virtual_mac, 6);
-        return 0;
+        return (0);
     }
-    /* No SETMAC seen yet -- report the physical NIC's real MAC as a
-       sane initial default, same as what a fresh macvtap would show
-       before the Amiga sends its own. */
+    /*
+     * No SETMAC seen yet -- report the physical NIC's real MAC as a
+     * sane initial default, same as what a fresh macvtap would show
+     * before the Amiga sends its own.
+     */
     if (get_physical_mac(g_lower_dev, mac) != 0) {
         memset(mac, 0, 6);
-        return -1;
+        return (-1);
     }
-    return 0;
+    return (0);
 }
 
 /*
@@ -367,23 +374,23 @@ static int
 macos_ensure_privilege(int argc, char *argv[])
 {
     if (geteuid() == 0)
-        return 0;
+        return (0);
 
     char prog_path[1024];
-    uint32_t sz = sizeof(prog_path);
+    uint32_t sz = sizeof (prog_path);
     if (_NSGetExecutablePath(prog_path, &sz) != 0) {
-        strncpy(prog_path, argv[0], sizeof(prog_path) - 1);
-        prog_path[sizeof(prog_path) - 1] = '\0';
+        strncpy(prog_path, argv[0], sizeof (prog_path) - 1);
+        prog_path[sizeof (prog_path) - 1] = '\0';
     }
 
     char cmd[4096];
-    int off = snprintf(cmd, sizeof(cmd), "'%s'", prog_path);
-    for (int i = 1; i < argc && off < (int)sizeof(cmd) - 4; i++) {
-        off += snprintf(cmd + off, sizeof(cmd) - off, " '%s'", argv[i]);
+    int off = snprintf(cmd, sizeof (cmd), "'%s'", prog_path);
+    for (int i = 1; i < argc && off < (int)sizeof (cmd) - 4; i++) {
+        off += snprintf(cmd + off, sizeof (cmd) - off, " '%s'", argv[i]);
     }
 
     char osa_arg[4300];
-    snprintf(osa_arg, sizeof(osa_arg),
+    snprintf(osa_arg, sizeof (osa_arg),
              "do shell script \"%s\" with administrator privileges", cmd);
 
     fprintf(stderr, "netif_macos_bpf: elevating via administrator prompt...\n");
@@ -408,5 +415,5 @@ static const struct netif_backend macos_bpf_backend = {
 const struct netif_backend *
 netif_backend_get(void)
 {
-    return &macos_bpf_backend;
+    return (&macos_bpf_backend);
 }

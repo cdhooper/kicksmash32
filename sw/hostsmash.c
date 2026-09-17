@@ -89,6 +89,7 @@ static const struct option long_opts[] = {
     { "device",   required_argument, NULL, 'd' },
     { "debugfs",  no_argument,       NULL, 0x80 + 'f' },
     { "debugmsg", no_argument,       NULL, 0x80 + 'm' },
+    { "debugnet", no_argument,       NULL, 0x80 + 'n' },
     { "erase",    no_argument,       NULL, 'e' },
     { "fill",     no_argument,       NULL, 'f' },
     { "identify", no_argument,       NULL, 'i' },
@@ -149,6 +150,7 @@ static const char usage_text[] =
 #ifdef FILE_DEBUG
 "       --debugmsg           debug Amiga messages\n"
 #endif
+"       --debugnet           debug network operations\n"
 "    -e --erase              erase EEPROM (use -a <addr> for sector erase)\n"
 "    -f --fill               fill EEPROM with duplicates of the same image\n"
 "    -h --help               display usage\n"
@@ -179,6 +181,7 @@ uint8_t amiga_interface_version = 0;
 
 static uint debug_fs = 0;
 static uint debug_msg = 0;
+uint        debug_net = 0;
 static uint ks_message_terminated = 0;  // Stop execution when non-zero
 
 #ifdef FILE_DEBUG
@@ -216,6 +219,22 @@ msgprintf(const char *fmt, ...)
     return (rc);
 }
 #endif
+
+ATTRIBUTE_PRINTF
+int
+netprintf(const char *fmt, ...)
+{
+    int rc = 0;
+    va_list args;
+
+    if (debug_net) {
+        va_start(args, fmt);
+        rc = vprintf(fmt, args);
+        va_end(args);
+    }
+
+    return (rc);
+}
 
 #ifdef OSX
 static void
@@ -897,6 +916,125 @@ time_delay_msec(int msec)
     usleep((msec % 1000) * 1000);
 #endif
 }
+
+#ifdef __MINGW32__
+#include <shellapi.h>
+
+/*
+ * hostsmash_is_elevated() / hostsmash_ensure_elevated_for_net() --
+ *
+ * See the large comment above windows_ensure_privilege() in
+ * netif_windows.c for the full story; short version here.
+ *
+ * On Windows there is no execve()-style in-place re-exec: gaining
+ * admin rights means launching an entirely new, unrelated process,
+ * and that new process cannot inherit handles -- including the
+ * stdin/stdout pipe ends netif_start() (hostsmash_net.c) hands to
+ * hostsmash_netif.exe via STARTF_USESTDHANDLES -- across the UAC
+ * integrity-level boundary.
+ *
+ * That means hostsmash_netif.exe can only safely self-elevate when
+ * run standalone/interactively; it must not do so when hostsmash.exe
+ * has spawned it with piped stdio, since the relaunch would silently
+ * strand that pipe (a disconnected, UAC-elevated copy of
+ * hostsmash_netif.exe would run in its own new window, while the
+ * original piped copy hostsmash.exe is actually talking to exits
+ * right out from under it). netif_windows.c now refuses to relaunch
+ * in that situation instead of doing that.
+ *
+ * So the responsibility for obtaining an admin token is moved up to
+ * here, one level higher in the process tree: if network service
+ * (-n) was requested and we're not already elevated, hostsmash.exe
+ * relaunches *itself* via UAC before it ever creates the pipes or
+ * spawns the netif helper. By the time netif_start() runs,
+ * hostsmash.exe -- and therefore its inherited-handle child,
+ * hostsmash_netif.exe -- is already elevated, so the helper's own
+ * elevation check succeeds immediately and it never needs to touch
+ * ShellExecuteExW at all.
+ */
+static int
+hostsmash_is_elevated(void)
+{
+    HANDLE          token = NULL;
+    TOKEN_ELEVATION elevation;
+    DWORD           sz = sizeof (elevation);
+    int             elevated = 0;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return (0);
+    if (GetTokenInformation(token, TokenElevation, &elevation,
+                             sizeof (elevation), &sz)) {
+        elevated = elevation.TokenIsElevated ? 1 : 0;
+    }
+    CloseHandle(token);
+    return (elevated);
+}
+
+/*
+ * Relaunches this program elevated if network service was requested
+ * and we're not already elevated. Never returns in that case -- the
+ * relaunch is a whole new process, so this must be called early in
+ * main(), before serial_open()/create_threads() or any other state
+ * is created; anything set up before this call is simply discarded
+ * when this process exits.
+ */
+static void
+hostsmash_ensure_elevated_for_net(int argc, char * const *argv)
+{
+    wchar_t            exe_path[MAX_PATH];
+    char               args[4096];
+    wchar_t            wargs[4096];
+    SHELLEXECUTEINFOW  sei;
+    int                off = 0;
+    int                i;
+
+    if (hostsmash_is_elevated())
+        return;
+
+    fprintf(stderr,
+            "hostsmash: network service (-n) requires administrator "
+            "privileges on Windows; elevating via UAC prompt...\n");
+
+    if (GetModuleFileNameW(NULL, exe_path, MAX_PATH) == 0) {
+        fprintf(stderr, "hostsmash: GetModuleFileNameW failed\n");
+        exit(EXIT_FAILURE);
+    }
+
+    args[0] = '\0';
+    for (i = 1; i < argc && off < (int)sizeof (args) - 4; i++)
+        off += snprintf(args + off, sizeof (args) - off, "\"%s\" ", argv[i]);
+    MultiByteToWideChar(CP_UTF8, 0, args, -1, wargs,
+                         (int)(sizeof (wargs) / sizeof (wargs[0])));
+
+    memset(&sei, 0, sizeof (sei));
+    sei.cbSize       = sizeof (sei);
+    sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb       = L"runas";
+    sei.lpFile       = exe_path;
+    sei.lpParameters = wargs;
+    sei.nShow        = SW_SHOWNORMAL;
+
+    if (!ShellExecuteExW(&sei)) {
+        DWORD err = GetLastError();
+        if (err == ERROR_CANCELLED)
+            fprintf(stderr, "hostsmash: elevation declined by user\n");
+        else
+            fprintf(stderr, "hostsmash: ShellExecuteExW failed (%lu)\n",
+                    (unsigned long)err);
+        exit(EXIT_FAILURE);
+    }
+    if (sei.hProcess != NULL)
+        CloseHandle(sei.hProcess);
+
+    /*
+     * The elevated relaunch is a brand-new process (its own console,
+     * its own session) -- this copy has no further useful role and
+     * must not fall through into serial_open()/create_threads()
+     * unelevated.
+     */
+    exit(EXIT_SUCCESS);
+}
+#endif /* __MINGW32__ */
 
 static void
 diff_timeval(struct timeval *start, struct timeval *end, struct timeval *diff)
@@ -2616,7 +2754,6 @@ eeprom_write(const uint8_t *filebuf, uint addr, uint len)
         return (-1); // "timeout" was reported in this case
 
     if (send_ll_crc(filebuf, len)) {
-        time_delay_msec(100);
         show_rx_peek();
         errx(EXIT_FAILURE, "Send failure");
     }
@@ -3916,13 +4053,15 @@ mem16_swap(void *buf, uint len)
  * Platform lock backend
  */
 #if defined(__MINGW32__)
-   /* SRWLOCK has a static initializer, just like PTHREAD_MUTEX_INITIALIZER,
-    * so no explicit init/teardown call is required. */
-   static SRWLOCK queue_lock = SRWLOCK_INIT;
+    /*
+     * SRWLOCK has a static initializer, just like PTHREAD_MUTEX_INITIALIZER,
+     * so no explicit init/teardown call is required.
+     */
+    static SRWLOCK queue_lock = SRWLOCK_INIT;
 #  define QUEUE_LOCK()    AcquireSRWLockExclusive(&queue_lock)
 #  define QUEUE_UNLOCK()  ReleaseSRWLockExclusive(&queue_lock)
 #else /* OSX || LINUX */
-   static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+    static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
 #  define QUEUE_LOCK()    pthread_mutex_lock(&queue_lock)
 #  define QUEUE_UNLOCK()  pthread_mutex_unlock(&queue_lock)
 #endif
@@ -4234,7 +4373,8 @@ retry:
         }
         memcpy(localbuf, buf, *rxlen);
 #ifdef DEBUG_MSG_FIFO
-        printf("SAVE Recv tag %x len=%x stat=%x\n", SWAP16(msg_tag), *rxlen, *rx_status);
+        printf("SAVE Recv tag %x len=%x stat=%x\n",
+               SWAP16(msg_tag), *rxlen, *rx_status);
 #endif
 
 #ifdef DEBUG_MSG_FIFO_DUMP
@@ -7366,12 +7506,26 @@ errx(EXIT_FAILURE, "how did we get here?");
             case 0x80 + 'm':
                 debug_msg++;
                 break;
+            case 0x80 + 'n':
+                debug_net++;
+                break;
             default:
                 warnx("Unknown option -%c 0x%x", ch, ch);
                 usage(stderr);
                 exit(EXIT_USAGE);
         }
     }
+
+#ifdef __MINGW32__
+    /*
+     * Must happen before argc/argv are adjusted below (we want to
+     * hand the *original* command line to the elevated relaunch) and
+     * before anything else in main() opens a device or spawns
+     * hostsmash_netif.exe.
+     */
+    if (amiga_net_service)
+        hostsmash_ensure_elevated_for_net(argc, argv);
+#endif
 
     argc -= optind;
     argv += optind;

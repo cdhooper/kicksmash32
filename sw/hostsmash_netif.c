@@ -5,15 +5,24 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
-#ifndef __MINGW32__
+#ifdef __MINGW32__
+#include <winsock2.h>
+#include <windows.h>
+#include <iphlpapi.h>
+#include <io.h>         /* _setmode, _fileno */
+#include <fcntl.h>      /* _O_BINARY */
+typedef unsigned int uint;
+#ifndef IFNAMSIZ
+#define IFNAMSIZ 256    /* Npcap adapter identifiers can be long GUIDs */
+#endif
+#else
 #include <sys/types.h>  /* uint */
 #include <poll.h>
 #include <net/if.h>     /* IFNAMSIZ */
-#include "netif_backend.h"
 #endif
+#include "netif_backend.h"
 #include "hostsmash_netif.h"
 
-#ifndef __MINGW32__
 /*
  * After compiling, it's helpful to setuid root this program on Linux.
  * Otherwise, you will need to enter a password every time the network
@@ -33,11 +42,18 @@
  * prompt (osascript) and talks to the physical NIC directly via BPF
  * (/dev/bpfN) in promiscuous mode -- there is no macvtap equivalent.
  *
+ * On Windows, this program elevates via a UAC prompt (ShellExecuteEx
+ * "runas") and talks to the physical NIC directly via Npcap in
+ * promiscuous mode -- again, there is no macvtap equivalent, and no
+ * poll()-able fd for the capture handle, so the Windows build of
+ * main() below uses a small thread-based loop instead of poll().
+ *
  * Build with -DOSX on macOS so the OSX-specific branches below (only
  * the default-route detection needs one -- everything else platform-
  * specific lives behind netif_backend.h in netif_linux.c /
- * netif_macos_bpf.c) compile in, and link against netif_macos_bpf.c
- * instead of netif_linux.c.
+ * netif_macos_bpf.c / netif_windows.c) compile in, and link against
+ * netif_macos_bpf.c instead of netif_linux.c. On Windows (__MINGW32__
+ * is predefined by the cross-compiler), link against netif_windows.c.
  */
 
 /* Global volatile flag for clean termination */
@@ -49,6 +65,38 @@ static const struct netif_backend *g_be;
 /* Cached MAC the Amiga side has told us about / that we told it */
 static uint8_t netif_hw_mac[6];
 
+#ifdef __MINGW32__
+netif_config_t g_netif_cfg;
+
+/*
+ * Handle of the thread blocked reading stdin, so the console control
+ * handler below can unstick it (see win_stdin_thread()).
+ */
+static HANDLE g_stdin_thread_handle = NULL;
+
+/*
+ * Console control handler: Windows' analog of the SIGINT/SIGTERM
+ * handler below. A blocking fread() on stdin can't be woken by a
+ * flag alone, so CancelSynchronousIo() is used to force it to return.
+ */
+static BOOL WINAPI
+console_ctrl_handler(DWORD ctrl_type)
+{
+    switch (ctrl_type) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            keep_running = 0;
+            if (g_stdin_thread_handle != NULL)
+                CancelSynchronousIo(g_stdin_thread_handle);
+            return (TRUE);
+        default:
+            return (FALSE);
+    }
+}
+#else
 /* Signal handler to catch termination events */
 static void
 handle_signal(int sig)
@@ -56,6 +104,7 @@ handle_signal(int sig)
     (void) sig;
     keep_running = 0;
 }
+#endif
 
 /*
  * Auto-detect the host's current default route interface
@@ -64,7 +113,70 @@ handle_signal(int sig)
 static int
 get_default_iface(char *iface_buffer, size_t bufsize)
 {
-#if defined(OSX)
+#if defined(__MINGW32__)
+    /*
+     * Windows has no popen()-friendly "ip route"/"route -n get
+     * default" equivalent worth scraping text from -- ask iphlpapi
+     * for the default route's interface index instead, then resolve
+     * that index to its friendly name (e.g. "Ethernet", "Wi-Fi") via
+     * GetAdaptersAddresses(). That friendly name is what gets handed
+     * to the backend's open(), which resolves it against Npcap's
+     * device list (see find_matching_device() in netif_windows.c).
+     */
+    MIB_IPFORWARDROW row;
+    IP_ADAPTER_ADDRESSES *addrs, *a;
+    ULONG bufsz = 15000;
+    ULONG ret;
+    int found = -1;
+
+    memset(&row, 0, sizeof (row));
+    if (GetBestRoute(0, 0, &row) != NO_ERROR) {
+        fprintf(stderr, "Error: GetBestRoute could not find a default route\n");
+        return (-1);
+    }
+
+    addrs = malloc(bufsz);
+    if (addrs == NULL)
+        return (-1);
+    ret = GetAdaptersAddresses(AF_UNSPEC,
+                               GAA_FLAG_SKIP_ANYCAST |
+                               GAA_FLAG_SKIP_MULTICAST |
+                               GAA_FLAG_SKIP_DNS_SERVER,
+                               NULL, addrs, &bufsz);
+    if (ret == ERROR_BUFFER_OVERFLOW) {
+        free(addrs);
+        addrs = malloc(bufsz);
+        if (addrs == NULL)
+            return (-1);
+        ret = GetAdaptersAddresses(AF_UNSPEC,
+                                   GAA_FLAG_SKIP_ANYCAST |
+                                   GAA_FLAG_SKIP_MULTICAST |
+                                   GAA_FLAG_SKIP_DNS_SERVER,
+                                   NULL, addrs, &bufsz);
+    }
+    if (ret != NO_ERROR) {
+        fprintf(stderr, "Error: GetAdaptersAddresses failed (%lu)\n",
+                (unsigned long)ret);
+        free(addrs);
+        return (-1);
+    }
+
+    for (a = addrs; a != NULL; a = a->Next) {
+        int n;
+        if (a->IfIndex != row.dwForwardIfIndex)
+            continue;
+        n = WideCharToMultiByte(CP_UTF8, 0, a->FriendlyName, -1,
+                                 iface_buffer, (int)bufsize, NULL, NULL);
+        if (n > 0)
+            found = 0;
+        break;
+    }
+
+    free(addrs);
+    if (found < 0)
+        fprintf(stderr, "Error: could not determine default route interface\n");
+    return (found);
+#elif defined(OSX)
     /*
      * macOS has no "ip route" -- the BSD equivalent is:
      *     route -n get default
@@ -145,7 +257,7 @@ usage(const char *prog)
             "  raw Ethernet frames over stdin/stdout.\n"
             "\n"
             "Options:\n"
-#if !defined(OSX)
+#ifdef LINUX
             "  -e, --external   (Linux only) Use external 'ip' commands for\n"
             "                   link setup, instead of netlink.\n"
 #endif
@@ -160,6 +272,10 @@ static void
 dump_packet(uint8_t *data, uint packet_len)
 {
     uint pos;
+#if 0
+    if (packet_len > 30)
+        packet_len = 30;
+#endif
     for (pos = 0; pos < packet_len; pos++)
         fprintf(stderr, " %02x", data[pos]);
     fprintf(stderr, "\n");
@@ -205,8 +321,10 @@ handle_cmd(uint8_t *data, uint len)
                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
                 data[0] = HS_NETIF_CMD_SETMAC;
                 send_pkt(0xff07, 7, data);  // CMD + MAC
+                memcpy(netif_hw_mac, data + 1, sizeof (netif_hw_mac));
+            } else {
+                fprintf(stderr, "Get MAC failed\n");
             }
-            memcpy(netif_hw_mac, data + 1, sizeof (netif_hw_mac));
             break;
         case HS_NETIF_CMD_SETMAC:   // Set MAC
             fprintf(stderr, "Set MAC\n");
@@ -217,27 +335,229 @@ handle_cmd(uint8_t *data, uint len)
 }
 
 static int
-frame_filter(uint8_t *frame, uint frame_len)
+is_multicast(uint8_t *dstmac)
+{
+    if (dstmac[0] & 1) {  // Also captures all broadcasts
+        return (1);
+    } else {
+        return (0);
+    }
+}
+
+static int
+is_broadcast(uint8_t *dstmac)
+{
+    if ((dstmac[0] == 0xff) && (dstmac[1] == 0xff) &&
+        (dstmac[2] == 0xff) && (dstmac[3] == 0xff) &&
+        (dstmac[4] == 0xff) && (dstmac[5] == 0xff)) {
+        return (1);
+    } else {
+        return (0);
+    }
+}
+
+static int
+packet_filter(uint8_t *frame, uint frame_len)
 {
     (void) frame_len;
 
     /* Filter out IPv6 */
     if ((frame[12] == 0x86) && (frame[13] == 0xdd))
-        return (1);
+        return (0);
 
     /* Check for destination MAC address match */
     if (memcmp(frame, netif_hw_mac, 6) == 0)
-        return (0);
+        return (1);
 
+    if (is_multicast(frame) || is_broadcast(frame))
+        return (1);
+
+fprintf(stderr, "[nm %x]", frame_len);
     return (0);
 }
-#endif /* ! __MINGW32__ */
+
+#ifdef __MINGW32__
+/*
+ * Windows has no poll() that can wait on both an Npcap capture handle
+ * and a CRT stdio pipe at once (see netif_backend.h), so the two
+ * directions each run on their own dedicated thread instead of a
+ * shared poll loop. win_capture_thread() mirrors "Case A" and
+ * win_stdin_thread() mirrors "Case B" of the POSIX poll loop below.
+ */
+/*
+ * A single read_frame() error is treated as transient (a brief
+ * Npcap/adapter hiccup -- Wi-Fi power-save, adapter reset, sleep/
+ * wake, a VPN adapter coming up or down, etc.) rather than fatal:
+ * previously ANY negative return here tore down the whole program on
+ * the spot, which is a much bigger blast radius than the error
+ * usually warrants. Only bail out once failures are persistent.
+ */
+#define CAPTURE_MAX_CONSECUTIVE_ERRORS 8
+#define CAPTURE_ERROR_RETRY_DELAY_MS   250
+
+static DWORD WINAPI
+win_capture_thread(LPVOID arg)
+{
+    unsigned char buffer[2000];
+    int consecutive_errors = 0;
+
+    (void) arg;
+    while (keep_running) {
+        int frame_bytes = g_be->read_frame(buffer, sizeof (buffer));
+        if (frame_bytes > 0) {
+            uint16_t frame_len = (uint16_t) frame_bytes;
+            consecutive_errors = 0;
+            if (packet_filter(buffer, frame_len)) {
+                fprintf(stderr, ">> recv %u\n", frame_len);
+                dump_packet(buffer, frame_len);
+                if (send_pkt(frame_len, frame_len, buffer))
+                    break;
+            }
+        } else if (frame_bytes < 0) {
+            if (++consecutive_errors >= CAPTURE_MAX_CONSECUTIVE_ERRORS) {
+                fprintf(stderr,
+                    "netif read error (%d in a row) -- giving up\n",
+                    consecutive_errors);
+                break;
+            }
+            fprintf(stderr,
+                "netif read error (%d/%d) -- retrying\n",
+                consecutive_errors, CAPTURE_MAX_CONSECUTIVE_ERRORS);
+            Sleep(CAPTURE_ERROR_RETRY_DELAY_MS);
+        } else {
+            /*
+             * frame_bytes == 0: the backend's read timeout elapsed
+             * with nothing captured -- not an error.
+             */
+            consecutive_errors = 0;
+        }
+    }
+    keep_running = 0;
+    return (0);
+}
+
+static DWORD WINAPI
+win_stdin_thread(LPVOID arg)
+{
+    unsigned char buffer[2000];
+    uint16_t frame_len;
+
+    (void) arg;
+    while (keep_running) {
+        /* Read the length prefix first */
+        if (fread(&frame_len, sizeof (frame_len), 1, stdin) != 1)
+            break;   /* EOF, broken pipe, or CancelSynchronousIo() */
+
+        if (frame_len <= sizeof (buffer)) {
+            fprintf(stderr, ">> send %u\n", frame_len);
+            size_t nread = fread(buffer, 1, frame_len, stdin);
+            dump_packet(buffer, frame_len);
+            if (nread == frame_len)
+                g_be->write_frame(buffer, nread);
+        } else if ((frame_len >> 8) == 0xff) {
+            /* Special case: command */
+            uint   read_len = frame_len & 0xff;
+            fprintf(stderr, ">> send CMD l=%u\n", read_len);
+            size_t nread    = fread(buffer, 1, read_len, stdin);
+            if (nread == read_len)
+                handle_cmd(buffer, read_len);
+        }
+    }
+    keep_running = 0;
+    return (0);
+}
+#endif /* __MINGW32__ */
 
 int
 main(int argc, char *argv[])
 {
 #ifdef __MINGW32__
-    printf("Network is not yet supported on Windows\n");
+    char iface_name[IFNAMSIZ + 32];
+    char lower_dev[IFNAMSIZ];
+    int argi = 1;
+    HANDLE cap_thread;
+    HANDLE handles[2];
+    WSADATA wsadata;
+
+    /*
+     * The framing protocol on stdin/stdout is binary (arbitrary byte
+     * values, including 0x0A) -- make sure the CRT doesn't mangle it
+     * with newline translation, which is the default text mode.
+     */
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+
+    WSAStartup(MAKEWORD(2, 2), &wsadata);
+
+    while (argi < argc) {
+        if (strcmp(argv[argi], "-h") == 0 ||
+            strcmp(argv[argi], "--help") == 0) {
+            usage(argv[0]);
+            return (0);
+        } else if (argv[argi][0] == '-') {
+            fprintf(stderr, "Unknown option: %s\n", argv[argi]);
+            usage(argv[0]);
+            return (1);
+        } else {
+            break; /* positional interface name */
+        }
+    }
+
+    g_be = netif_backend_get();
+
+    /*
+     * See the ensure_privilege contract in netif_backend.h: this
+     * either returns already-elevated, or hands off to a UAC-elevated
+     * relaunch and exits this process -- it never returns "failed".
+     */
+    if (g_be->ensure_privilege)
+        g_be->ensure_privilege(argc, argv);
+
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+
+    if (argi < argc) {
+        strncpy(lower_dev, argv[argi], sizeof (lower_dev) - 1);
+        lower_dev[sizeof (lower_dev) - 1] = '\0';
+    } else if (get_default_iface(lower_dev, sizeof (lower_dev)) < 0) {
+        return (1);
+    }
+
+    if (g_be->open(lower_dev, iface_name, sizeof (iface_name)) < 0)
+        return (1);
+
+    g_be->get_mac(netif_hw_mac);
+
+    cap_thread = CreateThread(NULL, 0, win_capture_thread, NULL, 0, NULL);
+    g_stdin_thread_handle = CreateThread(NULL, 0, win_stdin_thread,
+                                         NULL, 0, NULL);
+    if (cap_thread == NULL || g_stdin_thread_handle == NULL) {
+        fprintf(stderr, "Error: could not start worker threads\n");
+        g_be->close();
+        return (1);
+    }
+
+    handles[0] = cap_thread;
+    handles[1] = g_stdin_thread_handle;
+
+    /* Block until either direction ends (peer exited/EOF, or Ctrl-C) */
+    WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+
+    /*
+     * Signal + unstick whichever thread is still running, then give
+     * both a moment to notice before we tear down the backend under
+     * them.
+     */
+    keep_running = 0;
+    CancelSynchronousIo(g_stdin_thread_handle);
+    WaitForMultipleObjects(2, handles, TRUE, 5000);
+
+    CloseHandle(cap_thread);
+    CloseHandle(g_stdin_thread_handle);
+
+    fprintf(stderr, "\nClosing %s\n", iface_name);
+    g_be->close();
+    WSACleanup();
+    return (0);
 #else
     char iface_name[IFNAMSIZ + 32];
     char lower_dev[IFNAMSIZ];
@@ -250,11 +570,12 @@ main(int argc, char *argv[])
     while (argi < argc) {
         if (strcmp(argv[argi], "-e") == 0 ||
             strcmp(argv[argi], "--external") == 0) {
-#if defined(__linux__)
+#ifdef LINUX
             extern void netif_linux_set_use_external_ip(int);
             netif_linux_set_use_external_ip(1);
 #else
-            fprintf(stderr, "Warning: --external is a Linux-only option, ignoring\n");
+            fprintf(stderr,
+                    "Warning: --external is a Linux-only option, ignoring\n");
 #endif
             argi++;
         } else if (strcmp(argv[argi], "-h") == 0 ||
@@ -355,8 +676,8 @@ main(int argc, char *argv[])
             int frame_bytes = g_be->read_frame(buffer, sizeof (buffer));
             if (frame_bytes > 0) {
                 frame_len = (uint16_t)frame_bytes;
-                fprintf(stderr, ">> recv %u\n", frame_len);
-                if (!frame_filter(buffer, frame_len)) {
+                if (packet_filter(buffer, frame_len)) {
+                    fprintf(stderr, ">> recv %u\n", frame_len);
                     dump_packet(buffer, frame_len);
                     if (send_pkt(frame_len, frame_len, buffer))
                         break;
@@ -370,8 +691,8 @@ main(int argc, char *argv[])
         if (fds[1].revents & POLLIN) {
             /* Read the length prefix first */
             if (fread(&frame_len, sizeof (frame_len), 1, stdin) == 1) {
-                fprintf(stderr, ">> send %u\n", frame_len);
                 if (frame_len <= sizeof (buffer)) {
+                    fprintf(stderr, ">> send %u\n", frame_len);
                     size_t nread = fread(buffer, 1, frame_len, stdin);
                     dump_packet(buffer, frame_len);
                     if (nread == frame_len) {
@@ -382,6 +703,7 @@ main(int argc, char *argv[])
                 } else if ((frame_len >> 8) == 0xff) {
                     /* Special case: command */
                     uint   read_len = frame_len & 0xff;
+                    fprintf(stderr, ">> send CMD l=%u\n", read_len);
                     size_t nread    = fread(buffer, 1, read_len, stdin);
                     if (nread == read_len) {
                         handle_cmd(buffer, read_len);
