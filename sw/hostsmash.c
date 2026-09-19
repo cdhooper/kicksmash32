@@ -1147,7 +1147,7 @@ config_dev(void)
     /* Set short timeouts on the COM port */
     timeouts.ReadIntervalTimeout = MAXDWORD;
     timeouts.ReadTotalTimeoutMultiplier = 0;
-    timeouts.ReadTotalTimeoutConstant = 0;
+    timeouts.ReadTotalTimeoutConstant = terminal_mode ? 100 : 0;
     timeouts.WriteTotalTimeoutMultiplier = 0;
     timeouts.WriteTotalTimeoutConstant = 10;
     if (!SetCommTimeouts(dev_handle, &timeouts))
@@ -1736,7 +1736,7 @@ check_crc(uint32_t crc, uint spos, uint epos, bool send_status)
     if (compcrc != crc) {
         if ((compcrc == 0x20202020) && report_remote_failure_message())
             return (1);  // Failure message from programmer
-        warnx("Bad CRC %08x received from programmer (should be %08x) "
+        warnx("Bad CRC %08x received from Kicksmash (should be %08x) "
               "at 0x%x-0x%x",
               compcrc, crc, spos, epos);
         rc = 1;
@@ -3253,11 +3253,14 @@ run_terminal_mode(void)
  *          to find the serial path was way too cumbersome and code-intensive.
  *
  * Windows
- *      The current code is quite lame -- it can only report the COM ports
- *          could be successfully opened. I tried implementing code which
- *          would use SetupDiGetClassDevs() with GUID_DEVCLASS_PORTS, but
- *          the enumerator function SetupDiEnumDeviceInfo() fails to find
- *          anything. Well, at least with Wine it fails to find anything.
+ *      Walk HKLM\SYSTEM\CurrentControlSet\Enum\USB (and USBCCGP) looking
+ *          for keys containing VID_1209&PID_1610.  For each instance that
+ *          has a Device Parameters\PortName value, collect the COM port
+ *          only if that port is currently present in
+ *          HARDWARE\DEVICEMAP\SERIALCOMM (i.e. the device is plugged in
+ *          now, not merely remembered from a prior connection).
+ *          If exactly one Kicksmash is present, auto-select it; if several
+ *          are present, list the COM ports and require the user to pass -d.
  */
 static void
 find_mx_programmer(void)
@@ -3323,28 +3326,172 @@ find_mx_programmer(void)
     fclose(fp);
 #endif
 #ifdef __MINGW32__
-#define MAX_COM_PORT 256
-    uint found = 0;
-    uint port;
-    char portname[32];
-    for (port = 1; port < MAX_COM_PORT; port++) {
-        sprintf(portname, "\\\\.\\com%u", port);
-        HANDLE dev_handle = CreateFile(portname, GENERIC_READ | GENERIC_WRITE,
-                                       0, NULL, OPEN_EXISTING, 0, NULL);
+    /*
+     * Walk the registry under SYSTEM\CurrentControlSet\Enum looking for
+     * USB (or USB composite) devices with VID 1209 / PID 1610.  For each
+     * match that has a "Device Parameters\PortName" value, collect the
+     * COM port name only if it is currently present (listed under
+     * HARDWARE\DEVICEMAP\SERIALCOMM).  Stale entries for previously
+     * attached boards are therefore ignored.
+     *
+     * If exactly one such port is found, auto-select it (same behaviour
+     * as Linux /dev/serial/by-id).  If more than one is present, list
+     * them and leave device_name empty so the caller requires -d.
+     */
+    {
+        static const char *enum_roots[] = {
+            "SYSTEM\\CurrentControlSet\\Enum\\USB",
+            "SYSTEM\\CurrentControlSet\\Enum\\USBCCGP",
+            NULL
+        };
+        char vidpid[32];
+        char ports[16][40];   /* collected COM names, e.g. "COM5" */
+        uint nports = 0;
+        uint r;
+        HKEY hSerialMap = NULL;
 
-        if (dev_handle == INVALID_HANDLE_VALUE)
-            continue;
+        snprintf(vidpid, sizeof (vidpid), "VID_%04X&PID_%04X",
+                 MX_VENDOR, MX_DEVICE);
 
-        if (found++ == 0)
-            printf("Available ports:");
+        /* Active COM ports only (connected right now) */
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                          "HARDWARE\\DEVICEMAP\\SERIALCOMM",
+                          0, KEY_READ, &hSerialMap) != ERROR_SUCCESS) {
+            hSerialMap = NULL;
+        }
 
-        printf(" COM%u", port);
-        CloseHandle(dev_handle);
+        for (r = 0; enum_roots[r] != NULL && nports < ARRAY_SIZE(ports); r++) {
+            HKEY hEnum;
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, enum_roots[r], 0,
+                              KEY_READ, &hEnum) != ERROR_SUCCESS) {
+                continue;
+            }
+
+            char subkey[256];
+            DWORD subkey_len;
+            DWORD index = 0;
+
+            while (nports < ARRAY_SIZE(ports)) {
+                subkey_len = sizeof (subkey);
+                if (RegEnumKeyExA(hEnum, index++, subkey, &subkey_len,
+                                  NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+                    break;
+                }
+
+                /* Match VID_1209&PID_1610 (case-insensitive; may have
+                 * trailing &MI_xx or similar for composite interfaces) */
+                if (strcasestr(subkey, vidpid) == NULL)
+                    continue;
+
+                HKEY hVidPid;
+                if (RegOpenKeyExA(hEnum, subkey, 0,
+                                  KEY_READ, &hVidPid) != ERROR_SUCCESS) {
+                    continue;
+                }
+
+                /* Enumerate instance IDs under the VID/PID key */
+                char inst[256];
+                DWORD inst_len;
+                DWORD iindex = 0;
+                while (nports < ARRAY_SIZE(ports)) {
+                    inst_len = sizeof (inst);
+                    if (RegEnumKeyExA(hVidPid, iindex++, inst, &inst_len,
+                                      NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+                        break;
+
+                    char path[512];
+                    HKEY hInst;
+                    snprintf(path, sizeof (path), "%s\\Device Parameters",
+                             inst);
+                    if (RegOpenKeyExA(hVidPid, path, 0,
+                                      KEY_READ, &hInst) != ERROR_SUCCESS) {
+                        continue;
+                    }
+
+                    char portname[32];
+                    DWORD ptype = REG_SZ;
+                    DWORD plen = sizeof (portname);
+                    if ((RegQueryValueExA(hInst, "PortName", NULL, &ptype,
+                                         (LPBYTE)portname, &plen) ==
+                         ERROR_SUCCESS) &&
+                        (ptype == REG_SZ) &&
+                        (portname[0] != '\0')) {
+                        /*
+                         * Only accept the port if it is currently mapped
+                         * (device is plugged in).  SERIALCOMM values are
+                         * the COM names; value names are the device paths.
+                         */
+                        int present = 0;
+                        if (hSerialMap != NULL) {
+                            char vname[256];
+                            char vdata[64];
+                            DWORD vname_len;
+                            DWORD vdata_len;
+                            DWORD vtype;
+                            DWORD vindex = 0;
+
+                            while (1) {
+                                vname_len = sizeof (vname);
+                                vdata_len = sizeof (vdata);
+                                if (RegEnumValueA(hSerialMap, vindex++,
+                                                  vname, &vname_len,
+                                                  NULL, &vtype,
+                                                  (LPBYTE)vdata, &vdata_len) !=
+                                    ERROR_SUCCESS) {
+                                    break;
+                                }
+                                if (vtype == REG_SZ &&
+                                    strcasecmp(vdata, portname) == 0) {
+                                    present = 1;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (present) {
+                            /* Deduplicate (same port can appear under USB
+                             * and USBCCGP) */
+                            uint already = 0;
+                            uint p;
+                            for (p = 0; p < nports; p++) {
+                                if (strcasecmp(ports[p], portname) == 0) {
+                                    already = 1;
+                                    break;
+                                }
+                            }
+                            if (!already) {
+                                strncpy(ports[nports], portname,
+                                        sizeof (ports[0]) - 1);
+                                ports[nports][sizeof (ports[0]) - 1] = '\0';
+                                nports++;
+                            }
+                        }
+                    }
+                    RegCloseKey(hInst);
+                }
+                RegCloseKey(hVidPid);
+            }
+            RegCloseKey(hEnum);
+        }
+
+        if (hSerialMap != NULL)
+            RegCloseKey(hSerialMap);
+
+        if (nports == 1) {
+            /* Single Kicksmash found -- auto-select, same as Linux */
+            strncpy(device_name, ports[0], sizeof (device_name) - 1);
+            device_name[sizeof (device_name) - 1] = '\0';
+            printf("Using %s\n", device_name);
+        } else if (nports > 1) {
+            uint p;
+            printf("Multiple Kicksmash devices found:");
+            for (p = 0; p < nports; p++)
+                printf(" %s", ports[p]);
+            printf("\nSpecify one with -d <port> (e.g. -d %s)\n", ports[0]);
+            /* Leave device_name empty so main() will require -d */
+        }
+        /* nports == 0: leave device_name empty; main() will error */
     }
-    if (found)
-        printf("\n");
-    if (port < MAX_COM_PORT)
-        strcpy(device_name, portname);
 #endif
 }
 
@@ -7561,7 +7708,8 @@ errx(EXIT_FAILURE, "how did we get here?");
 
     if (device_name[0] == '\0') {
         warnx("You must specify a device to open (-d <dev>)");
-        usage(stderr);
+        if (mode == MODE_UNKNOWN)
+            usage(stderr);
         exit(EXIT_USAGE);
     }
     if (len == 0)
