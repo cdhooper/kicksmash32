@@ -1,5 +1,6 @@
 HOSTSMASH_PROG=hostsmash
-HOSTSMASH_SRCS=hostsmash.c hostsmash_net.c ../fw/version.c ../fw/crc32.c
+HOSTSMASH_SRCS=hostsmash.c hostsmash_fs.c hostsmash_net.c \
+               ../fw/version.c ../fw/crc32.c
 HSNET_PROG=hostsmash_netif
 HSNET_SRCS=hostsmash_netif.c ../fw/version.c
 CRCIT_PROG=crcit
@@ -79,7 +80,7 @@ ifeq ($(TARGET_OS),Linux)
     HSNET_SRCS += netif_linux.c
     USB_HDR := /usr/include/usb.h
     ifeq (,$(wildcard /usr/include/sys/capability.h))
-    $(error sys/capability.h missing - need libcap-devel)
+    $(error sys/capability.h missing - need libcap-devel or libcap-dev)
     endif
 endif
 
