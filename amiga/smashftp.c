@@ -76,6 +76,9 @@ static const char cmd_get_help[] =
 "    get [path/]<name> <localname>   - get file from remote & rename locally\n"
 "    get [path/]<name> <localdir>    - get file from remote to local dir\n"
 "    get <name1> <name2> <name3...>  - get multiple files from remote\n"
+"    get [path/]<pat*>               - get remote files matching wildcard\n"
+"    get <pat*> <localdir>           - get matching files to local dir\n"
+"Wildcards '*' (any) and '?' (any one character) may be used in the filename\n"
 ;
 
 static const char cmd_put_help[] =
@@ -84,6 +87,9 @@ static const char cmd_put_help[] =
 "    put [path/]<name> <remotename>  - send file to remote & rename\n"
 "    put [path/]<name> <remotedir>   - send file from local to remote dir\n"
 "    put <name1> <name2> <name3...>  - send multiple files to remote dir\n"
+"    put [path/]<pat*>               - send local files matching wildcard\n"
+"    put <pat*> <remotedir>          - send matching files to remote dir\n"
+"Wildcards '*' (any) and '?' (any one character) may be used in the filename\n"
 ;
 
 const char cmd_time_help[] =
@@ -357,22 +363,19 @@ host_perms_from_amiga(uint amiga_perms)
     return (perms);
 }
 
-rc_t
-cmd_cd(int argc, char * const *argv)
+/* Wildcard support (see below) is needed by cmd_cd() and cmd_lcd() */
+static uint has_wildcard(const char *str);
+static rc_t wild_first_dir(const char *path, uint is_local, char **name);
+
+static rc_t
+cd_remote(const char *nwd)
 {
     handle_t      handle;
     uint          rc;
     uint          type;
     char          nbuf[256];
-    const char   *nwd;
     char         *name;
 
-    nwd = argv[1];
-
-    if (argc == 1) {
-        /* Return to top level (volume directory) */
-        nwd = "::";
-    }
     rc = sm_fopen(cwd_handle, nwd, HM_MODE_READDIR, &type, 0, &handle);
     if (rc != KM_STATUS_OK) {
         printf("Failed to open %s: %s\n", nwd, smash_err(rc));
@@ -410,6 +413,570 @@ cmd_cd(int argc, char * const *argv)
     cwd = strdup(name);
     printf("cwd=%s\n", cwd);
     cwd_handle = handle;
+    return (RC_SUCCESS);
+}
+
+/*
+ * cmd_cd
+ * ------
+ * Change the remote directory. If the directory name contains a wildcard,
+ * the first matching directory is used and any other matches are ignored.
+ */
+rc_t
+cmd_cd(int argc, char * const *argv)
+{
+    rc_t        rc;
+    char       *match = NULL;
+    const char *nwd = argv[1];
+
+    if (argc == 1) {
+        /* Return to top level (volume directory) */
+        nwd = "::";
+    } else if (has_wildcard(nwd)) {
+        rc = wild_first_dir(nwd, 0, &match);
+        if (rc != RC_SUCCESS)
+            return (rc);
+        nwd = match;
+    }
+    rc = cd_remote(nwd);
+    if (match != NULL)
+        free(match);
+    return (rc);
+}
+
+/*
+ * Wildcard support
+ * ----------------
+ * The '*' wildcard matches any sequence of zero or more characters, and
+ * the '?' wildcard matches exactly one character. Wildcards are supported
+ * only in the final component of a path (the file name), so "*.c",
+ * "dir/foo?" and "vol:dir/x*" are valid, but a wildcard in the directory
+ * part of a path (as in "a*" followed by "/b") is not supported.
+ * The directory entries "." and ".." are never matched by a wildcard.
+ *
+ * Local (AmigaOS) names are matched without regard to case. Remote names
+ * are matched case-sensitively.
+ *
+ * Wildcards are expanded here, by reading the parent directory and
+ * matching the names locally, so no remote (host) support is required.
+ * The expanded names are collected into a list before any operation is
+ * performed on them, because sm_fread() data is only valid until the
+ * next message is exchanged with the host, and because files should not
+ * be added, removed, or changed while a directory is being read.
+ */
+#define WILD_CHAR '*'  // Matches zero or more characters
+#define WILD_ONE  '?'  // Matches exactly one character
+
+typedef rc_t (*wild_cb_t)(void *arg, const char *prefix, const char *name,
+                          uint isdir, void *ent);
+
+typedef struct {
+    char *we_name;   // Full path of matching entry (malloc'd)
+    uint  we_isdir;  // Entry is a directory
+} wild_ent_t;
+
+typedef struct {
+    wild_ent_t *wl_ent;
+    uint        wl_count;
+    uint        wl_alloc;
+} wild_list_t;
+
+/*
+ * has_wildcard
+ * ------------
+ * Returns non-zero if the string contains a wildcard character.
+ */
+static uint
+has_wildcard(const char *str)
+{
+    for (; *str != '\0'; str++)
+        if ((*str == WILD_CHAR) || (*str == WILD_ONE))
+            return (1);
+    return (0);
+}
+
+static char
+wild_lower(char ch)
+{
+    if ((ch >= 'A') && (ch <= 'Z'))
+        return (ch + ('a' - 'A'));
+    return (ch);
+}
+
+/*
+ * wild_match
+ * ----------
+ * Returns non-zero if str matches the pattern pat, where '*' in pat
+ * matches any sequence of characters (including none) and '?' matches
+ * exactly one character. This is an iterative match which remembers only
+ * the most recent '*' so it can not take exponential time on patterns
+ * with many wildcards.
+ */
+static uint
+wild_match(const char *pat, const char *str, uint nocase)
+{
+    const char *star_pat = NULL;  // Pattern position just after last '*'
+    const char *star_str = NULL;  // String position last '*' has matched to
+
+    while (*str != '\0') {
+        char pch;
+        char sch;
+
+        if (*pat == WILD_CHAR) {
+            pat++;
+            if (*pat == '\0')
+                return (1);  // Trailing '*' matches the rest of the string
+            star_pat = pat;
+            star_str = str;
+            continue;
+        }
+        pch = *pat;
+        sch = *str;
+        if (nocase) {
+            pch = wild_lower(pch);
+            sch = wild_lower(sch);
+        }
+        if ((pch == sch) || (pch == WILD_ONE)) {
+            pat++;
+            str++;
+        } else if (star_pat != NULL) {
+            /* Mismatch: let the last '*' consume one more character */
+            pat = star_pat;
+            str = ++star_str;
+        } else {
+            return (0);
+        }
+    }
+    while (*pat == WILD_CHAR)
+        pat++;
+    return (*pat == '\0');
+}
+
+/*
+ * wild_entry_match
+ * ----------------
+ * Match a directory entry name against a pattern. The "." and ".."
+ * entries never match.
+ */
+static uint
+wild_entry_match(const char *pat, const char *name, uint nocase)
+{
+    if ((name[0] == '.') &&
+        ((name[1] == '\0') || ((name[1] == '.') && (name[2] == '\0'))))
+        return (0);
+    return (wild_match(pat, name, nocase));
+}
+
+/*
+ * wild_split
+ * ----------
+ * Find the final component of a path (the part after the last '/' or ':').
+ * The text before the returned pointer is the directory prefix, which
+ * retains its trailing separator.
+ */
+static const char *
+wild_split(const char *path)
+{
+    const char *final = path;
+    const char *ptr;
+
+    for (ptr = path; *ptr != '\0'; ptr++)
+        if ((*ptr == '/') || (*ptr == ':'))
+            final = ptr + 1;
+    return (final);
+}
+
+static uint
+hm_type_is_dir(uint type)
+{
+    return ((type == HM_TYPE_DIR) || (type == HM_TYPE_VOLUME) ||
+            (type == HM_TYPE_VOLDIR));
+}
+
+/*
+ * wild_prefix
+ * -----------
+ * Returns a malloc'd copy of the directory prefix of a wild path.
+ */
+static char *
+wild_prefix(const char *path, uint prefixlen)
+{
+    char *prefix = malloc(prefixlen + 1);
+
+    if (prefix == NULL) {
+        printf("malloc(%u) failure\n", prefixlen + 1);
+        return (NULL);
+    }
+    memcpy(prefix, path, prefixlen);
+    prefix[prefixlen] = '\0';
+    return (prefix);
+}
+
+/*
+ * wild_dirname
+ * ------------
+ * Returns a malloc'd name of the directory to be scanned, given the
+ * directory prefix of a wild path. For local paths, the prefix is used
+ * as-is, except that the trailing slash of "dir/" is removed ("/" alone
+ * means the parent directory, so it must be preserved). For remote paths,
+ * an empty prefix is the current directory and a prefix ending in '/' has
+ * '.' appended to avoid any ambiguity with a trailing slash.
+ */
+static char *
+wild_dirname(const char *path, uint prefixlen, uint is_local)
+{
+    char *dir = malloc(prefixlen + 2);
+
+    if (dir == NULL) {
+        printf("malloc(%u) failure\n", prefixlen + 2);
+        return (NULL);
+    }
+    memcpy(dir, path, prefixlen);
+    if (is_local) {
+        /* "dir/" -> "dir", but leave "/" and "a//" (parent) references */
+        if ((prefixlen > 1) && (dir[prefixlen - 1] == '/') &&
+            (dir[prefixlen - 2] != '/') && (dir[prefixlen - 2] != ':'))
+            prefixlen--;
+    } else {
+        if (prefixlen == 0)
+            dir[prefixlen++] = '.';
+        else if (dir[prefixlen - 1] == '/')
+            dir[prefixlen++] = '.';
+    }
+    dir[prefixlen] = '\0';
+    return (dir);
+}
+
+static void
+wild_list_free(wild_list_t *wl)
+{
+    uint cur;
+
+    for (cur = 0; cur < wl->wl_count; cur++)
+        free(wl->wl_ent[cur].we_name);
+    if (wl->wl_ent != NULL)
+        free(wl->wl_ent);
+    wl->wl_ent   = NULL;
+    wl->wl_count = 0;
+    wl->wl_alloc = 0;
+}
+
+/*
+ * wild_list_add
+ * -------------
+ * Add a name to the list. The list takes ownership of the malloc'd name,
+ * even if this function fails.
+ */
+static rc_t
+wild_list_add(wild_list_t *wl, char *name, uint isdir)
+{
+    if (wl->wl_count >= wl->wl_alloc) {
+        uint        nalloc = wl->wl_alloc + 32;
+        wild_ent_t *nent   = realloc(wl->wl_ent, nalloc * sizeof (*nent));
+
+        if (nent == NULL) {
+            printf("realloc(%u) failure\n", nalloc * sizeof (*nent));
+            free(name);
+            return (RC_FAILURE);
+        }
+        wl->wl_ent   = nent;
+        wl->wl_alloc = nalloc;
+    }
+    wl->wl_ent[wl->wl_count].we_name  = name;
+    wl->wl_ent[wl->wl_count].we_isdir = isdir;
+    wl->wl_count++;
+    return (RC_SUCCESS);
+}
+
+/*
+ * wild_collect_cb
+ * ---------------
+ * Scan callback which appends the full path of each match to a wild_list_t.
+ */
+static rc_t
+wild_collect_cb(void *arg, const char *prefix, const char *name, uint isdir,
+                void *ent)
+{
+    char *full = malloc(strlen(prefix) + strlen(name) + 1);
+
+    UNUSED(ent);
+    if (full == NULL) {
+        printf("malloc(%u) failure\n", strlen(prefix) + strlen(name) + 1);
+        return (RC_FAILURE);
+    }
+    strcpy(full, prefix);
+    strcat(full, name);
+    return (wild_list_add((wild_list_t *) arg, full, isdir));
+}
+
+/*
+ * wild_check_prefix
+ * -----------------
+ * Wildcards are only supported in the final path component.
+ */
+static rc_t
+wild_check_prefix(const char *path, uint prefixlen)
+{
+    uint pos;
+
+    for (pos = 0; pos < prefixlen; pos++) {
+        if ((path[pos] == WILD_CHAR) || (path[pos] == WILD_ONE)) {
+            printf("Wildcard is only allowed in the final name of a path: "
+                   "%s\n", path);
+            return (RC_BAD_PARAM);
+        }
+    }
+    return (RC_SUCCESS);
+}
+
+/*
+ * remote_wild_scan
+ * ----------------
+ * Reads the remote directory which contains the wildcard in path and
+ * calls cb() for each entry which matches. *nmatch is set to the number
+ * of matches. The scan stops if cb() returns anything other than
+ * RC_SUCCESS, and that value is returned. cb() must not send any remote
+ * messages, as this would invalidate the directory entry being provided.
+ */
+static rc_t
+remote_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch)
+{
+    const char *pattern   = wild_split(path);
+    uint        prefixlen = pattern - path;
+    uint        pos;
+    uint        rlen;
+    uint        type;
+    uint        rc;
+    uint8_t    *data;
+    char       *prefix;
+    char       *dirname;
+    handle_t    handle;
+    rc_t        scan_rc = RC_SUCCESS;
+    hm_fdirent_t *dent;
+
+    *nmatch = 0;
+    if ((scan_rc = wild_check_prefix(path, prefixlen)) != RC_SUCCESS)
+        return (scan_rc);
+
+    prefix  = wild_prefix(path, prefixlen);
+    dirname = wild_dirname(path, prefixlen, 0);
+    if ((prefix == NULL) || (dirname == NULL)) {
+        scan_rc = RC_FAILURE;
+        goto scan_free;
+    }
+
+    rc = sm_fopen(cwd_handle, dirname, HM_MODE_READ, &type, 0, &handle);
+    if (rc != KM_STATUS_OK) {
+        printf("Failed to open %s: %s\n", dirname, smash_err(rc));
+        scan_rc = RC_FAILURE;
+        goto scan_free;
+    }
+    if (!hm_type_is_dir(type)) {
+        printf("%s is not a directory (%x)\n", dirname, type);
+        sm_fclose(handle);
+        scan_rc = RC_FAILURE;
+        goto scan_free;
+    }
+
+    while (1) {
+        rc = sm_fread(handle, DIRBUF_SIZE, (void **) &data, &rlen, 0);
+        if ((rlen == 0) && (rc != KM_STATUS_EOF)) {
+            printf("Dir read of %s failed: %s\n", dirname, smash_err(rc));
+            scan_rc = RC_FAILURE;
+            break;
+        }
+        for (pos = 0; pos + sizeof (*dent) <= rlen; ) {
+            uint  entlen;
+            char *dname;
+
+            dent   = (hm_fdirent_t *)(((uintptr_t) data) + pos);
+            entlen = dent->hmd_elen;
+            if ((entlen == 0) || (entlen > 256)) {
+                printf("Corrupt entlen=%x in directory %s\n", entlen, dirname);
+                scan_rc = RC_FAILURE;
+                goto scan_done;
+            }
+            dname = (char *) (dent + 1);
+            pos  += sizeof (*dent) + entlen;
+
+            if (wild_entry_match(pattern, dname, 0)) {
+                (*nmatch)++;
+                scan_rc = cb(arg, prefix, dname, hm_type_is_dir(dent->hmd_type),
+                             dent);
+                if (scan_rc != RC_SUCCESS)
+                    goto scan_done;
+            }
+            if (is_user_abort()) {
+                printf("^C\n");
+                scan_rc = RC_USR_ABORT;
+                goto scan_done;
+            }
+        }
+        if (rc == KM_STATUS_EOF)
+            break;  // End of directory reached
+    }
+scan_done:
+    sm_fclose(handle);
+scan_free:
+    if (prefix != NULL)
+        free(prefix);
+    if (dirname != NULL)
+        free(dirname);
+    return (scan_rc);
+}
+
+/*
+ * local_wild_scan
+ * ---------------
+ * Reads the local directory which contains the wildcard in path and calls
+ * cb() for each entry which matches (without regard to case). ent is a
+ * pointer to the entry's struct FileInfoBlock.
+ * See remote_wild_scan() for further information.
+ */
+static rc_t
+local_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch)
+{
+    const char *pattern   = wild_split(path);
+    uint        prefixlen = pattern - path;
+    char       *prefix;
+    char       *dirname;
+    const char *showname;
+    BPTR        lock;
+    rc_t        scan_rc = RC_SUCCESS;
+    struct FileInfoBlock fib;
+
+    *nmatch = 0;
+    if ((scan_rc = wild_check_prefix(path, prefixlen)) != RC_SUCCESS)
+        return (scan_rc);
+
+    prefix  = wild_prefix(path, prefixlen);
+    dirname = wild_dirname(path, prefixlen, 1);
+    if ((prefix == NULL) || (dirname == NULL)) {
+        scan_rc = RC_FAILURE;
+        goto scan_free;
+    }
+    showname = (*dirname == '\0') ? "current directory" : dirname;
+
+    lock = Lock(dirname, ACCESS_READ);
+    if (lock == 0) {
+        printf("Failed to open %s\n", showname);
+        scan_rc = RC_FAILURE;
+        goto scan_free;
+    }
+    if (Examine(lock, &fib) == 0) {
+        printf("%s can not be examined\n", showname);
+        scan_rc = RC_FAILURE;
+        goto scan_unlock;
+    }
+    if (fib.fib_DirEntryType < 0) {
+        printf("%s is not a directory\n", showname);
+        scan_rc = RC_FAILURE;
+        goto scan_unlock;
+    }
+
+    while (ExNext(lock, &fib) != 0) {
+        if (wild_entry_match(pattern, fib.fib_FileName, 1)) {
+            (*nmatch)++;
+            scan_rc = cb(arg, prefix, fib.fib_FileName,
+                         (fib.fib_DirEntryType > 0), &fib);
+            if (scan_rc != RC_SUCCESS)
+                break;
+        }
+        if (is_user_abort()) {
+            printf("^C\n");
+            scan_rc = RC_USR_ABORT;
+            break;
+        }
+    }
+scan_unlock:
+    UnLock(lock);
+scan_free:
+    if (prefix != NULL)
+        free(prefix);
+    if (dirname != NULL)
+        free(dirname);
+    return (scan_rc);
+}
+
+/*
+ * wild_expand
+ * -----------
+ * Expands a local (is_local != 0) or remote path into a list of names.
+ * A path which does not contain a wildcard is placed in the list as-is
+ * (without checking that it exists), so callers may use this function
+ * for every file argument. A wildcard which matches nothing is an error.
+ *
+ * The list must be released with wild_list_free() if this function
+ * returns RC_SUCCESS. On failure, the list is already empty.
+ */
+static rc_t
+wild_expand(const char *path, uint is_local, wild_list_t *wl)
+{
+    uint nmatch = 0;
+    rc_t rc;
+
+    wl->wl_ent   = NULL;
+    wl->wl_count = 0;
+    wl->wl_alloc = 0;
+
+    if (!has_wildcard(path)) {
+        char *name = strdup(path);
+        if (name == NULL) {
+            printf("strdup failure\n");
+            return (RC_FAILURE);
+        }
+        return (wild_list_add(wl, name, 0));
+    }
+
+    if (is_local)
+        rc = local_wild_scan(path, wild_collect_cb, wl, &nmatch);
+    else
+        rc = remote_wild_scan(path, wild_collect_cb, wl, &nmatch);
+
+    if ((rc == RC_SUCCESS) && (nmatch == 0)) {
+        printf("No match for %s\n", path);
+        rc = RC_FAILURE;
+    }
+    if (rc != RC_SUCCESS)
+        wild_list_free(wl);
+    return (rc);
+}
+
+/*
+ * wild_first_dir
+ * --------------
+ * Expands a local (is_local != 0) or remote wild path and returns, in
+ * *name, a malloc'd copy of the first matching directory. All other
+ * matches are ignored. Matches which are not directories are skipped.
+ * "First" is the order in which the directory is read, which is the same
+ * order that "ls" and "lls" show entries. This is used by cd and lcd.
+ *
+ * The caller must free() *name if this function returns RC_SUCCESS.
+ */
+static rc_t
+wild_first_dir(const char *path, uint is_local, char **name)
+{
+    wild_list_t wl;
+    uint        cur;
+    rc_t        rc;
+
+    *name = NULL;
+    rc = wild_expand(path, is_local, &wl);
+    if (rc != RC_SUCCESS)
+        return (rc);
+
+    for (cur = 0; cur < wl.wl_count; cur++) {
+        if (wl.wl_ent[cur].we_isdir) {
+            *name = wl.wl_ent[cur].we_name;  // Take ownership of the name
+            wl.wl_ent[cur].we_name = NULL;
+            break;
+        }
+    }
+    wild_list_free(&wl);
+    if (*name == NULL) {
+        printf("No directories match %s\n", path);
+        return (RC_FAILURE);
+    }
     return (RC_SUCCESS);
 }
 
@@ -570,6 +1137,75 @@ mode_is_good:
     return (0);  // No match
 }
 
+/*
+ * chmod_one
+ * ---------
+ * Applies the permission masks to a single file (local or remote).
+ */
+static rc_t
+chmod_one(const char *name, uint do_remote, uint add, uint subtract)
+{
+    uint perms;
+
+    if (do_remote) {
+        handle_t      handle;
+        uint          rlen;
+        uint          type;
+        uint          krc;
+        hm_fdirent_t *dent;
+
+        krc = sm_fopen(cwd_handle, name, HM_MODE_READDIR, &type, 0, &handle);
+        if (krc != KM_STATUS_OK) {
+            printf("Failed to open %s: %s\n", name, smash_err(krc));
+            return (RC_FAILURE);
+        }
+        krc = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen, 0);
+        if (rlen == 0) {
+            printf("Failed to stat remote file %s: %s\n",
+                   name, smash_err(krc));
+            sm_fclose(handle);
+            return (RC_FAILURE);
+        }
+        perms = dent->hmd_aperms;
+        sm_fclose(handle);
+    } else {
+        struct FileInfoBlock fib;
+        BPTR lock = Lock(name, ACCESS_READ);
+
+        if (lock == 0) {
+            printf("Failed to lock %s\n", name);
+            return (RC_FAILURE);
+        }
+        if (Examine(lock, &fib) == 0) {
+            printf("%s can not be examined\n", name);
+            UnLock(lock);
+            return (RC_FAILURE);
+        }
+        UnLock(lock);
+        perms = fib.fib_Protection;
+    }
+
+    perms ^= 0x0000000f;  // Amiga RWED are inverted for permission
+    perms &= ~subtract;
+    perms |= add;
+    perms ^= 0x0000000f;
+
+    if (do_remote) {
+        uint krc = sm_fsetprotect(cwd_handle, name, perms);
+        if (krc != KM_STATUS_OK) {
+            printf("Failed to set protection on %s: %s\n",
+                   name, smash_err(krc));
+            return (RC_FAILURE);
+        }
+    } else {
+        if (SetProtection(name, perms) == 0) {
+            printf("Failed to set protection on %s\n", name);
+            return (RC_FAILURE);
+        }
+    }
+    return (RC_SUCCESS);
+}
+
 rc_t
 cmd_chmod(int argc, char * const *argv)
 {
@@ -580,15 +1216,15 @@ cmd_chmod(int argc, char * const *argv)
      *
      * If it instead has chmod syntax like 4755 or u+rw, then
      * default to chmod syntax  [ugoa][+-=][rexwd] [+-=][hsparewd x]
+     *
+     * File names may contain the '*' wildcard.
      */
     uint          do_remote = 0;
     uint          add      = 0;
     uint          subtract = 0;
-    uint          perms;
     int           arg;
     rc_t          rc = RC_SUCCESS;
     rc_t          rc2;
-    struct FileInfoBlock fib;
 
     if ((strcmp(argv[0], "chmod") == 0) ||
         (strncmp(argv[0], "protect", 4) == 0) ||
@@ -607,66 +1243,24 @@ cmd_chmod(int argc, char * const *argv)
     }
     // printf("add=%04x subtract=%04x\n", (uint16_t) add, (uint16_t) subtract);
 
-    /* Remainder of args are filenames */
+    /* Remainder of args are filenames, which might include wildcards */
     for (; arg < argc; arg++) {
-        char *name = argv[arg];
+        uint        cur;
+        wild_list_t wl;
 
-        if (do_remote) {
-            handle_t      handle;
-            uint          rlen;
-            uint          type;
-            hm_fdirent_t *dent;
-            rc = sm_fopen(cwd_handle, name, HM_MODE_READDIR, &type, 0, &handle);
-            if (rc != KM_STATUS_OK) {
-                printf("Failed to open %s: %s\n", name, smash_err(rc));
-                rc = RC_FAILURE;
-                continue;
-            }
-            rc2 = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen, 0);
-            if (rlen == 0) {
-                printf("Failed to stat remote file %s: %s\n",
-                       name, smash_err(rc2));
-                rc = RC_FAILURE;
-                sm_fclose(handle);
-                continue;
-            }
-            perms = dent->hmd_aperms;
-            sm_fclose(handle);
-        } else {
-            BPTR lock = Lock(name, ACCESS_READ);
-            if (lock == 0) {
-                printf("Failed to lock %s\n", name);
-                rc = RC_FAILURE;
-                continue;
-            }
-            if (Examine(lock, &fib) == 0) {
-                printf("%s can not be examined\n", name);
-                UnLock(lock);
-                rc = RC_FAILURE;
-                continue;
-            }
-            UnLock(lock);
-            perms = fib.fib_Protection;
+        rc2 = wild_expand(argv[arg], !do_remote, &wl);
+        if (rc2 != RC_SUCCESS) {
+            if (rc2 == RC_USR_ABORT)
+                return (rc2);
+            rc = RC_FAILURE;
+            continue;
         }
-
-        perms ^= 0x0000000f;  // Amiga RWED are inverted for permission
-        perms &= ~subtract;
-        perms |= add;
-        perms ^= 0x0000000f;
-
-        if (do_remote) {
-            rc2 = sm_fsetprotect(cwd_handle, name, perms);
-            if (rc2 != KM_STATUS_OK) {
-                printf("Failed to set protection on %s: %s\n",
-                       name, smash_err(rc2));
+        for (cur = 0; cur < wl.wl_count; cur++) {
+            rc2 = chmod_one(wl.wl_ent[cur].we_name, do_remote, add, subtract);
+            if (rc2 != RC_SUCCESS)
                 rc = RC_FAILURE;
-            }
-        } else {
-            if (SetProtection(name, perms) == 0) {
-                printf("Failed to set protection on %s\n", name);
-                rc = RC_FAILURE;
-            }
         }
+        wild_list_free(&wl);
     }
     return (rc);
 }
@@ -955,8 +1549,12 @@ get_file(const char *src, const char *dst)
         rc = sm_fread(handle, buflen, (void **) &data, &rlen, 0);
         if (rlen == 0) {
 failed_to_read:
-            printf("Failed to read %s at pos %x: %s\n",
-                   src, (uint) pos, smash_err(rc));
+            if (rc == KM_STATUS_EOF) {
+                rc = KM_STATUS_OK;
+            } else {
+                printf("Failed to read %s at pos %x: %s\n",
+                       src, (uint) pos, smash_err(rc));
+            }
             break;
         }
         if (flag_debug)
@@ -1009,10 +1607,7 @@ get_files(const char *src, const char *dst)
             printf("Can not yet get remote directory: %s\n", src);
             // XXX: This would be a nice feature to add.
             //      Recursive is too much work, however.
-            //
-            //      Would also be nice to be able to support wildcards
-            //      that could be implemented on top of remote directory
-            //      support.
+            //      (Wildcards are expanded by the caller: cmd_get/cmd_put)
             return (RC_FAILURE);
         }
         for (; dst > src; dst--)
@@ -1099,10 +1694,13 @@ get_files(const char *src, const char *dst)
 rc_t
 cmd_get(int argc, char * const *argv)
 {
-    int arg;
-    rc_t rc = RC_SUCCESS;
-    const char *getas = NULL;
-    const char *saveas = NULL;
+    int         arg;
+    int         nnames = 0;
+    int         nsrc;
+    rc_t        rc = RC_SUCCESS;
+    rc_t        rc2;
+    const char *dst = NULL;
+    const char *names[MAX_ARGS];
 
     for (arg = 1; arg < argc; arg++) {
         const char *ptr = argv[arg];
@@ -1115,45 +1713,73 @@ cmd_get(int argc, char * const *argv)
                         return (RC_BAD_PARAM);
                 }
             }
+        } else if (nnames < MAX_ARGS) {
+            names[nnames++] = ptr;
         }
     }
-    for (arg = 1; arg < argc; arg++) {
-        const char *ptr = argv[arg];
-        if (*ptr != '-') {
-            if (getas == NULL) {
-                getas = ptr;
-                continue;
-            } else if (saveas == NULL) {
-                saveas = ptr;
-                continue;
-            } else {
-                /* get multiple */
-                char *dst = NULL;
-                char *final = argv[argc - 1];
-                if (is_dir(final)) {
-                    dst = final;
-                    argc--;
-                }
-                rc = get_files(getas, dst);
-                if (rc != RC_SUCCESS)
-                    return (rc);
-                rc = get_files(saveas, dst);
-                if (rc != RC_SUCCESS)
-                    return (rc);
-                for (; arg < argc; arg++) {
-                    rc = get_files(argv[arg], dst);
-                    if (rc != RC_SUCCESS)
-                        return (rc);
-                }
-                return (rc);
-            }
-        }
-    }
-    if (getas != NULL) {
-        rc = get_files(getas, saveas);
-    } else {
+    if (nnames == 0) {
         printf(cmd_get_help);
         return (RC_BAD_PARAM);
+    }
+
+    /*
+     * Determine the local destination, if there is one:
+     *     get <src> <dst>           dst is a local file name or directory
+     *     get <src...> <localdir>   last name is a local directory
+     * A name which contains a wildcard is always a source.
+     */
+    nsrc = nnames;
+    if ((nnames == 2) && !has_wildcard(names[1])) {
+        dst  = names[1];
+        nsrc = 1;
+    } else if ((nnames > 2) && !has_wildcard(names[nnames - 1]) &&
+               is_dir(names[nnames - 1])) {
+        dst  = names[nnames - 1];
+        nsrc = nnames - 1;
+    }
+
+    for (arg = 0; arg < nsrc; arg++) {
+        uint        cur;
+        uint        did_get = 0;
+        uint        stop = 0;
+        uint        wild = has_wildcard(names[arg]);
+        wild_list_t wl;
+
+        rc2 = wild_expand(names[arg], 0, &wl);
+        if (rc2 != RC_SUCCESS) {
+            if (rc2 == RC_USR_ABORT)
+                return (rc2);
+            rc = RC_FAILURE;
+            continue;
+        }
+        if ((dst != NULL) && (wl.wl_count > 1) &&
+            (strcmp(dst, ".") != 0) && !is_dir(dst)) {
+            printf("Destination %s must be a directory to get multiple "
+                   "files\n", dst);
+            wild_list_free(&wl);
+            return (RC_FAILURE);
+        }
+
+        for (cur = 0; cur < wl.wl_count; cur++) {
+            if (wild && wl.wl_ent[cur].we_isdir)
+                continue;  // Directories matched by wildcard are skipped
+            did_get++;
+            rc2 = get_files(wl.wl_ent[cur].we_name, dst);
+            if (rc2 != RC_SUCCESS) {
+                rc = rc2;
+                if ((rc2 == RC_USR_ABORT) || !wild) {
+                    stop = 1;  // Explicit names stop at first failure
+                    break;
+                }
+            }
+        }
+        wild_list_free(&wl);
+        if (stop)
+            return (rc);
+        if (wild && (did_get == 0)) {
+            printf("No files match %s\n", names[arg]);
+            rc = RC_FAILURE;
+        }
     }
     return (rc);
 }
@@ -1178,26 +1804,47 @@ cmd_ignore(int argc, char * const *argv)
     return (RC_SUCCESS);
 }
 
+/*
+ * cmd_lcd
+ * -------
+ * Change the local directory. If the directory name contains a wildcard,
+ * the first matching directory is used and any other matches are ignored.
+ */
 rc_t
 cmd_lcd(int argc, char * const *argv)
 {
-    BPTR old_lock;
-    BPTR new_lock;
+    BPTR        old_lock;
+    BPTR        new_lock;
+    rc_t        rc;
+    char       *match = NULL;
+    const char *name;
 
     if (argc != 2)
         return (RC_USER_HELP);
 
-    new_lock = Lock(argv[1], SHARED_LOCK);
-    if (new_lock == 0L) {
-        printf("Failed to access %s\n", argv[1]);
-        return (RC_FAILURE);
+    name = argv[1];
+    if (has_wildcard(name)) {
+        rc = wild_first_dir(name, 1, &match);
+        if (rc != RC_SUCCESS)
+            return (rc);
+        name = match;
     }
-    old_lock = CurrentDir(new_lock);
-    if (save_currentdir == 0)
-        save_currentdir = old_lock;
-    else
-        UnLock(old_lock);
-    return (RC_SUCCESS);
+
+    new_lock = Lock(name, SHARED_LOCK);
+    if (new_lock == 0L) {
+        printf("Failed to access %s\n", name);
+        rc = RC_FAILURE;
+    } else {
+        old_lock = CurrentDir(new_lock);
+        if (save_currentdir == 0)
+            save_currentdir = old_lock;
+        else
+            UnLock(old_lock);
+        rc = RC_SUCCESS;
+    }
+    if (match != NULL)
+        free(match);
+    return (rc);
 }
 
 /*
@@ -1536,11 +2183,44 @@ lls_show_fib(struct FileInfoBlock *fib, uint flags)
 }
 
 static rc_t
+lls_wild_cb(void *arg, const char *prefix, const char *name, uint isdir,
+            void *ent)
+{
+    UNUSED(prefix);
+    UNUSED(name);
+    UNUSED(isdir);
+    lls_show_fib((struct FileInfoBlock *) ent, *(uint *) arg);
+    return (RC_SUCCESS);
+}
+
+/*
+ * lls_show_wild
+ * -------------
+ * Show local directory entries which match a wildcard. Like the AmigaDOS
+ * DIR command, matching directories are shown as entries, not descended.
+ */
+static rc_t
+lls_show_wild(const char *name, uint flags)
+{
+    uint nmatch = 0;
+    rc_t rc = local_wild_scan(name, lls_wild_cb, &flags, &nmatch);
+
+    if ((rc == RC_SUCCESS) && (nmatch == 0)) {
+        printf("No match for %s\n", name);
+        rc = RC_FAILURE;
+    }
+    return (rc);
+}
+
+static rc_t
 lls_show(const char *name, uint flags)
 {
     BPTR lock;
     uint isdir = 0;
     struct FileInfoBlock fib;
+
+    if (has_wildcard(name))
+        return (lls_show_wild(name, flags));
 
     lock = Lock(name, ACCESS_READ);
     if (lock == 0) {
@@ -1581,9 +2261,9 @@ cmd_lls(int argc, char * const *argv)
     uint flags = 0;
     uint did_show = 0;
 
-    if (strcmp(argv[0], "llist") == 0)
+    if ((strcmp(argv[0], "llist") == 0) || (strcmp(argv[0], "!list") == 0))
         flags |= LS_FLAG_LIST;
-    else if (strcmp(argv[0], "ldir") == 0)
+    else if ((strcmp(argv[0], "ldir") == 0) || (strcmp(argv[0], "!dir") == 0))
         flags |= LS_FLAG_DIR;
 
     for (arg = 1; arg < argc; arg++) {
@@ -1727,6 +2407,36 @@ show_dirent(hm_fdirent_t *dent, uint flags)
 }
 
 static rc_t
+ls_wild_cb(void *arg, const char *prefix, const char *name, uint isdir,
+           void *ent)
+{
+    UNUSED(prefix);
+    UNUSED(name);
+    UNUSED(isdir);
+    (void) show_dirent((hm_fdirent_t *) ent, *(uint *) arg);
+    return (RC_SUCCESS);
+}
+
+/*
+ * ls_show_wild
+ * ------------
+ * Show remote directory entries which match a wildcard. Matching
+ * directories are shown as entries (as with "ls -d"), not descended.
+ */
+static rc_t
+ls_show_wild(const char *name, uint flags)
+{
+    uint nmatch = 0;
+    rc_t rc = remote_wild_scan(name, ls_wild_cb, &flags, &nmatch);
+
+    if ((rc == RC_SUCCESS) && (nmatch == 0)) {
+        printf("No match for %s\n", name);
+        rc = RC_FAILURE;
+    }
+    return (rc);
+}
+
+static rc_t
 ls_show(const char *name, uint flags)
 {
     handle_t handle;
@@ -1739,6 +2449,9 @@ ls_show(const char *name, uint flags)
     uint8_t *data;
     hm_fdirent_t *dent;
 
+    if (has_wildcard(name))
+        return (ls_show_wild(name, flags));
+
     if (flags & LS_FLAG_DIRENT) {
         /* Open file or dir as directory entry (like STAT) */
         open_mode = HM_MODE_READDIR;
@@ -1750,11 +2463,9 @@ try_open_again:
     rc = sm_fopen(cwd_handle, name, open_mode, &type, 0, &handle);
 
     if ((handle == 0) && ((open_mode & HM_MODE_DIR) == 0)) {
-        // XXX: is this a wildcard? might need to open as dir so
-        //      remote can do wildcard match or show files which can not
-        //      be opened (FIFO, BDEV, file with no read permission, etc.)
-        //
-        // I think I'd like to push the wildcard processing to the remote
+        // Might need to open as dir entries to show files which can not
+        // be opened (FIFO, BDEV, file with no read permission, etc.)
+        // (Wildcards are handled before this point by ls_show_wild().)
         /* Open as directory entries */
         open_mode = HM_MODE_READDIR;
         goto try_open_again;
@@ -2017,6 +2728,7 @@ cmd_lrm(int argc, char * const *argv)
     int arg;
     uint did_rm = 0;
     rc_t rc = RC_SUCCESS;
+    rc_t rc2;
 
     for (arg = 1; arg < argc; arg++) {
         const char *ptr = argv[arg];
@@ -2035,32 +2747,57 @@ cmd_lrm(int argc, char * const *argv)
     for (arg = 1; arg < argc; arg++) {
         const char *name = argv[arg];
         if (*name != '-') {
-            BPTR lock;
-            struct FileInfoBlock fib;
+            uint        cur;
+            uint        nrm = 0;
+            uint        wild = has_wildcard(name);
+            wild_list_t wl;
 
             did_rm++;
-            lock = Lock(name, SHARED_LOCK);
-            if (lock == 0) {
-                printf("Failed to lock %s\n", name);
+            rc2 = wild_expand(name, 1, &wl);
+            if (rc2 != RC_SUCCESS) {
+                if (rc2 == RC_USR_ABORT)
+                    return (rc2);
                 rc = RC_FAILURE;
                 continue;
             }
-            if (Examine(lock, &fib) == 0) {
-                printf("Failed to examine %s\n", name);
-                UnLock(lock);
-                rc = RC_FAILURE;
-                continue;
-            }
-            UnLock(lock);
-            if (fib.fib_DirEntryType >= 0) {
-                printf("%s is not a file\n", name);
-                rc = RC_FAILURE;
-                continue;
-            }
+            for (cur = 0; cur < wl.wl_count; cur++) {
+                const char *fname = wl.wl_ent[cur].we_name;
+                BPTR lock;
+                struct FileInfoBlock fib;
 
-            if (DeleteFile(name) == 0) {
-                printf("Failed to delete %s\n", name);
-                return (RC_FAILURE);
+                if (wild && wl.wl_ent[cur].we_isdir)
+                    continue;  // Directories matched by wildcard are skipped
+                nrm++;
+
+                lock = Lock(fname, SHARED_LOCK);
+                if (lock == 0) {
+                    printf("Failed to lock %s\n", fname);
+                    rc = RC_FAILURE;
+                    continue;
+                }
+                if (Examine(lock, &fib) == 0) {
+                    printf("Failed to examine %s\n", fname);
+                    UnLock(lock);
+                    rc = RC_FAILURE;
+                    continue;
+                }
+                UnLock(lock);
+                if (fib.fib_DirEntryType >= 0) {
+                    printf("%s is not a file\n", fname);
+                    rc = RC_FAILURE;
+                    continue;
+                }
+
+                if (DeleteFile(fname) == 0) {
+                    printf("Failed to delete %s\n", fname);
+                    rc = RC_FAILURE;
+                    continue;
+                }
+            }
+            wild_list_free(&wl);
+            if (wild && (nrm == 0)) {
+                printf("No files match %s\n", name);
+                rc = RC_FAILURE;
             }
         }
     }
@@ -2126,6 +2863,7 @@ cmd_lrmdir(int argc, char * const *argv)
 {
     int  arg;
     rc_t rc;
+    rc_t rc_all = RC_SUCCESS;
     uint flag_path = 0;
     uint did_rmdir = 0;
 
@@ -2149,17 +2887,44 @@ cmd_lrmdir(int argc, char * const *argv)
     for (arg = 1; arg < argc; arg++) {
         const char *ptr = argv[arg];
         if (*ptr != '-') {
+            uint        cur;
+            uint        nrm = 0;
+            uint        wild = has_wildcard(ptr);
+            wild_list_t wl;
+
             did_rmdir++;
-            rc = lrmdir_work(ptr, flag_path);
-            if (rc != RC_SUCCESS)
-                return (rc);
+            rc = wild_expand(ptr, 1, &wl);
+            if (rc != RC_SUCCESS) {
+                if (rc == RC_USR_ABORT)
+                    return (rc);
+                rc_all = RC_FAILURE;
+                continue;
+            }
+            for (cur = 0; cur < wl.wl_count; cur++) {
+                if (wild && !wl.wl_ent[cur].we_isdir)
+                    continue;  // Files matched by wildcard are skipped
+                nrm++;
+                rc = lrmdir_work(wl.wl_ent[cur].we_name, flag_path);
+                if (rc != RC_SUCCESS) {
+                    rc_all = RC_FAILURE;
+                    if (!wild) {
+                        wild_list_free(&wl);
+                        return (rc);  // Explicit names stop at first failure
+                    }
+                }
+            }
+            wild_list_free(&wl);
+            if (wild && (nrm == 0)) {
+                printf("No directories match %s\n", ptr);
+                rc_all = RC_FAILURE;
+            }
         }
     }
     if (did_rmdir == 0) {
         printf("Need to supply at least one directory to delete\n");
         return (RC_USER_HELP);
     }
-    return (RC_SUCCESS);
+    return (rc_all);
 }
 
 rc_t
@@ -2257,6 +3022,114 @@ cmd_mkdir(int argc, char * const *argv)
     return (RC_SUCCESS);
 }
 
+/*
+ * mv_one
+ * ------
+ * Rename or move a single local or remote object.
+ */
+static rc_t
+mv_one(const char *name_old, const char *name_new, uint do_remote)
+{
+    if (do_remote) {
+        /* sm_frename() reports any failure */
+        if (sm_frename(cwd_handle, name_old, cwd_handle, name_new) !=
+            KM_STATUS_OK)
+            return (RC_FAILURE);
+    } else {
+        if (Rename(name_old, name_new) == 0) {
+            printf("Failed to rename %s to %s\n", name_old, name_new);
+            return (RC_FAILURE);
+        }
+    }
+    return (RC_SUCCESS);
+}
+
+/*
+ * same_path
+ * ---------
+ * Returns non-zero if two paths are the same, ignoring trailing slashes.
+ */
+static uint
+same_path(const char *a, const char *b)
+{
+    uint alen = strlen(a);
+    uint blen = strlen(b);
+
+    while ((alen > 1) && (a[alen - 1] == '/'))
+        alen--;
+    while ((blen > 1) && (b[blen - 1] == '/'))
+        blen--;
+    return ((alen == blen) && (strncmp(a, b, alen) == 0));
+}
+
+/*
+ * mv_wild
+ * -------
+ * Move all objects which match the wildcard in name_old. If name_new is a
+ * directory, each object is moved into it and keeps its name. Otherwise
+ * name_new is the new name, which only makes sense for a single match.
+ * A matching directory is never moved into itself (so "mv * dir" is
+ * safe when dir matches the wildcard).
+ */
+static rc_t
+mv_wild(const char *name_old, const char *name_new, uint do_remote)
+{
+    uint        cur;
+    uint        newisdir;
+    rc_t        rc;
+    rc_t        rc_all = RC_SUCCESS;
+    wild_list_t wl;
+
+    rc = wild_expand(name_old, !do_remote, &wl);
+    if (rc != RC_SUCCESS)
+        return (rc);
+
+    newisdir = do_remote ? is_remote_dir(name_new) : is_dir(name_new);
+    if ((wl.wl_count > 1) && !newisdir) {
+        printf("Destination %s must be a directory to move multiple "
+               "files\n", name_new);
+        wild_list_free(&wl);
+        return (RC_FAILURE);
+    }
+
+    for (cur = 0; cur < wl.wl_count; cur++) {
+        const char *src = wl.wl_ent[cur].we_name;
+
+        if (!newisdir) {
+            rc = mv_one(src, name_new, do_remote);
+        } else {
+            const char *srcname = wild_split(src);
+            uint        newlen  = strlen(name_new);
+            char       *dstbuf;
+
+            if (same_path(src, name_new))
+                continue;  // Do not move a directory into itself
+            dstbuf = malloc(newlen + strlen(srcname) + 2);
+            if (dstbuf == NULL) {
+                printf("malloc(%u) failure\n", newlen + strlen(srcname) + 2);
+                rc_all = RC_FAILURE;
+                break;
+            }
+            strcpy(dstbuf, name_new);
+            if ((newlen > 0) && (dstbuf[newlen - 1] != '/') &&
+                (dstbuf[newlen - 1] != ':'))
+                dstbuf[newlen++] = '/';
+            strcpy(dstbuf + newlen, srcname);
+            rc = mv_one(src, dstbuf, do_remote);
+            free(dstbuf);
+        }
+        if (rc != RC_SUCCESS)
+            rc_all = RC_FAILURE;  // Keep going: later files may succeed
+        if (is_user_abort()) {
+            printf("^C\n");
+            rc_all = RC_USR_ABORT;
+            break;
+        }
+    }
+    wild_list_free(&wl);
+    return (rc_all);
+}
+
 rc_t
 cmd_mv(int argc, char * const *argv)
 {
@@ -2300,15 +3173,13 @@ cmd_mv(int argc, char * const *argv)
         printf("Need to supply a filename to rename and new name\n");
         return (RC_USER_HELP);
     }
-    if (do_remote) {
-        return (sm_frename(cwd_handle, name_old, cwd_handle, name_new));
-    } else {
-        if (Rename(name_old, name_new) == 0) {
-            printf("Failed to rename %s to %s\n", name_old, name_new);
-            return (RC_FAILURE);
-        }
-        return (RC_SUCCESS);
+    if (has_wildcard(name_new)) {
+        printf("Wildcard is not allowed in the new name: %s\n", name_new);
+        return (RC_BAD_PARAM);
     }
+    if (has_wildcard(name_old))
+        return (mv_wild(name_old, name_new, do_remote));
+    return (mv_one(name_old, name_new, do_remote));
 }
 
 static uint64_t
@@ -2390,6 +3261,7 @@ put_file(const char *src, const char *dst)
     while (pos < filesize) {
         if (is_user_abort()) {
             printf("^C\n");
+            free(bufptr);
             fclose(fp);
             sm_fclose(handle);
             return (RC_USR_ABORT);
@@ -2420,6 +3292,7 @@ put_file(const char *src, const char *dst)
     if (flag_debug)
         printf("%u usec  ", diff);
     printf(" %u KB/sec\n", calc_kb_sec(diff, filesize));
+    free(bufptr);
     fclose(fp);
     sm_fclose(handle);
     return (rc);
@@ -2441,10 +3314,7 @@ put_files(const char *src, const char *dst)
             printf("Can not yet put directory: %s\n", src);
             // XXX: This would be a nice feature to add.
             //      Recursive is too much work, however.
-            //
-            //      Would also be nice to be able to support wildcards
-            //      that could be implemented on top of remote directory
-            //      support.
+            //      (Wildcards are expanded by the caller: cmd_get/cmd_put)
             return (RC_FAILURE);
         }
         for (; dst > src; dst--)
@@ -2457,8 +3327,10 @@ put_files(const char *src, const char *dst)
         return (RC_FAILURE);
     }
     if (is_remote_dir(dst)) {
+        /* Put into remote directory using only the name part of src */
+        const char *srcname = wild_split(src);
         uint dstlen = strlen(dst);
-        uint alloclen = dstlen + strlen(src) + 2;
+        uint alloclen = dstlen + strlen(srcname) + 2;
         dstbuf = malloc(alloclen);
         if (dstbuf == NULL) {
             printf("malloc(%u) failure\n", alloclen);
@@ -2469,7 +3341,7 @@ put_files(const char *src, const char *dst)
                             (dstbuf[dstlen - 1] != ':')) {
             dstbuf[dstlen++] = '/';
         }
-        strcpy(dstbuf + dstlen, src);
+        strcpy(dstbuf + dstlen, srcname);
         dst = dstbuf;
     }
 
@@ -2486,9 +3358,12 @@ rc_t
 cmd_put(int argc, char * const *argv)
 {
     int         arg;
-    uint        rc;
-    const char *readas = NULL;
-    const char *putas = NULL;
+    int         nnames = 0;
+    int         nsrc;
+    rc_t        rc = RC_SUCCESS;
+    rc_t        rc2;
+    const char *dst = NULL;
+    const char *names[MAX_ARGS];
 
     for (arg = 1; arg < argc; arg++) {
         const char *ptr = argv[arg];
@@ -2501,40 +3376,8 @@ cmd_put(int argc, char * const *argv)
                         return (RC_BAD_PARAM);
                 }
             }
-        }
-    }
-    for (arg = 1; arg < argc; arg++) {
-        const char *ptr = argv[arg];
-        if (*ptr != '-') {
-            if (readas == NULL) {
-                readas = ptr;
-                continue;
-            } else if (putas == NULL) {
-                putas = ptr;
-                continue;
-            } else {
-                /* put multiple */
-                char *dst = NULL;
-                char *final = argv[argc - 1];
-
-                if (is_remote_dir(final)) {
-                    dst = final;
-                    argc--;
-                }
-
-                rc = put_files(readas, dst);
-                if (rc != RC_SUCCESS)
-                    return (rc);
-                rc = put_files(putas, dst);
-                if (rc != RC_SUCCESS)
-                    return (rc);
-                for (; arg < argc; arg++) {
-                    rc = put_files(argv[arg], dst);
-                    if (rc != RC_SUCCESS)
-                        return (rc);
-                }
-                return (rc);
-            }
+        } else if (nnames < MAX_ARGS) {
+            names[nnames++] = ptr;
         }
     }
 
@@ -2543,11 +3386,68 @@ cmd_put(int argc, char * const *argv)
         return (RC_USR_ABORT);
     }
 
-    if (readas != NULL) {
-        rc = put_files(readas, putas);
-    } else {
+    if (nnames == 0) {
         printf(cmd_put_help);
         return (RC_BAD_PARAM);
+    }
+
+    /*
+     * Determine the remote destination, if there is one:
+     *     put <src> <dst>            dst is a remote file name or directory
+     *     put <src...> <remotedir>   last name is a remote directory
+     * A name which contains a wildcard is always a source.
+     */
+    nsrc = nnames;
+    if ((nnames == 2) && !has_wildcard(names[1])) {
+        dst  = names[1];
+        nsrc = 1;
+    } else if ((nnames > 2) && !has_wildcard(names[nnames - 1]) &&
+               is_remote_dir(names[nnames - 1])) {
+        dst  = names[nnames - 1];
+        nsrc = nnames - 1;
+    }
+
+    for (arg = 0; arg < nsrc; arg++) {
+        uint        cur;
+        uint        did_put = 0;
+        uint        stop = 0;
+        uint        wild = has_wildcard(names[arg]);
+        wild_list_t wl;
+
+        rc2 = wild_expand(names[arg], 1, &wl);
+        if (rc2 != RC_SUCCESS) {
+            if (rc2 == RC_USR_ABORT)
+                return (rc2);
+            rc = RC_FAILURE;
+            continue;
+        }
+        if ((dst != NULL) && (wl.wl_count > 1) && !is_remote_dir(dst)) {
+            printf("Destination %s must be a remote directory to put "
+                   "multiple files\n", dst);
+            wild_list_free(&wl);
+            return (RC_FAILURE);
+        }
+
+        for (cur = 0; cur < wl.wl_count; cur++) {
+            if (wild && wl.wl_ent[cur].we_isdir)
+                continue;  // Directories matched by wildcard are skipped
+            did_put++;
+            rc2 = put_files(wl.wl_ent[cur].we_name, dst);
+            if (rc2 != RC_SUCCESS) {
+                rc = rc2;
+                if ((rc2 == RC_USR_ABORT) || !wild) {
+                    stop = 1;  // Explicit names stop at first failure
+                    break;
+                }
+            }
+        }
+        wild_list_free(&wl);
+        if (stop)
+            return (rc);
+        if (wild && (did_put == 0)) {
+            printf("No files match %s\n", names[arg]);
+            rc = RC_FAILURE;
+        }
     }
     return (rc);
 }
@@ -2631,10 +3531,39 @@ cmd_rm(int argc, char * const *argv)
     for (arg = 1; arg < argc; arg++) {
         const char *name = argv[arg];
         if (*name != '-') {
+            uint        cur;
+            uint        nrm = 0;
+            uint        wild = has_wildcard(name);
+            wild_list_t wl;
+
             did_rm++;
-            rc2 = rm_object(name, rm_type);
-            if (rc == RC_SUCCESS)
-                rc = rc2;
+            rc2 = wild_expand(name, 0, &wl);
+            if (rc2 != RC_SUCCESS) {
+                if (rc2 == RC_USR_ABORT)
+                    return (rc2);
+                rc = RC_FAILURE;
+                continue;
+            }
+            for (cur = 0; cur < wl.wl_count; cur++) {
+                /* Wildcards only remove entries of the requested type */
+                if (wild) {
+                    if ((rm_type == RM_TYPE_FILE) && wl.wl_ent[cur].we_isdir)
+                        continue;
+                    if ((rm_type == RM_TYPE_DIR) && !wl.wl_ent[cur].we_isdir)
+                        continue;
+                }
+                nrm++;
+                rc2 = rm_object(wl.wl_ent[cur].we_name, rm_type);
+                if (rc == RC_SUCCESS)
+                    rc = rc2;
+            }
+            wild_list_free(&wl);
+            if (wild && (nrm == 0)) {
+                printf("No %s match %s\n",
+                       (rm_type == RM_TYPE_DIR) ? "directories" : "files",
+                       name);
+                rc = RC_FAILURE;
+            }
         }
     }
     if (did_rm == 0) {

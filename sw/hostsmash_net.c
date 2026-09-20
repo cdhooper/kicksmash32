@@ -1,3 +1,14 @@
+/*
+ * This is free and unencumbered software released into the public domain.
+ * See the LICENSE file for additional details.
+ *
+ * Designed by Chris Hooper in 2026.
+ *
+ * ---------------------------------------------------------------------
+ *
+ * Hostsmash Network services for the Amiga.
+ */
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
