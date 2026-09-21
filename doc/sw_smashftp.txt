@@ -144,6 +144,9 @@ Commands interacting with remote files and directories:
 Miscellaneous commands
     debug help loop quit time version
 
+Most commands accept "*" and "?" wildcards. So you can perform operations
+on multiple files at the same time.
+
 ----------------------------------------------------------
 get
     Get a file from the remote USB host
@@ -159,6 +162,10 @@ get
         Get smashftp as sys:test/smashftp (76248 bytes)  54 KB/sec
         Get smash as sys:test/smash (73532 bytes)  53 KB/sec
         Get Makefile as sys:test/Makefile (3048 bytes)  49 KB/sec
+        smashftp> get smash* sys:test
+        Get smashftp as sys:test/smashftp (76248 bytes)  54 KB/sec
+        Get smash as sys:test/smash (73532 bytes)  53 KB/sec
+        Get smashnet as sys:test/smashnet (39100 bytes)  51 KB/sec
 put
     Send a file to the remote USB host
     Options
@@ -178,6 +185,9 @@ put
         -rwxrwxrwx    12268 2024-05-05 03:12:29 List
         -rwxrwxrwx     4156 2024-05-05 03:05:26 Dir
         -rwxrwxrwx    12268 2024-05-05 03:12:30 Copy
+        smashftp> put ?oadM*
+        Put LoadModule as LoadModule (11816 bytes)  53 KB/sec
+        Put LoadMonDrvs as LoadMonDrvs (2472 bytes)  47 KB/sec
 
 ----------------------------------------------------------
 

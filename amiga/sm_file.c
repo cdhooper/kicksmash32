@@ -117,7 +117,6 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
 
     msg->hm_hdr.km_op     = KM_OP_FOPEN;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_handle        = parent_handle;  // parent directory handle
     msg->hm_mode          = mode;           // open mode
     msg->hm_type          = 0;              // unused
@@ -132,7 +131,6 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
         if (hm_type != NULL)
             *hm_type = rdata->hm_type;
     }
-    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
 
     if (rc == KS_STATUS_NODATA)
@@ -161,11 +159,9 @@ sm_fclose(handle_t handle)
 
     msg.hm_hdr.km_op     = KM_OP_FCLOSE;
     msg.hm_hdr.km_status = 0;
-    msg.hm_hdr.km_tag    = host_tag_alloc();
     msg.hm_handle        = handle;
 
     rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
-    host_tag_free(msg.hm_hdr.km_tag);
 
     if (sm_mbuf != NULL) {
         free(sm_mbuf);
@@ -211,7 +207,7 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
     msg.hm_flag          = flags;
     msg.hm_unused        = 0;
 
-    rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rcvlen);
+    rc = host_msg_tag(&msg, sizeof (msg), (void **) &rdata, &rcvlen);
 
     if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF)) {
         rcvlen = 0;
@@ -313,7 +309,7 @@ sm_fwrite(handle_t handle, void *buf, uint writelen, uint padded_header,
     if (padded_header) {
         /* Send entire message in one shot */
         msglen = sizeof (*msg) + writelen;
-        rc = host_msg(msg, msglen, (void **) &rdata, &rcvlen);
+        rc = host_msg_tag(msg, msglen, (void **) &rdata, &rcvlen);
     } else {
         /* Send an initial chunk, then use the sent space to insert header */
         uint copylen = sizeof (chunk_header) - sizeof (*msg);
@@ -324,7 +320,7 @@ sm_fwrite(handle_t handle, void *buf, uint writelen, uint padded_header,
         memcpy(msg + 1, buf, copylen);
 
         msglen = copylen + sizeof (*msg);
-        rc = host_msg(msg, msglen, (void **) &rdata, &rcvlen);
+        rc = host_msg_tag(msg, msglen, (void **) &rdata, &rcvlen);
         if ((rc == 0) && (copylen < writelen)) {
             hm_freadwrite_t *msg2 = buf + copylen - sizeof (*msg);
 
@@ -335,7 +331,7 @@ sm_fwrite(handle_t handle, void *buf, uint writelen, uint padded_header,
             /* Send the rest of the message */
             msg2->hm_length = writelen - copylen;
             msglen = sizeof (*msg) + writelen - copylen;
-            rc = host_msg(msg2, msglen, (void **) &rdata, &rcvlen);
+            rc = host_msg_tag(msg2, msglen, (void **) &rdata, &rcvlen);
 
             /* Restore original data */
             memcpy(msg2, msg + 1, sizeof (*msg));
@@ -370,14 +366,12 @@ sm_fpath(handle_t handle, char **name)
 
     msg.hm_hdr.km_op     = KM_OP_FPATH;
     msg.hm_hdr.km_status = 0;
-    msg.hm_hdr.km_tag    = host_tag_alloc();
     msg.hm_handle        = handle;
 
     rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
     if (rc == KM_STATUS_OK)
         *name = (char *)(rdata + 1);
 
-    host_tag_free(msg.hm_hdr.km_tag);
     return (rc);
 }
 
@@ -413,7 +407,6 @@ sm_fdelete(handle_t handle, const char *name)
 
     msg->hm_hdr.km_op     = KM_OP_FDELETE;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_handle        = handle;
     strcpy((char *)(msg + 1), name);  // Name follows message header
 
@@ -421,7 +414,6 @@ sm_fdelete(handle_t handle, const char *name)
     if (rc != KM_STATUS_OK)
         printf("Failed to delete %s: %s\n", name, smash_err(rc));
 
-    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }
@@ -466,7 +458,6 @@ sm_frename(handle_t shandle, const char *name_old,
 
     msg->hm_hdr.km_op     = KM_OP_FRENAME;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_shandle        = shandle;
     msg->hm_dhandle        = dhandle;
     strcpy((char *)(msg + 1), name_old);  // From name follows message header
@@ -478,7 +469,6 @@ sm_frename(handle_t shandle, const char *name_old,
                name_old, name_new, smash_err(rc));
     }
 
-    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }
@@ -552,7 +542,6 @@ sm_fcreate(handle_t parent_handle, const char *name, const char *tgt_name,
 
     msg->hm_hdr.km_op     = KM_OP_FCREATE;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_handle        = parent_handle;
     msg->hm_mode          = 0;
     msg->hm_type          = hm_type;
@@ -565,7 +554,6 @@ sm_fcreate(handle_t parent_handle, const char *name, const char *tgt_name,
     if (rc != KM_STATUS_OK)
         printf("Failed to create %s: %s\n", name, smash_err(rc));
 
-    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }
@@ -598,7 +586,6 @@ sm_fseek(handle_t handle, int seek_mode, uint64_t offset,
     }
     msg.hm_hdr.km_op     = KM_OP_FSEEK;
     msg.hm_hdr.km_status = 0;
-    msg.hm_hdr.km_tag    = host_tag_alloc();
     msg.hm_handle        = handle;
     msg.hm_off_hi        = offset >> 32;
     msg.hm_off_lo        = offset;
@@ -615,7 +602,6 @@ sm_fseek(handle_t handle, int seek_mode, uint64_t offset,
     if (prev_pos != NULL)
         *prev_pos = ((uint64_t) (rmsg->hm_old_hi) << 32) | rmsg->hm_old_lo;
 
-    host_tag_free(msg.hm_hdr.km_tag);
     return (rc);
 }
 
@@ -664,7 +650,6 @@ sm_fsetdate(handle_t parent_handle, const char *name,
 
     msg->hm_hdr.km_op     = KM_OP_FSETDATE;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_handle        = parent_handle;  // parent directory handle
     msg->hm_which         = which;
     msg->hm_unused0       = 0;
@@ -679,8 +664,6 @@ sm_fsetdate(handle_t parent_handle, const char *name,
         printf("Failed to set date %u.%u %s: %s\n",
                *sec, *nsec, name, smash_err(rc));
     }
-
-    host_tag_free(msg->hm_hdr.km_tag);
 
     *sec  = msg->hm_time;
     *nsec = msg->hm_time_ns;
@@ -726,7 +709,6 @@ sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid)
 
     msg->hm_hdr.km_op     = KM_OP_FSETOWN;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_handle        = parent_handle;  // parent directory handle
     msg->hm_oid           = oid;            // file new owner id
     msg->hm_gid           = gid;            // file new group id
@@ -739,7 +721,6 @@ sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid)
                oid, gid, name, smash_err(rc));
     }
 
-    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }
@@ -800,7 +781,6 @@ sm_fsetprotect(handle_t parent_handle, const char *name, uint perms)
 
     msg->hm_hdr.km_op     = KM_OP_FSETPERMS;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_handle        = parent_handle;  // parent directory handle
     msg->hm_mode          = 0;              // unused
     msg->hm_type          = 0;              // unused
@@ -814,7 +794,6 @@ sm_fsetprotect(handle_t parent_handle, const char *name, uint perms)
                perms, name, smash_err(rc));
     }
 
-    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
     return (rc);
 }

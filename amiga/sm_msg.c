@@ -506,13 +506,11 @@ host_msg_init(void)
     if (msg_sem != NULL) {
         hm_version_t msg;
         hm_version_t *rmsg;
-        uint8_t      tag = host_tag_alloc();
         uint         rlen;
         uint         rc;
 
         msg.hm_hdr.km_op     = KM_OP_VERSION;
         msg.hm_hdr.km_status = 0;
-        msg.hm_hdr.km_tag    = host_tag_alloc();
         msg.hm_version       = HOST_INTERFACE_VERSION;
         msg.hm_unused[0]     = 0;
         msg.hm_unused[1]     = 0;
@@ -521,7 +519,6 @@ host_msg_init(void)
         if (rc == KM_STATUS_OK) {
             host_interface_version = rmsg->hm_version;
         }
-        host_tag_free(tag);
     }
 }
 
@@ -825,8 +822,8 @@ host_recv_msg_cont(uint tag, void *buf, uint buf_len)
 }
 
 /*
- * host_msg
- * --------
+ * host_msg_tag
+ * ------------
  * Send a message and wait for a single reply message. This function will
  * only return the first message of a multiple message reply. If there is
  * further data pending, use host_recv_msg_cont() to receive the remaining
@@ -839,7 +836,7 @@ host_recv_msg_cont(uint tag, void *buf, uint buf_len)
  * rlen will be assigned the length of the received message.
  */
 uint
-host_msg(void *smsg, uint slen, void **rdata, uint *rlen)
+host_msg_tag(void *smsg, uint slen, void **rdata, uint *rlen)
 {
     km_msg_hdr_t *smsg_h = (km_msg_hdr_t *) smsg;
     uint rc = host_send_msg(smsg, slen);
@@ -848,6 +845,25 @@ host_msg(void *smsg, uint slen, void **rdata, uint *rlen)
     return (host_recv_msg(smsg_h->km_tag, rdata, rlen));
 }
 
+/*
+ * host_msg
+ * --------
+ * Send a message and wait for a simple reply message. This automatically
+ * allocates and frees a message tag, so it does not handle messages
+ * requiring continuation. Use host_msg_tag() to send and receive large
+ * messages while repeatedly using the same tag.
+ */
+uint
+host_msg(void *smsg, uint slen, void **rdata, uint *rlen)
+{
+    uint     rc;
+    uint16_t tag = host_tag_alloc();
+
+    ((km_msg_hdr_t *) smsg)->km_tag = tag;
+    rc = host_msg_tag(smsg, slen, rdata, rlen);
+    host_tag_free(tag);
+    return (rc);
+}
 
 static const char *const ks_status_s[] = {
     "OK",                               // KS_STATUS_OK

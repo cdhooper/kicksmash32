@@ -201,6 +201,9 @@ netprintf(const char *fmt, ...)
     return (rc);
 }
 
+/* Amiga time is in seconds since 1978 */
+#define AMIGA_SEC_TO_UNIX_SEC (2922 * 24 * 60 * 60)  // 1978 - 1970 = 2922 days
+
 /* Command line modes which may be specified by the user */
 #define MODE_UNKNOWN   0x0000
 #define MODE_ERASE     0x0001
@@ -3161,8 +3164,10 @@ find_mx_programmer(void)
                     break;
                 }
 
-                /* Match VID_1209&PID_1610 (case-insensitive; may have
-                 * trailing &MI_xx or similar for composite interfaces) */
+                /*
+                 * Match VID_1209&PID_1610 (case-insensitive; may have
+                 * trailing &MI_xx or similar for composite interfaces)
+                 */
                 if (strcasestr(subkey, vidpid) == NULL)
                     continue;
 
@@ -3232,8 +3237,10 @@ find_mx_programmer(void)
                         }
 
                         if (present) {
-                            /* Deduplicate (same port can appear under USB
-                             * and USBCCGP) */
+                            /*
+                             * Deduplicate (same port can appear under USB
+                             * and USBCCGP)
+                             */
                             uint already = 0;
                             uint p;
                             for (p = 0; p < nports; p++) {
@@ -3686,30 +3693,32 @@ mem16_swap(void *buf, uint len)
 }
 
 #if defined(__MINGW32__)
-#  include <windows.h>
-   typedef unsigned int uint;
+#include <windows.h>
+typedef unsigned int uint;
+
 #elif defined(OSX) || defined(LINUX)
-#  include <pthread.h>
-#  include <sys/types.h>       /* uint */
+#include <pthread.h>
+#include <sys/types.h>       /* uint */
+
 #else
-#  error "Define one of LINUX, OSX, or __MINGW32__ to select a lock backend"
+#error "Define one of LINUX, OSX, or __MINGW32__ to select a lock backend"
 #endif
 
 /*
  * Platform lock backend
  */
 #if defined(__MINGW32__)
-    /*
-     * SRWLOCK has a static initializer, just like PTHREAD_MUTEX_INITIALIZER,
-     * so no explicit init/teardown call is required.
-     */
-    static SRWLOCK queue_lock = SRWLOCK_INIT;
-#  define QUEUE_LOCK()    AcquireSRWLockExclusive(&queue_lock)
-#  define QUEUE_UNLOCK()  ReleaseSRWLockExclusive(&queue_lock)
+/*
+ * SRWLOCK has a static initializer, just like PTHREAD_MUTEX_INITIALIZER,
+ * so no explicit init/teardown call is required.
+ */
+static SRWLOCK queue_lock = SRWLOCK_INIT;
+#define QUEUE_LOCK()    AcquireSRWLockExclusive(&queue_lock)
+#define QUEUE_UNLOCK()  ReleaseSRWLockExclusive(&queue_lock)
 #else /* OSX || LINUX */
-    static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
-#  define QUEUE_LOCK()    pthread_mutex_lock(&queue_lock)
-#  define QUEUE_UNLOCK()  pthread_mutex_unlock(&queue_lock)
+static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+#define QUEUE_LOCK()    pthread_mutex_lock(&queue_lock)
+#define QUEUE_UNLOCK()  pthread_mutex_unlock(&queue_lock)
 #endif
 
 /*
@@ -4191,6 +4200,31 @@ sm_version(hm_version_t *hm, uint *status)
     return (send_msg(hm, sizeof (*hm), status));
 }
 
+static uint
+sm_clock(hm_clock_t *hm, uint *status)
+{
+    hm->hm_hdr.km_op |= KM_OP_REPLY;
+    if (hm->hm_op == 0) {
+        struct timeval tv;
+        struct timezone tz;
+        if (gettimeofday(&tv, &tz)) {
+            hm->hm_hdr.km_status = KM_STATUS_FAIL;
+        } else {
+            uint32_t sec;
+            hm->hm_hdr.km_status = KM_STATUS_OK;
+            hm->hm_unused[0]     = 0;
+            hm->hm_unused[1]     = 0;
+            hm->hm_unused[2]     = 0;
+            sec = get_localtime(tv.tv_sec - AMIGA_SEC_TO_UNIX_SEC);
+            hm->hm_sec = SWAP32(sec);
+            hm->hm_usec = SWAP32(tv.tv_usec);
+        }
+    } else {
+        hm->hm_hdr.km_status = KM_STATUS_INVALID;
+    }
+    return (send_msg(hm, sizeof (*hm), status));
+}
+
 static void
 process_msg(uint status, uint8_t *rxdata, uint rxlen)
 {
@@ -4236,6 +4270,9 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
                 break;
             case KM_OP_VERSION:
                 rc = sm_version((hm_version_t *)rxdata, &status);
+                break;
+            case KM_OP_CLOCK:
+                rc = sm_clock((hm_clock_t *)rxdata, &status);
                 break;
             case KM_OP_FOPEN:
                 rc = sm_fopen((hm_fopenhandle_t *)rxdata, &status);
@@ -4450,9 +4487,6 @@ run_message_mode(void)
     }
     sm_destroy_queues();
 }
-
-/* Amiga time is in seconds since 1978 */
-#define AMIGA_SEC_TO_UNIX_SEC (2922 * 24 * 60 * 60)  // 1978 - 1970 = 2922 days
 
 static rc_t
 clock_ks_set(int enter)

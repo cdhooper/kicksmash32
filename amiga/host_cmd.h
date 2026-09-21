@@ -17,6 +17,7 @@
 #define KM_OP_NOP             0x01  // Do nothing but reply
 #define KM_OP_ID              0x02  // Report app ID and configuration
 #define KM_OP_VERSION         0x03  // Exchange version information
+#define KM_OP_CLOCK           0x04  // Get or set Amiga format time (sec + usec)
 #define KM_OP_LOOPBACK        0x06  // Message loopback
 #define KM_OP_FOPEN           0x10  // File storage open
 #define KM_OP_FCLOSE          0x11  // File storage close
@@ -92,6 +93,13 @@ typedef struct {
     uint8_t      hm_unused[3];  // Zero-fill padding
 } hm_version_t;                 // KM_OP_VERSION
 
+typedef struct {
+    km_msg_hdr_t hm_hdr;        // Standard message header
+    uint8_t      hm_op;         // Operation
+    uint16_t     hm_unused[3];  // Unused
+    uint32_t     hm_sec;        // Seconds since 1978
+    uint32_t     hm_usec;       // Microseconds
+} hm_clock_t;                   // KM_OP_CLOCK
 
 /* File operation messages */
 

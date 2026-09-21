@@ -67,13 +67,11 @@ sm_nopen(void)
     msg = malloc(msglen);
     msg->hm_hdr.km_op     = KM_OP_NOPEN;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
 
     rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
     if (rc == KM_STATUS_OK) {
         /* Open succeeded */
     }
-    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
 
     if (rc == KS_STATUS_NODATA)
@@ -98,13 +96,11 @@ sm_nclose(void)
     msg = malloc(msglen);
     msg->hm_hdr.km_op     = KM_OP_NCLOSE;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
 
     rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
     if (rc == KM_STATUS_OK) {
         /* Close succeeded */
     }
-    host_tag_free(msg->hm_hdr.km_tag);
     free(msg);
 
     if (rc == KS_STATUS_NODATA)
@@ -134,7 +130,6 @@ sm_nwrite(ethhdr_t *ehdr, void *buf, uint writelen, uint padded_header)
 
     msg->hm_hdr.km_op     = KM_OP_NWRITE;
     msg->hm_hdr.km_status = 0;
-    msg->hm_hdr.km_tag    = host_tag_alloc();
     msg->hm_length        = writelen + ehdr_len;
     dptr = (uint8_t *) (msg + 1);  // Start of ethetnet packet
     if (ehdr != NULL)
@@ -149,7 +144,6 @@ sm_nwrite(ethhdr_t *ehdr, void *buf, uint writelen, uint padded_header)
         msglen = sizeof (*msg) + ehdr_len + writelen;
         rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
     }
-    host_tag_free(msg->hm_hdr.km_tag);
 
     if (rc == KS_STATUS_NODATA)
         sm_nservice();  // Check if file service is still active
@@ -169,7 +163,6 @@ sm_nread(void **data, uint *readlen)
 
     msg.hm_hdr.km_op     = KM_OP_NREAD;
     msg.hm_hdr.km_status = 0;
-    msg.hm_hdr.km_tag    = host_tag_alloc();
     msg.hm_length        = 0;
 
     rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
@@ -187,8 +180,6 @@ sm_nread(void **data, uint *readlen)
 sm_recv_fail:
     if (readlen != NULL)
         *readlen = rlen;
-
-    host_tag_free(msg.hm_hdr.km_tag);
 
     if (rc == KS_STATUS_NODATA)
         sm_nservice();  // Check if file service is still active
@@ -209,14 +200,11 @@ sm_ngetmac(uint8_t *mac)
 
     msg.hm_hdr.km_op     = KM_OP_NGETMAC;
     msg.hm_hdr.km_status = 0;
-    msg.hm_hdr.km_tag    = host_tag_alloc();
 
     rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
     if (rc == KM_STATUS_OK) {
         memcpy(mac, rdata->hm_mac, sizeof (rdata->hm_mac));
     }
-
-    host_tag_free(msg.hm_hdr.km_tag);
 
     if (rc == KS_STATUS_NODATA)
         sm_nservice();  // Check if file service is still active
@@ -237,11 +225,9 @@ sm_nsetmac(uint8_t *mac)
 
     msg.hm_hdr.km_op     = KM_OP_NSETMAC;
     msg.hm_hdr.km_status = 0;
-    msg.hm_hdr.km_tag    = host_tag_alloc();
     memcpy(msg.hm_mac, mac, sizeof (msg.hm_mac));
 
     rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
-    host_tag_free(msg.hm_hdr.km_tag);
 
     if (rc == KS_STATUS_NODATA)
         sm_nservice();  // Check if file service is still active

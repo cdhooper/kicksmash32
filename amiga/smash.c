@@ -119,10 +119,12 @@ static const char cmd_bank_options[] =
 
 static const char cmd_clock_options[] =
     "   load         load Amiga time from KS clock (-l)\n"
+    "   loadu        load Amiga time from USB host clock (-u)\n"
     "   loadifset    load Amiga time from KS clock if it is known (-k)\n"
     "   save         save Amiga time to KS clock (-s)\n"
     "   saveifnotset save Amiga time to KS clock if not already saved (-n)\n"
-    "   show         show current KS clock (-S)\n";
+    "   show         show current KS clock (-S)\n"
+    "   showu        show current USB host clock (-U)\n";
 
 static const char cmd_read_options[] =
     "smash read options\n"
@@ -207,9 +209,11 @@ long_to_short_t long_to_short_clock[] = {
     { "-h", "help" },
     { "-k", "loadifset" },
     { "-l", "load" },
+    { "-u", "loadu" },
     { "-s", "save" },
     { "-n", "saveifnotset" },
     { "-S", "show" },
+    { "-U", "showu" },
 };
 
 long_to_short_t long_to_short_erase[] = {
@@ -4166,16 +4170,43 @@ set_ks_clock(uint sec, uint usec, uint flags)
     return (rc);
 }
 
+uint
+get_host_clock(uint *sec, uint *usec)
+{
+    hm_clock_t hm;
+    hm_clock_t *hmr;
+    uint rc;
+    uint rlen;
+
+    memset(&hm, 0, sizeof (hm));  // Clock get
+    hm.hm_hdr.km_op = KM_OP_CLOCK;
+
+    rc = host_msg(&hm, sizeof (hm), (void **) &hmr, &rlen);
+    if (rc != 0) {
+        printf("Get clock failed: (%s)\n", smash_err(rc));
+        if (flag_debug)
+            dump_memory(&hm, sizeof (&hm), DUMP_VALUE_UNASSIGNED);
+        *sec = 0;
+        *usec = 0;
+    } else {
+        *sec  = hmr->hm_sec;
+        *usec = hmr->hm_usec;
+    }
+    return (rc);
+}
+
 static int
 cmd_clock(int argc, char *argv[])
 {
     int         arg;
     uint        rc = 1;
     uint        flag_load = 0;
+    uint        flag_load_host = 0;
     uint        flag_load_if_set = 0;
     uint        flag_save = 0;
     uint        flag_save_if_not_set = 0;
     uint        flag_show = 0;
+    uint        flag_show_host = 0;
     uint        sec;
     uint        usec;
     const char *ptr;
@@ -4202,6 +4233,12 @@ cmd_clock(int argc, char *argv[])
                     case 'S':  // show
                         flag_show++;
                         break;
+                    case 'u':  // load clock from from USB host
+                        flag_load_host++;
+                        break;
+                    case 'U':  // show clock of USB host
+                        flag_show_host++;
+                        break;
                     default:
                         printf("Unknown argument %s \"-%s\"\n",
                                argv[0], ptr);
@@ -4217,12 +4254,18 @@ usage:
         }
     }
     if ((flag_load == 0) && (flag_load_if_set == 0) &&
-        (flag_save == 0) && (flag_save_if_not_set == 0))
+        (flag_save == 0) && (flag_save_if_not_set == 0) &&
+        (flag_load_host == 0))
         flag_show++;
 
-    if (flag_load || flag_load_if_set) {
-        if ((rc = get_ks_clock(&sec, &usec)) != 0)
-            return (rc);
+    if (flag_load || flag_load_host || flag_load_if_set) {
+        if (flag_load_host) {
+            if ((rc = get_host_clock(&sec, &usec)) != 0)
+                return (rc);
+        } else {
+            if ((rc = get_ks_clock(&sec, &usec)) != 0)
+                return (rc);
+        }
         if ((sec == 0) && (usec == 0)) {
             if (flag_load_if_set)
                 return (0);
@@ -4244,9 +4287,14 @@ usage:
         if ((rc = set_ks_clock(sec, usec, flag_save_if_not_set)) != 0)
             return (rc);
     }
-    if (flag_show) {
-        if ((rc = get_ks_clock(&sec, &usec)) != 0)
-            return (rc);
+    if (flag_show || flag_show_host) {
+        if (flag_show_host) {
+            if ((rc = get_host_clock(&sec, &usec)) != 0)
+                return (rc);
+        } else {
+            if ((rc = get_ks_clock(&sec, &usec)) != 0)
+                return (rc);
+        }
         if ((sec == 0) && (usec == 0)) {
             printf("KS does not know the current time\n");
             return (1);

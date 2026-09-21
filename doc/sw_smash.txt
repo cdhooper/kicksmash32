@@ -544,21 +544,27 @@ Length 0x8000 is 32 KB.
 Clock
 -----
 The smash clock command may also be used to save and restore the Amiga
-system clock from KickSmash. This is not terribly useful unless your Amiga
-is connected to a USB host, as KickSmash does not have battery backup. It
-will lose the current time at a power cycle, unless it is also being powered
-by USB-C. The hostsmash utility is able to set the KickSmash clock from your
-host PC's own system clock with the "hostsmash -c set" command.
+system clock from KickSmash or the USB host. This is not terribly useful
+unless your Amiga is connected to a USB host, as KickSmash does not have
+battery backup. It will lose the current time at a power cycle, unless
+it is also being powered by USB-C. The hostsmash utility is able to set
+the KickSmash clock from your host PC's own system clock with the
+"hostsmash -c set" command. The hostsmash utility can also serve the
+live clock to the Amiga.
 
 The smash clock command has several options:
     9.OS322:> smash clock help
        load         load Amiga time from KS clock (-l)
+       loadu        load Amiga time from USB host clock (-u)
        loadifset    load Amiga time from KS clock if it is known (-k)
        save         save Amiga time to KS clock (-s)
        saveifnotset save Amiga time to KS clock if not already saved (-n)
        show         show current KS clock (-S)
+       showu        show current USB host clock (-U)
 
-If you've not done it before, you'll first need to set KickSmash time:
+Before setting Amiga time from Kicksmash, you should have initially set
+the Kicksmash time from either the Amiga or from your host. Here is how
+to set Kicksmash time from the Amiga:
     9.OS322:> smash clock save
     04-May-24 04:34:58.856806
 from there, you can at any time enter:
@@ -585,6 +591,14 @@ the current time to KickSmash, you can use "smash -c load" followed by
     8.OS322:> SetClock save
     8.OS322:> date
     Friday 15-Nov-24 12:14:30
+
+If hostsmash is running in message service mode (typically started by
+exporting a volume to the Amiga with the "-m" option), then you can
+also set Amiga time directly from the USB host. Example:
+    8.OS322:> smash -c showu
+    20-Sep-26 20:55:51.308994
+    8.OS322:> smash -c loadu
+    20-Sep-26 20:55:55.874038
 
 
 Set Command
