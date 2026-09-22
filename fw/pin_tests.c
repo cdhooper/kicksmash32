@@ -803,24 +803,27 @@ test_new_style_socket_oe(void)
      * Determine if this is a new style board
      * Set OR gate inputs low. FILTERED_OE should be low.
      */
-    gpio_setv(GPIOB, GPIO15, 0);
+    gpio_setv(GPIOB, GPIO15, 0);  // SOCKET_OE
     gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_OUTPUT_PPULL_2);
-    gpio_setv(KBRST_PORT, KBRST_PIN, 1);
+    gpio_setv(KBRST_PORT, KBRST_PIN, 1);  // KBRST is inverted into OR gate
     gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
     gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
     gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
     timer_delay_msec(1);
     got = gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN);
     if (got != 0)
-        goto restore_state;
+        goto restore_state;  // Not new style
 
     /* Low when pulling high -- possibly new style */
-    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
-    gpio_setv(KBRST_PORT, KBRST_PIN, 0);
+
+    /* Set SOCKET_OE high and pull FILTERED_OE low */
+    gpio_setv(GPIOB, GPIO15, 1);  // SOCKET_OE
+    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);  // FILTERED_OE
+    gpio_setv(KBRST_PORT, KBRST_PIN, 1);
     timer_delay_msec(1);
     got = gpio_get(SOCKET_OE_PORT, SOCKET_OE_PIN);
     if (got == 0)
-        goto restore_state;
+        goto restore_state;  // Not new style
 
     /* High when pulling low -- must be new style */
     config.flags |= CF_OE_GATE;

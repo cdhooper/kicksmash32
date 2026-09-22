@@ -33,7 +33,6 @@ const char *version = "\0$VER: smashftp "VERSION" ("BUILD_DATE") \xA9 Chris Hoop
 #include "host_cmd.h"
 #include "smashftp_cli.h"
 #include "smashftp.h"
-#include "crc32.h"
 #include "readline.h"
 #include "cpu_control.h"
 #include "sm_msg.h"

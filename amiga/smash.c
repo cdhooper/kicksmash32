@@ -26,7 +26,6 @@ const char *version = "\0$VER: smash "VERSION" ("BUILD_DATE") \xA9 Chris Hooper"
 #include <exec/memory.h>
 #include "smash_cmd.h"
 #include "host_cmd.h"
-#include "crc32.h"
 #include "sm_msg.h"
 #include "cpu_control.h"
 

@@ -29,7 +29,6 @@
 #include <clib/alib_protos.h>
 #endif
 #include <memory.h>
-#include "crc32.h"
 #include "sm_msg.h"
 #include "smash_cmd.h"
 #include "host_cmd.h"

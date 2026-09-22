@@ -52,15 +52,11 @@ uint8_t  is_gd32;
  *                                 \--PLL3Mul-Mul-VCO    (ignored)
  *                                    x8      x2  128MHz
  *
- * USB must always be 48 MHz
- *      USBPRE (USB Prescaler) may be either /1 or /1.5
- *
- *      48 * 2 / 2 = 48 MHz    Supported
- *      48 * 3 / 2 = 72 MHz    Supported
- *      48 * 4 / 2 = 96 MHz    Not possible
- *      48 * 5 / 2 = 129 MHz   Not possible
- *      48 * 6 / 2 = 144 MHz   Not possible
- *
+ * USB must always be 48 MHz.
+ * USBPRE (USB Prescaler) may be /1 or /1.5 for STM32F1xx
+ *          Usable clocks: 48 MHz or 72 MHz
+ * USBPRE (USB Prescaler) may be /1, /1.5, /2, or /2.5 for GD32F105/7
+ *          Usable clocks: 48 MHz, 72 MHz, 96 MHz, 120 MHz
  */
 #ifdef STM32F1
 static const struct rcc_clock_scale *rcc_clock_config;
@@ -80,29 +76,51 @@ static const struct rcc_clock_scale rcc_clock_config_stm32f1 = {
     .pll_source       = RCC_CFGR_PLLSRC_PREDIV1_CLK,   // 8 / 1 = 8 MHz
 #ifdef OVERCLOCK_NO_USB
     .pll_mul          = RCC_CFGR_PLLMUL_PLL_CLK_MUL12, // 12 * 8 = 96 MHz
-
+#else
+    /* Maximum clock that supports USB */
+    .pll_mul          = RCC_CFGR_PLLMUL_PLL_CLK_MUL9,  // 9 * 8 = 72 MHz
+#endif
     .hpre             = RCC_CFGR_HPRE_NODIV,           // 96 / 1 = 96 MHz Core
     .ppre1            = RCC_CFGR_PPRE_DIV2,            // 96 / 2 = 48 MHz APB1
     .ppre2            = RCC_CFGR_PPRE_NODIV,           // 96 / 1 = 96 MHz APB2
     .adcpre           = RCC_CFGR_ADCPRE_DIV8,          // 96 / 8 = 12 MHz ADC
-    .usbpre           = RCC_CFGR_USBPRE_PLL_VCO_CLK_DIV2, // 96 * 2 / 2 = 96 MHz
-    /* XXX: For GD32, also set bit 23 to configure CK_PLL / 2 */
-#else
-    /* Maximum clock that supports USB */
-    .pll_mul          = RCC_CFGR_PLLMUL_PLL_CLK_MUL9,  // 9 * 8 = 72 MHz
-
-    .hpre             = RCC_CFGR_HPRE_NODIV,           // 72 / 1 = 72 MHz Core
-    .ppre1            = RCC_CFGR_PPRE_DIV2,            // 72 / 2 = 36 MHz APB1
-    .ppre2            = RCC_CFGR_PPRE_NODIV,           // 72 / 1 = 72 MHz APB2
-    .adcpre           = RCC_CFGR_ADCPRE_DIV8,          // 72 / 8 = 9 MHz ADC
     .usbpre           = RCC_CFGR_USBPRE_PLL_VCO_CLK_DIV3, // 72 * 2 / 3 = 48 MHz
-#endif
 
     .flash_waitstates = 2,
     .ahb_frequency    = 72000000,
     .apb1_frequency   = 36000000,
     .apb2_frequency   = 72000000,
 };
+
+#define GD32F107_120M
+#ifdef GD32F107_120M
+static const struct rcc_clock_scale rcc_clock_config_gd32f1 = {
+    /*
+     * HSE=8 PLL=120 USB=48 APB1=60 APB2=120 ADC=15
+     *
+     * GD32F107 overclocking: HSE=8 PREDIV1=/2 = 4 MHz * PLL x30 = 120 MHz
+     * Encoding 11101 written into PLLMF field.
+     *
+     * GD32F105/107 USB prescaler (RCC_CFGR[23:22]):
+     *   00 = /1.5, 01 = /1, 10 = /2.5, 11 = /2
+     */
+    .prediv1_source   = RCC_CFGR2_PREDIV1SRC_HSE_CLK,  // 8 MHz
+    .prediv1          = RCC_CFGR2_PREDIV_DIV2,         // 8 / 2 = 4 MHz
+    .pll_source       = RCC_CFGR_PLLSRC_PREDIV1_CLK,   // 4 MHz into PLL
+    .pll_mul          = 0xd,                           // 1101 + bit29 = x30
+
+    .hpre             = RCC_CFGR_HPRE_NODIV,           // 120 / 1 = 120 MHz Core
+    .ppre1            = RCC_CFGR_PPRE_DIV2,            // 120 / 2 = 60 MHz APB1
+    .ppre2            = RCC_CFGR_PPRE_NODIV,           // 120 / 1 = 120 MHz APB2
+    .adcpre           = RCC_CFGR_ADCPRE_DIV8,          // 120 / 8 = 15 MHz ADC
+    .usbpre           = 0,                             // +bit23 = /2.5
+
+    .flash_waitstates = 2,
+    .ahb_frequency    = 120000000,
+    .apb1_frequency   = 60000000,
+    .apb2_frequency   = 120000000,
+};
+#else
 static const struct rcc_clock_scale rcc_clock_config_gd32f1 = {
     /* HSE=8 PLL=96 USB=48 APB1=48 APB2=96 ADC=12 */
     .prediv1_source   = RCC_CFGR2_PREDIV1SRC_HSE_CLK,  // 8 MHz
@@ -122,7 +140,10 @@ static const struct rcc_clock_scale rcc_clock_config_gd32f1 = {
     .apb1_frequency   = 48000000,
     .apb2_frequency   = 96000000,
 };
-#else
+#endif
+#endif /* STM32F1 */
+
+#ifdef STM32F4
 /* STM32F4xx */
 static const struct rcc_clock_scale rcc_clock_config = {
     /* HSE=8 USB=48 APB1=42 APB2=84 */
@@ -152,9 +173,12 @@ clock_init(void)
     rcc_pclk2_frequency = rcc_clock_config.apb2_frequency;
 #else
     if (SCB_CPUID == 0x412fc231) {
-        /* GD32F1xx */
+        /* GD32F105 / GD32F107 */
         rcc_clock_config = &rcc_clock_config_gd32f1;
-        RCC_CFGR |= (1 << 23);  // GD32F1xx /2 or /2.5
+        RCC_CFGR |= (1 << 23);  // GD32F1xx /2 or /2.5 for USB clock
+#ifdef GD32F107_120M
+        RCC_CFGR |= (1 << 29);  // GD32F1xx x30 (11101) when pll_mul == 0xd
+#endif
         is_gd32 = 1;
     } else {
         /* STM32F1 */
