@@ -36,6 +36,19 @@ typedef struct {
 
 extern config_t config;
 
+#define BOARD_STATE_ALERT       0x00000001  // Alert condition
+#define BOARD_STATE_STANDALONE  0x00000002  // Board is stand-alone
+#define BOARD_STATE_OFF         0x00000004  // Amiga is powered off
+#define BOARD_STATE_IN_RESET    0x00000008  // Amiga is in reset
+#define BOARD_STATE_NO_KBRST    0x00000010  // KBRST not connected
+#define BOARD_STATE_NO_A17      0x00000020  // A17 not connected
+#define BOARD_STATE_NO_A18      0x00000040  // A18 not connected
+#define BOARD_STATE_NO_A19      0x00000080  // A19 not connected
+#define BOARD_STATE_NO_FLASH0   0x00000100  // Flash0 bad/missing
+#define BOARD_STATE_NO_FLASH1   0x00000200  // Flash1 bad/missing
+#define BOARD_STATE_BAD_FLASH   0x00000400  // Flash ID test failed
+extern uint32_t board_state;
+
 void config_updated(void);
 void config_poll(void);
 void config_read(void);

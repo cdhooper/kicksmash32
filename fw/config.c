@@ -29,6 +29,7 @@
 #define CONFIG_AREA_END  (CONFIG_AREA_BASE + CONFIG_AREA_SIZE)
 
 uint64_t config_timer = 0;
+uint32_t board_state  = 0;
 uint8_t  cold_poweron = 0;
 
 config_t config;

@@ -304,20 +304,28 @@ check_board_standalone(void)
     printf("Connected: ");
     if (addr_conn)
         printf("A0-A16 ");
-    if (!(conn & FLASH_A17_PIN))
+    if (!(conn & FLASH_A17_PIN)) {
+        board_state |= BOARD_STATE_NO_A17;
         putchar('!');
+    }
     printf("A17 ");
-    if (!(conn & SOCKET_A18_PIN))
+    if (!(conn & SOCKET_A18_PIN)) {
+        board_state |= BOARD_STATE_NO_A18;
         putchar('!');
+    }
     printf("A18 ");
-    if (!(conn & SOCKET_A19_PIN))
+    if (!(conn & SOCKET_A19_PIN)) {
+        board_state |= BOARD_STATE_NO_A19;
         putchar('!');
+    }
     printf("A19 ");
     if (!d31_conn)
         putchar('!');
     printf("D31 ");
-    if (!kbrst_in_amiga)
+    if (!kbrst_in_amiga) {
+        board_state |= BOARD_STATE_NO_KBRST;
         putchar('!');
+    }
     printf("KBRST");
     usb_poll();
 
@@ -374,6 +382,11 @@ check_board_standalone(void)
     }
     oe_output(1);
 
+    if ((saw & BIT(0)) == 0)
+        board_state |= BOARD_STATE_NO_FLASH0;
+    if ((saw & BIT(1)) == 0)
+        board_state |= BOARD_STATE_NO_FLASH1;
+
     if (saw & BIT(0)) {
         if (saw & BIT(1)) {
             printf(" Flash0 Flash1\n");
@@ -385,6 +398,7 @@ check_board_standalone(void)
     } else if (saw & BIT(1)) {
         printf(" !Flash0 Flash1 (NOT NORMAL)\n");
         ee_default_mode = EE_MODE_16_HIGH;
+        board_state |= BOARD_STATE_BAD_FLASH;
         led_alert(1);
     } else {
         ee_default_mode = EE_MODE_32;
@@ -435,10 +449,12 @@ in_amiga:
         gpio_setmode(SOCKET_A0_PORT, 0xffff, GPIO_SETMODE_INPUT);
         gpio_setmode(SOCKET_A13_PORT, 0x00fe, GPIO_SETMODE_INPUT);
         board_is_standalone = false;
+        board_state &= ~BOARD_STATE_STANDALONE;
         return;
     }
 
     board_is_standalone = true;
+    board_state |= BOARD_STATE_STANDALONE;
     rc = pin_tests(0, 0);
     if (rc == 0)
         rc = prom_test();

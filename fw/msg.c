@@ -15,6 +15,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include "irq.h"
+#include "clock.h"
 #include "config.h"
 #include "crc32.h"
 #include "kbrst.h"
@@ -1050,12 +1051,17 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             reply.si_ks_time[2] = temp[2];
             reply.si_ks_time[3] = 0;
             strcpy(reply.si_serial, (const char *)usb_serial_str);
-            reply.si_rev      = SWAP16(0x0001);     // Protocol version 0.1
-            reply.si_features = SWAP16(0x0001);     // Features
+            reply.si_rev      = SWAP16(0x0002);     // Protocol version 0.2
+            reply.si_features = SWAP16(0x0003);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
             reply.si_mode     = ee_mode;
-            reply.si_unused1  = 0;
+            reply.si_cpu      = is_gd32;
             reply.si_usbdev   = usb_current_address();
+            reply.si_cpufreq  = clock_get_hclk() / 1000000;
+            reply.si_cpufreq  = SWAP16(reply.si_cpufreq);
+            reply.si_busfreq  = clock_get_apb2() / 1000000;
+            reply.si_busfreq  = SWAP16(reply.si_busfreq);
+            reply.si_state    = SWAP32(board_state);
             strcpy(reply.si_name, config.name);
             memset(reply.si_unused, 0, sizeof (reply.si_unused));
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
@@ -2477,12 +2483,17 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             reply.si_ks_time[2] = temp[2];
             reply.si_ks_time[3] = 0;
             strcpy(reply.si_serial, (const char *)usb_serial_str);
-            reply.si_rev      = SWAP16(0x0001);     // Protocol version 0.1
-            reply.si_features = SWAP16(0x0001);     // Features
+            reply.si_rev      = SWAP16(0x0002);     // Protocol version 0.2
+            reply.si_features = SWAP16(0x0003);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
             reply.si_mode     = ee_mode;
-            reply.si_unused1  = 0;
+            reply.si_cpu      = is_gd32;
             reply.si_usbdev   = usb_current_address();
+            reply.si_cpufreq  = clock_get_hclk() / 1000000;
+            reply.si_cpufreq  = SWAP16(reply.si_cpufreq);
+            reply.si_busfreq  = clock_get_apb2() / 1000000;
+            reply.si_busfreq  = SWAP16(reply.si_busfreq);
+            reply.si_state    = SWAP32(board_state);
             strcpy(reply.si_name, config.name);
             memset(reply.si_unused, 0, sizeof (reply.si_unused));
             usb_msg_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);

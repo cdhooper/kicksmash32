@@ -335,13 +335,16 @@ typedef struct {
     uint8_t  si_ks_time[4];              // Kicksmash build time (hh-mm-ss-00)
     char     si_serial[24];              // Kicksmash serial number
     uint16_t si_features;                // Available features
-    uint16_t si_rev;                     // Protocol revision (00.01)
+    uint16_t si_rev;                     // Protocol revision (00.02)
     uint32_t si_usbid;                   // USB id (0x12091610)
     char     si_name[16];                // Unique name for this board
     uint8_t  si_mode;                    // ROM mode (0=32-bit, 1=16-bit)
-    uint8_t  si_unused1;                 // Unused space
+    uint8_t  si_cpu;                     // CPU type (0=STM32F107, 1=GD32F107)
     uint16_t si_usbdev;                  // USB device slot
-    uint8_t  si_unused[24];              // Unused space
+    uint16_t si_cpufreq;                 // CPU core frequency
+    uint16_t si_busfreq;                 // Bus frequency
+    uint32_t si_state;                   // Board state
+    uint8_t  si_unused[16];              // Unused space
 } smash_id_t;
 
 typedef struct {

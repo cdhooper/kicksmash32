@@ -15,6 +15,7 @@
 #include "printf.h"
 #include "timer.h"
 #include "kbrst.h"
+#include "config.h"
 #include "pin_tests.h"
 
 uint8_t         amiga_not_in_reset     = 0xff;
@@ -92,6 +93,7 @@ kbrst_poll(void)
             ee_update_bank_at_reset();
             if (amiga_long_reset_timer == 0)
                 amiga_long_reset_timer = timer_tick_plus_msec(2000);
+            board_state |= BOARD_STATE_IN_RESET;
         } else {
             /* Out of reet */
             if (amiga_powered_off) {
@@ -101,6 +103,7 @@ kbrst_poll(void)
                 printf("Amiga out of reset\n");
             }
             amiga_long_reset_timer = 0;
+            board_state &= ~BOARD_STATE_IN_RESET;
         }
         amiga_reboot_detect_timeout = timer_tick_plus_msec(5000);
     } else {

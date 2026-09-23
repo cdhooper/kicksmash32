@@ -561,6 +561,12 @@ smash_time(void)
     return (usecs);
 }
 
+static const char * const board_states[] = {
+    "Alert", "Standalone", "Off", "In_Reset",
+    "No_KBRST", "No_A17", "No_A18", "No_A19",
+    "No_Flash0", "No_Flash1", "Bad_Flash",
+};
+
 static uint
 smash_identify(void)
 {
@@ -595,6 +601,24 @@ smash_identify(void)
                (id.si_mode == 2) ? "16-bit high" :
                (id.si_mode == 3) ? "auto" :
                (id.si_mode == 4) ? "32-bit swap" : "unknown");
+    }
+    if (id.si_rev > 1) {
+        uint32_t state = id.si_state;
+        uint bit;
+        printf("  CPU %s %u MHz, periph %u MHz\n",
+               (id.si_cpu == 0) ? "STM32F107" :
+               (id.si_cpu == 1) ? "GD2F107" : "Unknown",
+               id.si_cpufreq, id.si_busfreq);
+        for (bit = 0; bit < 32; bit++) {
+            if (state & BIT(bit)) {
+                if (bit < ARRAY_SIZE(board_states))
+                    printf("  %s", board_states[bit]);
+                else
+                    printf("  bit%u", bit);
+            }
+        }
+        if (state != 0)
+            printf("\n");
     }
 
     usecs = smash_time();

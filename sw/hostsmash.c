@@ -215,6 +215,8 @@ netprintf(const char *fmt, ...)
 #define MODE_MSG       0x0040
 #define MODE_CLOCK_GET 0x0100
 #define MODE_CLOCK_SET 0x0200
+#define MODE_ID_KS     0x0400
+#define MODE_VERSION   0x0800
 
 /* XXX: Need to register USB device ID at http://pid.codes */
 #define MX_VENDOR 0x1209
@@ -3636,12 +3638,41 @@ send_ks_cmd(uint cmd, void *txbuf, uint txlen, void *rxbuf, uint rxmax,
     return (recv_ks_reply_core(rxbuf, rxmax, flags, rxstatus, rxlen));
 }
 
+static const char * const board_states[] = {
+    "Alert", "Standalone", "Off", "In_Reset",
+    "No_KBRST", "No_A17", "No_A18", "No_A19",
+    "No_Flash0", "No_Flash1", "Bad_Flash",
+};
+
+static void
+show_ks_version(void)
+{
+    char cmd_output[100];
+    char *ptr = cmd_output;
+    int  rxcount;
+    if (send_cmd("version"))
+        return; // "timeout" was reported in this case
+    if (recv_output(cmd_output, sizeof (cmd_output), &rxcount, 80))
+        return; // "timeout" was reported in this case
+    if (rxcount == 0) {
+        printf("Receive timeout\n");
+        return;
+    }
+    if (rxcount >= sizeof (cmd_output))
+        rxcount = sizeof (cmd_output) - 1;
+    cmd_output[rxcount] = '\0';
+    if (strncmp(ptr, "Version", 7) == 0)
+        ptr += 8;
+    printf("KickSmash %s", ptr);
+}
+
 static void
 show_ks_inquiry(void)
 {
     smash_id_t id;
     uint status;
     uint rc;
+    uint16_t rev;
     rc = send_ks_cmd(KS_CMD_ID, NULL, 0, &id, sizeof (id), &status, NULL, 0);
     if (rc != 0) {
         printf("KS send message failed: %d (%s)\n", rc, smash_err(rc));
@@ -3663,6 +3694,26 @@ show_ks_inquiry(void)
            (id.si_mode == 0) ? "32-bit" :
            (id.si_mode == 1) ? "16-bit" :
            (id.si_mode == 2) ? "16-bit high" : "unknown");
+
+    rev = SWAP16(id.si_rev);
+    if (rev > 1) {
+        uint32_t state = SWAP32(id.si_state);
+        uint bit;
+        printf("  CPU %s %u MHz, periph %u MHz\n",
+               (id.si_cpu == 0) ? "STM32F107" :
+               (id.si_cpu == 1) ? "GD2F107" : "Unknown",
+               SWAP16(id.si_cpufreq), SWAP16(id.si_busfreq));
+        for (bit = 0; bit < 32; bit++) {
+            if (state & BIT(bit)) {
+                if (bit < ARRAY_SIZE(board_states))
+                    printf("  %s", board_states[bit]);
+                else
+                    printf("  bit%u", bit);
+            }
+        }
+        if (state != 0)
+            printf("\n");
+    }
 }
 
 #if 0
@@ -4586,8 +4637,19 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len_specified,
         run_terminal_mode();
         return (0);
     }
-    if (mode & MODE_ID) {
-        eeprom_id();
+    if (mode & (MODE_ID | MODE_ID_KS)) {
+        if (mode & MODE_ID)
+            eeprom_id();
+        if (mode & MODE_ID_KS) {
+            if (send_cmd("prom service") == 0)
+                show_ks_inquiry();
+        }
+        return (0);
+    }
+    if (mode & (MODE_VERSION)) {
+        print_version(stdout);
+        if (device_name[0] != '\0')
+            show_ks_version();
         return (0);
     }
     if (mode & MODE_MSG) {
@@ -4865,10 +4927,17 @@ errx(EXIT_FAILURE, "how did we get here?");
                 fill = TRUE;
                 break;
             case 'i':
-                if (mode != MODE_UNKNOWN)
+                if ((mode != MODE_UNKNOWN) &&
+                    ((mode & (MODE_ID | MODE_ID_KS)) == 0)) {
                     errx(EXIT_FAILURE,
                          "-%c may not be specified with any other mode", ch);
-                mode = MODE_ID;
+                }
+                if (mode & MODE_ID)
+                    mode = MODE_ID_KS;
+                else if (mode & MODE_ID_KS)
+                    mode |= MODE_ID;
+                else
+                    mode = MODE_ID;
                 break;
             case 'l':
                 if ((sscanf(optarg, "%i%n", (int *)&len, &pos) != 1) ||
@@ -4942,8 +5011,7 @@ errx(EXIT_FAILURE, "how did we get here?");
                 mode |= MODE_VERIFY;
                 break;
             case 'V':
-                print_version(stdout);
-                exit(EXIT_SUCCESS);
+                mode |= MODE_VERSION;
                 break;
             case 'y':
                 force_yes = TRUE;

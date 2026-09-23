@@ -16,6 +16,7 @@
 #include "gpio.h"
 #include "timer.h"
 #include "clock.h"
+#include "config.h"
 
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/stm32/timer.h>
@@ -30,6 +31,11 @@ led_alert(int turn_on)
 {
     led_alert_state = turn_on;
     led_poll();
+    if (turn_on)
+        board_state |= BOARD_STATE_ALERT;
+    else
+        board_state &= ~BOARD_STATE_ALERT;
+
 //  gpio_setv(LED_ALERT_PORT, LED_ALERT_PIN, turn_on);
 }
 

@@ -341,8 +341,10 @@ adc_poll(int verbose, int force)
                              GPIO_SETMODE_INPUT_PULLUPDOWN);
                 gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN,
                              GPIO_SETMODE_INPUT);
+                board_state &= ~BOARD_STATE_OFF;
             } else {
 power_is_off:
+                board_state |= BOARD_STATE_OFF;
                 gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
                              GPIO_SETMODE_OUTPUT_PPULL_50);
                 if ((config.flags & CF_POWER_OFF_OLD) ||
