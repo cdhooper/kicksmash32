@@ -1,0 +1,103 @@
+smashnet - Amiga SANA-II device driver for host-exported network
+----------------------------------------------------------------
+
+The smashnet.device is an Amiga SANA-II ethernet device driver which
+is compatile with Roadshow and other Amiga TCP/IP network stacks.
+It requires Kicksmash and a USB host to be connected, and hostsmash
+running with the "-n" network option.
+
+There are two ways to instantiate the smashnet.device in memory.
+One is to run the smashnet program, which will create the device and
+also report diagnostic information as the driver executes. If you
+need to shut down the device, you can press ^C to signal it to stop,
+or use the "Status" command and run "Break" to signal it.
+
+The second way is to install smashnet.device in your Devs:Networks
+directory. This is the common way that SANA-II devices are loaded on
+the Amiga. For Roadshow to automatically start the device, you will
+need to create Devs:NetInterfaces/smashnet as a text file which
+describes options for smashnet.device. A simple file is provided
+in the Kicksmash distribution:
+    Copy smashnet.netif Devs:NetInterfaces/smashnet
+
+Start hostsmash with the -n option. Example:
+    ./hostsmash -d /dev/ttyACM0 -n
+
+You may also combine networking with file service:
+    ./hostsmash -d /dev/ttyACM0 -n -M amiga: ../amiga
+
+hostsmash supports Linux, MacOS, and Windows. In order to support
+networking, the host-side implementation is different for each operating
+system. The hostsmash utility calls out to hostsmash_netif on each
+platform to act as a buffered virtual interface to the physical network.
+All operating systems require elevated privileges for the program which
+is able to interact directly with the network.
+
+Linux
+-----
+Under Linux, hostsmash_netif will use pkexec to authenticate and
+re-execute itself. You must enter a password to pkexec when hostsmash
+starts the network interface program. As an alternative to entering a
+password each time, you can set make this executable setuid root.
+Example:
+    sudo chown root objs.*\/hostsmash_netif
+    sudo chmod 4755 objs.*\/hostsmash_netif
+
+or, you can specifically give it network permission:
+    sudo setcap cap_dac_override,cap_net_admin+ep objs.*\/hostsmash_netif
+
+The Linux version will use macvtap to create a psuedo-network device
+named "amiga-vtap0" which is bridged to your default network interface.
+This device has a generated MAC address which is separate from your
+default network interface, so that your DHCP server can hand a unique
+MAC address to your Amiga.
+
+MacOS
+-----
+MacOS uses a native administrator-privilege prompt (osascript) to
+elevate permissions. It also requires a password to be entered. I've
+not experimented with using setuid on MacOS, but imagine that would
+work similar to Linux.
+
+The equivalent of macvtap on MacOS is vmnet, but this requires special
+entitlement from Apple, so BFP is used instead. MacOS support in
+hostsmash is not well-tested, and may end up using the host's MAC for
+network access of the Amiga. The solution is to create a virtual
+MAC address and record that on disk "virtual_mac.txt", similar to how
+the Windows implementation does this. This has not yet been implemented
+for MacOS.
+
+Windows
+-------
+The Windows implementation of hostsmash_netif uses UAC to boost
+privilege of a called program. UAC authenticates before starting
+hostsmash_netif, but due to how Windows stdin/stdout works, this
+escalation must be done in the calling hostsmash program rather than
+in hostsmash_netif. If you choose to run hostsmash in an Administrator
+CMD prompt, then UAC authentication will be skipped.
+
+Windows has no macvtap equivalent. However, there is more than one
+means for hostsmash_netif on Windows to implement the virtual network
+device. Both require a driver.
+One is using Npcap:
+    https://npcap.com/
+and the other is using TAP:
+    https://openvpn.net/community/
+
+The TAP interface creates a private virtual network interface which
+uses network address translation (NAT) to bridge to the default network.
+This method does not currently work for an unknown reason. The Amiga is
+not able to acquire an address via DHCP.
+
+For now, only the Npcap interface is supported. Like the MacOS BFP,
+Npcap implements an interface which shares the hardware with the default
+network interface. Because of this, it likely will not work on Wifi
+because of how Wifi network security works. The hostsmash_netif Npcap
+implementation does generate a custom MAC for the Amiga. It gets saved
+to disk as "virtual_mac.txt" for reuse.
+
+All platforms
+-------------
+When you abort hostsmash, it should trigger the hostsmash_netif program
+to clean up and exist. The virtual network interfaces should be
+automatically removed when hostsmash_netif exits.

@@ -9,13 +9,16 @@ FSROM_PROG   := smashfsrom
 FSROM_PROG_D := smashfsrom_d
 SWITCH_PROG  := romswitch
 NET_PROG     := smashnet
+NETDRV_PROG  := smashnet.device
 
 ALL_PROGS    := $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) \
-                $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(NET_PROG)
+                $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(NET_PROG) \
+                $(NETDRV_PROG)
 
 OBJDIR       := objs
 ROM_OBJDIR   := objs.rom
 ROM_OBJDIR_D := objs.rom_d
+NETDRV_OBJDIR := objs.netdrv
 CRC32_C      := ../fw/crc32.c
 SMASH_SRCS   := smash.c sm_msg.c sm_msg_core.c cpu_control.c $(CRC32_C)
 SMASH_HDRS   := cpu_control.h sm_msg.h sm_file.h host_cmd.h \
@@ -32,8 +35,14 @@ FSROM_SRCS   := fs_rom.c \
 		my_createtask.c sm_msg_core.c fs_rom_end.c
 SWITCH_SRCS  := romswitch.c sm_msg.c cpu_control.c printf.c \
 		sm_msg_core.c fs_rom_end.c
-NET_SRCS     := smashnet.c sm_msg.c cpu_control.c printf.c \
-		sm_msg_core.c fs_rom_end.c sm_net.c $(CRC32_C)
+# smashnet is built two ways from the same sources:
+#   smashnet         program which installs a transient smashnet.device
+#   smashnet.device  disk-loadable driver (-DSMASHNET_DEVICE, objs.drv/)
+NET_COMMON   := smashnet.c sm_msg.c cpu_control.c printf.c \
+		sm_msg_core.c sm_net.c $(CRC32_C)
+NET_SRCS     := smashnet_prg.c $(NET_COMMON) fs_rom_end.c
+NETDRV_SRCS  := smashnet_drv.c $(NET_COMMON)
+NET_HDRS     := smashnet.h sana2.h
 
 CC      := m68k-amigaos-gcc
 STRIP   := m68k-amigaos-strip
@@ -52,6 +61,10 @@ CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 
 # The below makes smashftp huge
 #LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@.lst -lgcc -lc -lamiga -noixemul
+
+# Driver: no startup code and no libc initialization (the driver supplies
+# SysBase, malloc, free and atexit itself). Same recipe as the ROM builds.
+LDFLAGS_NETDRV = -nostdlib -lgcc -lc -lamiga -nostartfiles -mcrt=clib2
 
 LDFLAGS_FSROM = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
 LDFLAGS_SWITCH = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
@@ -94,7 +107,7 @@ ifeq (, $(shell which $(CC) 2>/dev/null ))
 $(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga13/bin")
 endif
 
-all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(NET_PROG)
+all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(NET_PROG) $(NETDRV_PROG)
 	@:
 
 gdb:
@@ -117,18 +130,24 @@ $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR
 $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D),FSROM_OBJS_D)))
 $(foreach SRCFILE,$(SWITCH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D),SWITCH_OBJS)))
 $(foreach SRCFILE,$(NET_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),NET_OBJS)))
+$(foreach SRCFILE,$(NETDRV_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(NETDRV_OBJDIR),NETDRV_OBJS)))
 
-OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS) $(NET_OBJS))
+OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS) $(NET_OBJS) $(NETDRV_OBJS))
 
 # Add special flags for ROMable code
 $(FSROM_OBJS):: CFLAGS += $(CFLAGS_ROMFS) -DNO_DEBUG
 $(FSROM_OBJS_D):: CFLAGS += $(CFLAGS_ROMFS)
 $(SWITCH_OBJS):: CFLAGS += $(CFLAGS_ROMFS)
+# Driver build: same sources as the program, different defines
+$(NETDRV_OBJS):: CFLAGS += -DSMASHNET_DEVICE
+#$(NETDRV_OBJS):: CFLAGS += -DSMASHNET_DRV_SERIAL_DEBUG
+#$(NETDRV_OBJS):: CFLAGS += -DSMASHNET_DRV_TRACE
 #$(FSROM_OBJS):: CFLAGS += -flto
 #LDFLAGS_FSROM += -flto -O2
 
 $(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS): | $(ROM_OBJDIR)
 $(FSROM_OBJS_D): | $(ROM_OBJDIR_D)
+$(NETDRV_OBJS): | $(NETDRV_OBJDIR)
 
 $(OBJS): Makefile $(SMASH_HDRS) | $(OBJDIR)
 	@echo Building $@
@@ -136,6 +155,7 @@ $(OBJS): Makefile $(SMASH_HDRS) | $(OBJDIR)
 
 $(FS_OBJS): $(FS_HDRS)
 $(FTP_OBJS): $(FTP_HDRS)
+$(NET_OBJS) $(NETDRV_OBJS): $(NET_HDRS)
 
 $(SMASH_PROG): $(SMASH_OBJS)
 $(FTP_PROG): $(FTP_OBJS)
@@ -173,7 +193,12 @@ $(NET_PROG): $(NET_OBJS)
 	@echo Building $@
 	$(QUIET)$(CC) $(NET_OBJS) $(LDFLAGS_FS) -o $@
 
-$(OBJDIR) $(ROM_OBJDIR) $(ROM_OBJDIR_D):
+$(NETDRV_PROG): $(NETDRV_OBJS)
+	@echo Building $@
+	$(QUIET)$(CC) $(NETDRV_OBJS) $(LDFLAGS_NETDRV) -Xlinker -Map=$(NETDRV_OBJDIR)/$@.map -o $(NETDRV_OBJDIR)/$@
+	$(QUIET)$(STRIP) -o $@ $(NETDRV_OBJDIR)/$@
+
+$(OBJDIR) $(ROM_OBJDIR) $(ROM_OBJDIR_D) $(NETDRV_OBJDIR):
 	mkdir -p $@
 
 ZIPFILE := $(PROGVER).zip
@@ -209,7 +234,7 @@ adf:
 
 clean clean-all:
 	@echo Cleaning
-	@rm -rf $(OBJS) $(OBJDIR) $(ROM_OBJDIR) $(ROM_OBJDIR_D)
+	@rm -rf $(OBJS) $(OBJDIR) $(ROM_OBJDIR) $(ROM_OBJDIR_D) $(NETDRV_OBJDIR)
 
 FLINT_FILE=flexelint.lnt
 flint:

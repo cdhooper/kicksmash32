@@ -40,6 +40,7 @@ amiga/smashftp
 amiga/smashfsrom
 amiga/smashfsrom_d
 amiga/smashnet
+amiga/smashnet.device
 amiga/romswitch
 amiga/romswitch.rom
 sw/crcit
