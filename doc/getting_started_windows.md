@@ -112,7 +112,7 @@ A device which does not exist was specified.
 and a second interface may show **Code 28** ("The drivers for this device are
 not installed.").
 
-**Fix.** Download `wdi-simple.exe`:
+**Fix option A.** Download `wdi-simple.exe`:
 
 ```text
 https://github.com/rogerclarkmelbourne/Arduino_STM32/blob/master/drivers/win/wdi-simple.exe?raw=true
@@ -137,6 +137,12 @@ Windows shows COM7, type `-d com7` everywhere this guide shows `-d com5`.
 > [`windows_notes.txt`](windows_notes.txt), which also documents the
 > STSW-STM32102 fallback for older Windows and a COM-port-arbiter trick to keep
 > the same COM number across multiple boards.
+
+**Fix option B.** Manually install a driver via device manager:
+
+Right mouse click on **"KickSmash Prg (COM5)"** which is under **Other devices** and choose **update driver**.
+Browse my computer for drivers -> "Let me pick a driver" -> select Ports -> Microsoft -> USB Serial Device.
+The device should now move from Other devices to Ports and be ready for use.
 
 ## Step 3: Get hostsmash and open a terminal in its folder
 
