@@ -40,18 +40,25 @@ may have an error, such as
 You can try using the following driver:
     https://github.com/rogerclarkmelbourne/Arduino_STM32/blob/master/drivers/win/wdi-simple.exe?raw=true
 
-And tell it to manage KickSmash serial:
+And tell it to manage KickSmash serial, running the following command
+in an Administrator mode command prompt:
     wdi-simple.exe --vid 0x1209 --pid 0x1610 --type 3 --name "KickSmash Prg" --dest "maple-serial"
 
 If you have wget installed, you can run the wdikicksmash.bat file in the
 sw directory to do both.
     wget https://raw.githubusercontent.com/cdhooper/kicksmash32/refs/heads/main/sw/wdikicksmash.bat
 
+Run wdikicksmash.bat in an Administrator mode command prompt.
+
 After installing the above, you will need to plug in your KickSmash board
 again.
 
+If you find that Kicksmash is still not appearing as a COM port under
+Windows 11, an option may be to manually install the driver:
+    "Let me pick a driver" and select Ports -> Microsoft -> USB Serial Device
+
 -------
-Another option for older Windows version might be the STMSW-STM32102
+Another option for older Windows versions might be the STMSW-STM32102
 Virtual COM port driver installation package for Windows:
     https://www.st.com/en/development-tools/stsw-stm32102.html
 

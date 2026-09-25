@@ -14,6 +14,7 @@
 
 #include <inline/exec.h>
 #include <inline/dos.h>
+#include <inline/macros.h>
 
 #include <clib/debug_protos.h>
 #include "printf.h"

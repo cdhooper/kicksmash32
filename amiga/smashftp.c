@@ -58,8 +58,8 @@ typedef unsigned long  uint32_t;
 typedef struct { unsigned long hi; unsigned long lo; } uint64_t;
 #define __packed
 #else
-struct ExecBase *DOSBase;
-struct Device   *TimerBase;
+struct DosLibrary *DOSBase;
+struct Device     *TimerBase;
 #endif
 
 static BPTR save_currentdir = 0;

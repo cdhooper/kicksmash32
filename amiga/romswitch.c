@@ -42,6 +42,7 @@
 #include <inline/intuition.h>
 #include <inline/gadtools.h>
 #include <inline/graphics.h>
+#include <inline/macros.h>
 
 #include <utility/utility.h>  // UTILITYNAME
 #endif
@@ -173,7 +174,7 @@ const char RomID[]   = "romswitch 1.5 (2025-02-23)\r\n";
 
 struct GfxBase *GfxBase;
 struct Library *GadToolsBase;
-struct Library *IntuitionBase;
+struct IntuitionBase *IntuitionBase;
 static APTR visualInfo;
 static struct Screen *screen;
 static struct Window *window;
@@ -2283,7 +2284,7 @@ main_func(void)
 
 #ifndef STANDALONE
     GfxBase = (struct GfxBase *)OpenLibrary("graphics.library", 0);
-    IntuitionBase = OpenLibrary("intuition.library", 0);
+    IntuitionBase = (struct IntuitionBase *)OpenLibrary("intuition.library", 0);
 
     InitResident(FindResident("gadtools.library"), 0);
     GadToolsBase = OpenLibrary("gadtools.library", 36);
@@ -2308,7 +2309,7 @@ main_func(void)
     cleanup_screen();
 
 #ifndef STANDALONE
-    CloseLibrary(IntuitionBase);
+    CloseLibrary((struct Library *)IntuitionBase);
     CloseLibrary((struct Library *)GfxBase);
     CloseLibrary(GadToolsBase);
 #endif

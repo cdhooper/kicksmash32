@@ -77,6 +77,8 @@
 #include <exec/types.h>
 #include <inline/exec.h>
 #include <inline/dos.h>
+#include <inline/macros.h>
+
 extern struct ExecBase *SysBase;
 extern struct DosLibrary *DOSBase;
 

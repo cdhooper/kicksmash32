@@ -48,9 +48,9 @@ typedef unsigned long  uint32_t;
 typedef struct { unsigned long hi; unsigned long lo; } uint64_t;
 #define __packed
 #else
-struct ExecBase *DOSBase;
-struct Device   *TimerBase;
-static struct    timerequest TimeRequest;
+struct DosLibrary *DOSBase;
+struct Device     *TimerBase;
+static struct timerequest TimeRequest;
 #endif
 
 /*
