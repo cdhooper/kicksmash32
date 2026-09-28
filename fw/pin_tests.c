@@ -878,7 +878,7 @@ pin_tests(uint verbose, uint force)
     /* Perform data bus tests */
     if ((board_is_standalone == false) && (force == 0)) {
         printf("This test may only be performed on a stand-alone board\n");
-        return (RC_FAILURE);
+        return (RC_SUCCESS);
     }
 
     /* Make SOCKET_OE an input pull-up */

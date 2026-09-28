@@ -48,6 +48,7 @@ void
 main_poll(void)
 {
     usb_poll();
+    adc_poll(true, false);
     ee_poll();
     kbrst_poll();
     config_poll();

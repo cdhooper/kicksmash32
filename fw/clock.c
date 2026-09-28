@@ -112,7 +112,7 @@ static const struct rcc_clock_scale rcc_clock_config_gd32f1 = {
     .hpre             = RCC_CFGR_HPRE_NODIV,           // 120 / 1 = 120 MHz Core
     .ppre1            = RCC_CFGR_PPRE_DIV2,            // 120 / 2 = 60 MHz APB1
     .ppre2            = RCC_CFGR_PPRE_NODIV,           // 120 / 1 = 120 MHz APB2
-    .adcpre           = RCC_CFGR_ADCPRE_DIV8,          // 120 / 8 = 15 MHz ADC
+    .adcpre           = 3,                             // +bit28 = /16 = 7.5 MHz
     .usbpre           = 0,                             // +bit23 = /2.5
 
     .flash_waitstates = 2,
@@ -177,6 +177,7 @@ clock_init(void)
         rcc_clock_config = &rcc_clock_config_gd32f1;
         RCC_CFGR |= (1 << 23);  // GD32F1xx /2 or /2.5 for USB clock
 #ifdef GD32F107_120M
+        RCC_CFGR |= (1 << 28);  // GD32F1xx ADC / 16 (111) = 7.5 MHz
         RCC_CFGR |= (1 << 29);  // GD32F1xx x30 (11101) when pll_mul == 0xd
 #endif
         is_gd32 = 1;

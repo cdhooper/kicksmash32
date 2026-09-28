@@ -37,15 +37,18 @@
 #define TEMP_AVGSLOPE      43        // 4.3 mV/C
 #define SCALE_VREF         12000000  // 1.20V
 
-#define GD32_TEMP_V25      1450      // 1.45V GD32F107 datasheet
+/* GD32F107 datasheet Table 4-25: V25 = 1.45 V, Avg_Slope = 4.1 mV/°C.
+ * VREFINT is also typically 1.20 V (same as STM32F1). */
+#define GD32_TEMP_V25      1450      // 1.45V
 #define GD32_TEMP_AVGSLOPE 41        // 4.1 mV/C
-#define GD32_SCALE_VREF    12000000  // 1.20V
+#define GD32_SCALE_VREF    11700000  // 1.17V observed (datasheet says 1.20V)
 
 #else
 #error STM32 architecture temp sensor slopes must be known
 #endif
 
-#define V3P3_DIVIDER_SCALE 2 / 10000 // (1k / 1k)
+#define V5_EXPECTED_MV     5000      // 5V expressed as millivolts
+#define V5_DIVIDER         2         // (1k / 1k)
 
 #include <libopencm3/stm32/adc.h>
 #include <libopencm3/stm32/dac.h>
@@ -59,40 +62,33 @@
 static const uint8_t channel_defs[] = {
     ADC_CHANNEL_VREF,  // 0: Vrefint (used to calibrate other readings
     ADC_CHANNEL_TEMP,  // 1: Vtemp Temperature sensor
-#if 0
-    8,                 // 2: PB0 - V5          (1k/1k divider)
-    3,                 // 2: PA3 - EEPROM V10  (10k/1k divider)
-    1,                 // 3: PA1 - V3P3        (1k/1k divider)
-    14,                // 4: PC4 - V5          (1k/1k divider)
-    15,                // 5: PC5 - EEPROM V5CL (1k/1k divider)
-    2,                 // 6: PA2 - V10FB (V10 feedback for regulator)
-#endif
+    9,                 // 2: PB1 - V5          (1k/1k divider)
 };
 
-#if 0
 typedef struct {
     uint32_t gpio_port;
     uint16_t gpio_pin;
 } channel_gpio_t;
 static const channel_gpio_t channel_gpios[] = {
+    { GPIOB, GPIO1 },  // PB1 - V5
 };
-#endif
 
 #define CHANNEL_COUNT ARRAY_SIZE(channel_defs)
 
 /* Buffer to store the results of the ADC conversion */
 static volatile uint16_t adc_buffer[CHANNEL_COUNT];
 
+static uint avg_v5 = 0;
+int8_t v5_stable = false;
+
 static void
 adc_enable(void)
 {
-#if 0
     int p;
     for (p = 0; p < ARRAY_SIZE(channel_gpios); p++) {
         gpio_setmode(channel_gpios[p].gpio_port, channel_gpios[p].gpio_pin,
                      GPIO_SETMODE_INPUT_ANALOG);
     }
-#endif
 }
 
 void
@@ -198,6 +194,31 @@ adc_get_scale(uint16_t adc0_value)
     return (scale);
 }
 
+static uint
+adc_calc_v5(uint16_t adcval, uint scale)
+{
+    uint calc_v5 = adcval * scale * V5_DIVIDER / 10000;
+    if (is_gd32 && (calc_v5 > 100))
+        calc_v5 -= 100;  // Odd +0.10 V offset with GD32F107
+    else
+        calc_v5 = 0;
+    return (calc_v5);
+}
+
+__attribute__((format(__printf__, 3, 4))) static void
+printf_reading(const char *prefix, int value, const char *fmt, ...)
+{
+    char buf[64];
+    va_list args;
+
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof (buf), fmt, args);
+    va_end(args);
+
+    printf("%s", prefix);
+    print_reading(value, buf);
+}
+
 void
 adc_show_sensors(void)
 {
@@ -222,19 +243,18 @@ adc_show_sensors(void)
      * Temperature sensor formula
      *      Temp = (V25 - VSENSE) / Avg_Slope + 25
      *
-     *           STM32F407               STM32F1xx
-     *      V25  0.76V                   1.43V
-     * AvgSlope  2.5                     4.3
-     * Calc      * 10000 / 25 - 279000   * 10000 / 43 - 279000
+     *           STM32F407     STM32F1xx     GD32F107
+     *      V25  0.76V         1.41V         1.45V
+     * AvgSlope  2.5           4.3           4.1
      *
-     * Channel order (STM32F1):
+     * Channel order (STM32F1 / GD32F107):
      *     adc_buffer[0] = Vrefint
      *     adc_buffer[1] = Vtemperature
      *     adc_buffer[2] = 5V sense / 2
      *
      * Algorithm:
-     *  * Vrefint tells us what 1.21V (STM32F407) or 1.20V (STM32F1xx) should
-     *  be according to ADCs.
+     *  * Vrefint tells us what 1.21V (STM32F407) or 1.20V (STM32F1/GD32)
+     *    should be according to the ADC.
      *  1. scale = 1.2 / adc_buffer[0]
      *          Because: reading * scale = 1.2V
      *  2. Report V5:
@@ -245,12 +265,97 @@ adc_show_sensors(void)
 
     uint calc_temp;
     uint calc_vref;
-    calc_temp = ((int)(TEMP_V25 * 10000 - adc[1] * scale)) / TEMP_AVGSLOPE +
-                TEMP_BASE;
-    calc_vref = adc[0] * 3300 / 4096;
+    uint calc_v5;
+    if (is_gd32) {
+        calc_temp = ((int)(GD32_TEMP_V25 * 10000 - adc[1] * scale)) /
+                    GD32_TEMP_AVGSLOPE + TEMP_BASE;
+    } else {
+        calc_temp = ((int)(TEMP_V25 * 10000 - adc[1] * scale)) /
+                    TEMP_AVGSLOPE + TEMP_BASE;
+    }
 
-    printf("Vrefint=%04x scale=%-4u ", adc[0], scale);
-    print_reading(calc_vref, "V\n");
-    printf("  Vtemp=%04x %8u   ", adc[1], adc[1] * scale);
-    print_reading(calc_temp, "C\n");
+    /* Should be close to Vref, as average of adc[0] is used to compute scale */
+    calc_vref = adc[0] * scale / 10000;
+
+    /*
+     * Calibrated VDDA from internal VREFINT (nominally 1.20 V).
+     *   VDDA = VREFINT_NOM * 4096 / adc[0]
+     * Using the running scale factor:
+     *   VDDA_mV = scale * 4096 / 10000
+     */
+    uint calc_vdda = scale * 4096 / 10000;
+    calc_v5 = adc_calc_v5(adc[2], scale);
+
+    printf("Sensor     Reading  Calculation\n");
+    printf_reading("Vrefint    ", calc_vref,
+                   "V   ADC=%04x scale=%-4u\n", adc[0], scale);
+    printf_reading("3.3 V      ", calc_vdda, "V\n");
+
+    if (config.board_rev >= 2) {
+        printf_reading("5.0 V      ", calc_v5,
+                       "V   ADC=%04x %8u\n", adc[2], adc[2] * scale);
+        printf_reading("5.0 V avg  ", avg_v5, "V\n");
+    }
+
+    if (adc[1] != 0xfff) {
+        /* GD32F107 temperature sensor doesn't seem to work */
+        printf_reading("Die Temp   ", calc_temp,
+                       "C   ADC=%04x %8u\n", adc[1], adc[1] * scale);
+    }
+}
+
+/*
+ * adc_poll() will monitor the 5V sensor.
+ */
+void
+adc_poll(int verbose, int force)
+{
+    uint            calc_v5;
+    uint            scale;
+    uint            v5_max;
+    int             v5_good = false;
+    uint16_t        adc[CHANNEL_COUNT];
+    static uint8_t  deglitch = 0;
+    static uint64_t next_check = 0;
+
+    if ((timer_tick_has_elapsed(next_check) == false) && (force == false))
+        return;
+    next_check = timer_tick_plus_msec(1);  // Limit rate to prevent overshoot
+
+    memcpy(adc, (void *)adc_buffer, sizeof (adc_buffer));
+    scale = adc_get_scale(adc[0]);
+    calc_v5 = adc_calc_v5(adc[2], scale);
+
+    if (calc_v5 > 5800)
+        printf("ADC bad read %d %04x\n", calc_v5, adc[2]);
+    if (avg_v5 == 0)
+        avg_v5 = calc_v5;
+    else
+        avg_v5 += ((int)calc_v5 - (int)avg_v5) / 4;
+
+    /*
+     * GD32F107 has been observed to report higher ADC readings than
+     * STM32F107 with the same hardware; keep a more tolerant upper limit.
+     */
+    if (is_gd32)
+        v5_max = 5800;  // 5.80V
+    else
+        v5_max = 5400;  // 5.40V
+
+    if ((avg_v5 < 4250) || (avg_v5 > v5_max)) {  // 4.25V minimum
+        v5_good = false;
+    } else {
+        v5_good = true;
+    }
+
+    if (v5_stable != v5_good) {
+        if (deglitch == 0) {
+            v5_stable = v5_good;
+        } else {
+            deglitch--;
+            next_check = 0;
+        }
+    } else {
+        deglitch = 3;
+    }
 }

@@ -687,8 +687,12 @@ rc_t
 parse_value(const char *arg, uint8_t *value, uint width)
 {
     size_t pos    = 0;
-    size_t arglen = strlen(arg);
+    size_t arglen;
 
+    if ((arg[0] == '0') && (arg[1] == 'x'))
+        arg += 2;
+
+    arglen = strlen(arg);
     for (pos = 0; pos < arglen; pos++) {
         char ch      = arg[arglen - pos - 1];
         uint digit   = ascii_hex_to_digit(ch);
