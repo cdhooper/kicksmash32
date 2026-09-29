@@ -18,6 +18,8 @@
 #include "config.h"
 #include "power.h"
 #include "pin_tests.h"
+#include "timer.h"
+#include "led.h"
 
 /**
  * button_poll() polls the buttons for state changes.
@@ -29,7 +31,6 @@ void
 button_poll(void)
 {
     static bool pressed_dfu  = false;
-    static bool pressed_user = false;
 
     if (gpio_get(BOOT0_PORT, BOOT0_PIN)) {
         if (pressed_dfu == false) {
@@ -46,17 +47,36 @@ button_poll(void)
     }
 
     if (gpio_get(USER_BUTTON_PORT, USER_BUTTON_PIN)) {
-        if (pressed_user == false) {
-            pressed_user = true;
-            printf("Pressed user\n");
+        uint toggle = 0;
+        printf("Pressed user: ");
+        if (smash_test_running) {
+            if (smash_test_passes != 0xffffffff) {
+                smash_test_passes = 0xffffffff;
+                printf("Running test indefinitely\n");
+            } else {
+                smash_test_passes = 0;  // Stop test
+                printf("Stopping test\n");
+            }
+        } else {
+            /* Initiate a Kicksmash test */
+            printf("Running test\n");
+        }
+
+        /* Wait for release */
+        while (gpio_get(USER_BUTTON_PORT, USER_BUTTON_PIN)) {
+            led_status(toggle);
+            toggle ^= 1;
+            if (toggle)
+                timer_delay_msec(100);
+            else
+                timer_delay_msec(30);
+        }
+
+        led_status(0);
+        if (smash_test_running == 0) {
             /* Initiate a Kicksmash test */
             pin_tests(1, 1);
         }
-    } else {
-        if (pressed_user) {
-            printf("Released user\n");
-        }
-        pressed_user = false;
     }
 }
 

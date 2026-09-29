@@ -20,6 +20,7 @@
 #include "utils.h"
 #include "config.h"
 #include "usb.h"
+#include "button.h"
 #include "cmdline.h"
 #include "led.h"
 #include "power.h"
@@ -28,6 +29,8 @@
 #include <libopencm3/stm32/timer.h>
 
 uint8_t  board_is_standalone = 0;
+uint     smash_test_running  = 0;
+uint     smash_test_passes   = 5;
 
 #define NUM_DATA_ADDR_PINS (32 + 20)
 
@@ -426,12 +429,19 @@ static uint
 message_test_kicksmash(void)
 {
     uint pass;
-    for (pass = 0; pass < 5; pass++) {
+    smash_test_passes = 8;
+    smash_test_running = 1;
+    for (pass = 0; pass < smash_test_passes; pass++) {
+        printf("Pass %u\n", pass + 1);
         usb_poll();
         ee_enable();
-        if (smash_test_only())
+        button_poll();
+        if (smash_test_only()) {
+            smash_test_running = 0;
             return (1);
+        }
     }
+    smash_test_running = 0;
     return (0);
 }
 

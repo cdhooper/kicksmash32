@@ -17,5 +17,7 @@ uint pin_tests(uint verbose, uint force);
 
 extern uint8_t board_is_standalone;  // Board is not in Amiga
 extern uint8_t kbrst_in_amiga;       // KBRST is connected
+extern uint    smash_test_running;   // Non-zero if test is active
+extern uint    smash_test_passes;    // Number of iterations of test to run
 
 #endif /* __PIN_TESTS_H */
