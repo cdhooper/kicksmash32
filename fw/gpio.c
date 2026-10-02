@@ -250,7 +250,7 @@ gpio_getmode(uint32_t GPIOx, uint pin)
  * ----------------
  * Convert the specified GPIO number to its respective port address.
  */
-static uint32_t
+uint32_t
 gpio_num_to_gpio(uint num)
 {
     static const uint32_t gpios[] = {
@@ -377,10 +377,10 @@ static const gpio_names_t gpio_names[] = {
     { "A19",        GPIO_B, 11 },
     { "OEWE",       GPIO_B, 9 },
     { "FLASH_OEWE", GPIO_B, 9 },
-    { "OE",         GPIO_B, 13 },
     { "FLASH_OE",   GPIO_B, 13 },
-    { "WE",         GPIO_B, 14 },
+    { "OE",         GPIO_B, 13 },
     { "FLASH_WE",   GPIO_B, 14 },
+    { "WE",         GPIO_B, 14 },
     { "RP",         GPIO_B, 1 },
     { "RB",         GPIO_B, 15 },
     { "SENSE_V5",   GPIO_B, 0 },
@@ -469,7 +469,7 @@ gpio_show(int whichport, int pins)
     uint print_all = (whichport < 0) && (pins == 0xffff);
 
     if (print_all) {
-        printf("Socket OE=PA0 LED=PB8 KBRST=PB4\n"
+        printf("Socket OE=PA0 LED=PB8 KBRST=PB4 EXT_OE=PB15\n"
                "Socket A0-A15=PC0-PC15 A13-A19=PA1-PA7 D31=PB12\n"
                "Flash  D0-D15=PD0-PD15 D16-D31=PE0-PE15\n"
                "Flash  A18=PB10 RP=PB1 RB=PB15\n"
@@ -578,6 +578,15 @@ gpio_assign(int whichport, int pins, const char *assign)
     for (mode = 0; mode < ARRAY_SIZE(gpio_mode_short); mode++) {
         if (strcasecmp(gpio_mode_short[mode], assign) == 0) {
             gpio_setmode(gpio, pins, mode);
+            return;
+        }
+    }
+    if (pins == 0xffff) {
+        int pos = 0;
+        uint value;
+        if ((sscanf(assign, "%x%n", &value, &pos) == 1) && (pos > 2)) {
+            /* At least two digits */
+            GPIO_ODR(gpio) = value;
             return;
         }
     }

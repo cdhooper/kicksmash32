@@ -198,10 +198,12 @@ static uint
 adc_calc_v5(uint16_t adcval, uint scale)
 {
     uint calc_v5 = adcval * scale * V5_DIVIDER / 10000;
-    if (is_gd32 && (calc_v5 > 100))
-        calc_v5 -= 100;  // Odd +0.10 V offset with GD32F107
-    else
-        calc_v5 = 0;
+    if (is_gd32) {
+        if (calc_v5 > 100)
+            calc_v5 -= 100;  // Odd +0.10 V offset with GD32F107
+        else
+            calc_v5 = 0;
+    }
     return (calc_v5);
 }
 
@@ -382,24 +384,25 @@ adc_poll(int verbose, int force)
                 gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
                 gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
                              GPIO_SETMODE_INPUT_PULLUPDOWN);
+                gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
                 gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN,
-                             GPIO_SETMODE_INPUT);
+                             GPIO_SETMODE_INPUT_PULLUPDOWN);
                 board_state &= ~BOARD_STATE_OFF;
             } else {
 power_is_off:
                 board_state |= BOARD_STATE_OFF;
-                gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
-                             GPIO_SETMODE_OUTPUT_PPULL_50);
-                if ((config.flags & CF_POWER_OFF_OLD) ||
-                    (config.board_rev >= 10)) {
+                if (config.flags & CF_POWER_OFF_OLD) {
                     /* Drive SOCKET_OE high */
+                    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
+                                 GPIO_SETMODE_OUTPUT_PPULL_2);
                     gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
-                } else {
-                    /* Drive FLASH_OE high and SOCKET_OE low */
+                } else if (config.board_rev < 10) {
+                    /* Drive FLASH_OE high and SOCKET_OE input */
+                    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
+                                 GPIO_SETMODE_INPUT);
                     gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
                     gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN,
                                  GPIO_SETMODE_OUTPUT_PPULL_50);
-                    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
 
                     /* Pull data pins low */
                     gpio_setv(FLASH_D0_PORT, 0xffff, 0);

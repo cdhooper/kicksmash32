@@ -556,7 +556,7 @@ pin_test_oewe(uint verbose)
         gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_OUTPUT_PPULL_2);
 
         gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 0);
-        gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+        gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_10);
     } else {
         /* Drive SOCKET_OE low */
         gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 0);
@@ -580,7 +580,7 @@ pin_test_oewe(uint verbose)
 
     /* Drive FLASH_OE high */
     gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
-    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_10);
 
     /* Enable OEWE (flash write LED turns on) */
     gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
@@ -734,9 +734,13 @@ pin_test_flash_data(uint verbose)
     uint     errs = 0;
     uint32_t floating = 0xffffffff;
 
+    /* Disable OEWE */
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 0);
+    gpio_setmode(FLASH_OEWE_PORT, FLASH_OEWE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+
     /* Set Flash to not drive data lines */
     gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
-    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_2);
+    gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_OUTPUT_PPULL_10);
 
     /* Pull up data lines */
     gpio_setmode(FLASH_D0_PORT, 0xffff, GPIO_SETMODE_INPUT_PULLUPDOWN);

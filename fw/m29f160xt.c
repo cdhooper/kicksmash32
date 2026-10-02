@@ -1195,11 +1195,13 @@ ee_test(void)
     const chip_blocks_t *cb2;
     const char *id1;
     const char *id2;
+    uint32_t check_mask;
     uint32_t part1;
     uint32_t part2;
     uint32_t val;
     uint64_t zerodata;
     uint pos;
+    uint check_base;
     int rc = 0;
 
     /* Verify flash parts can be identified */
@@ -1322,17 +1324,117 @@ ee_test(void)
         printf("\n");
 
     /*
-     * Put the flash in CFI Query mode. In this mode, the first
-     * 0x400 bytes should not shadow address 0x0. This allows code
-     * to test A1-A8. Maybe A1-A7 on some flash parts.
+     * Put the flash in CFI Query mode. In this mode, the vendor-specific
+     * structure is at words 0x0 - 0xf and CFI area starts at 0x10.
+     *
+     * ST M29F160FT
+     * 000000: 00010001 22d222d2 ffffffff ffffffff . . ."."........
+     * 000010: ffffffff ffffffff ffffffff ffffffff ................
+     * 000020: ffffffff ffffffff ffffffff ffffffff ................
+     * 000030: ffffffff ffffffff ffffffff ffffffff ................
+     * 000040: 00510051 00520052 00590059 00020002 Q Q R R Y Y . .
+     * 000050: 00000000 00400040 00000000 00000000     @ @
+     * 000060: 00000000 00000000 00000000 00450045             E E
+     * 000070: 00550055 00000000 00000000 00030003 U U         . .
+     * 000080: 00000000 000a000a 00000000 00040004             . .
+     * 000090: 00000000 00030003 00000000 00150015     . .     . .
+     * 0000a0: 00020002 00000000 00000000 00000000 . .
+     * 0000b0: 00040004 00000000 00000000 00400040 . .         @ @
+     * 0000c0: 00000000 00010001 00000000 00200020     . .
+     * 0000d0: 00000000 00000000 00000000 00800080             . .
+     * 0000e0: 00000000 001e001e 00000000 00000000     . .
+     * 0000f0: 00010001 ffffffff ffffffff ffffffff . . ............
+     * 000100: 00500050 00520052 00490049 00310031 P P R R I I 1 1
+     * 000110: 00300030 00000000 00020002 00010001 0 0     . . . .
+     * ...
+     * 000230: ffffffff 00410041 00340034 004b004b ....A A 4 4 K K
+     * 000240: 00430043 ffffffff 4e114e11 4e114e11 C C .....N.N.N.N
+     * 000250: ffffffff ffffffff ffffffff ffffffff ................
+     * ...
+     * 000340: bbbbbbbb b00ab00a ffffffff ffffffff .... . .........
+     * ...
+     * 000430: ffffffff ffffffff ffffffff ffffffff ................
+     * 000440: 00510051 00520052 00590059 00020002 Q Q R R Y Y . .
+     * 000450: 00000000 00400040 00000000 00000000     @ @
+     *
+     * ST M29W160EB
+     * 000000: 00200020 22492249 ffffffff ffffffff     I"I"........
+     * 000010: ffffffff ffffffff ffffffff ffffffff ................
+     * 000020: ffffffff ffffffff ffffffff ffffffff ................
+     * 000030: ffffffff ffffffff ffffffff ffffffff ................
+     * 000040: 00510051 00520052 00590059 00020002 Q Q R R Y Y . .
+     * 000050: 00000000 00400040 00000000 00000000     @ @
+     * 000060: 00000000 00000000 00000000 00270027             ' '
+     * 000070: 00360036 00000000 00000000 00040004 6 6         . .
+     * 000080: 00000000 000a000a 00000000 00040004             . .
+     * 000090: 00000000 00030003 00000000 00150015     . .     . .
+     * 0000a0: 00020002 00000000 00000000 00000000 . .
+     * 0000b0: 00040004 00000000 00000000 00400040 . .         @ @
+     * 0000c0: 00000000 00010001 00000000 00200020     . .
+     * 0000d0: 00000000 00000000 00000000 00800080             . .
+     * 0000e0: 00000000 001e001e 00000000 00000000     . .
+     * 0000f0: 00010001 ffffffff ffffffff ffffffff . . ............
+     * 000100: 00500050 00520052 00490049 00310031 P P R R I I 1 1
+     * 000110: 00300030 00000000 00020002 00010001 0 0     . . . .
+     * 000120: 00010001 00040004 00000000 00000000 . . . .
+     * 000130: 00000000 ffffffff ffffffff 00020002     ......... .
+     * 000140: ffffffff ffffffff ffffffff ffffffff ................
+     * ...
+     * 000240: 00440044 ffffffff 410a410a 410a410a D D .... A A A A
+     * ...
+     * 000340: 00000000 00000000 00000000 001e001e             . .
+     * ...
+     * 000430: ffffffff ffffffff ffffffff ffffffff ................
+     * 000440: 00510051 00520052 00590059 00020002 Q Q R R Y Y . .
+     * 000450: 00000000 00400040 00000000 00000000     @ @
+     * 000460: 00000000 00000000 00000000 00270027             ' '
+     *
+     * Fujitsu M29F160TE
+     * 000000: 00000000 00000000 00000000 00000000
+     * 000010: 00000000 00000000 00000000 00000000
+     * 000020: 00000000 00000000 00000000 00000000
+     * 000030: 00000000 00000000 00000000 00000000
+     * 000040: 00510051 00520052 00590059 00020002 Q Q R R Y Y . .
+     * 000050: 00000000 00400040 00000000 00000000     @ @
+     * 000060: 00000000 00000000 00000000 00450045             E E
+     * 000070: 00550055 00000000 00000000 00040004 U U         . .
+     * 000080: 00000000 000a000a 00000000 00050005             . .
+     * 000090: 00000000 00040004 00000000 00150015     . .     . .
+     * 0000a0: 00020002 00000000 00000000 00000000 . .
+     * 0000b0: 00040004 00000000 00000000 00400040 . .         @ @
+     * 0000c0: 00000000 00010001 00000000 00200020     . .
+     * 0000d0: 00000000 00000000 00000000 00800080             . .
+     * 0000e0: 00000000 001e001e 00000000 00000000     . .
+     * 0000f0: 00010001 00000000 00000000 00000000 . .
+     * 000100: 00500050 00520052 00490049 00310031 P P R R I I 1 1
+     * 000110: 00310031 00000000 00020002 00010001 1 1     . . . .
+     * 000120: 00010001 00040004 00000000 00000000 . . . .
+     * 000130: 00000000 00000000 00000000 00030003             . .
+     * 000140: 00510051 00520052 00590059 00020002 Q Q R R Y Y . .
+     * 000150: 00000000 00400040 00000000 00000000     @ @
+     *
+     * Other addresses at powers of 2 should not shadow address 0x10.
+     * This allows code to test the lower address pins on most parts.
      */
+    check_base = 0x10;
+    if ((part1 == 0x000422d2) || (part1 == 0x000422d2)) {
+        /* M29F160xE */
+        check_mask = 0x0000003f; // CFI wrap starts at A6
+    } else {
+        /* M29F160FT and M29W160EB */
+        check_mask = 0x000000ff;
+    }
     ee_cmd(0x55, 0x98);
-    ee_read(0, &zerodata, sizeof (zerodata));
-    for (pos = 1; pos < 8; pos++) {
+    ee_read(check_base, &zerodata, sizeof (zerodata));
+    check_mask &= ~check_base;
+    for (pos = 0; pos < 24; pos++) {
         uint64_t data;
-        ee_read(BIT(pos), &data, sizeof (data));
+        if ((check_mask & BIT(pos)) == 0)
+            continue;  // Not checking this bit
+        ee_read(check_base + BIT(pos), &data, sizeof (data));
         if (data == zerodata) {
-            printf("FAIL: CFI wrap at A%x\n", pos);
+            printf("FAIL: CFI wrap at A%d (%08x)\n", pos, data);
+            rc++;
         }
     }
 

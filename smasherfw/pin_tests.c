@@ -146,7 +146,7 @@ address_input(void)
 static uint
 pin_standalone_tests(uint verbose, uint force)
 {
-    return (0);
+    return (1);
 }
 
 static uint

@@ -230,12 +230,12 @@ prom_write(uint32_t addr, uint width, void *bufp)
         return (RC_BUSY);
 
     ee_enable();
-    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);  // Write LED on
     if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP))
         rc = prom_write_32(addr, width, bufp);
     else
         rc = prom_write_16(addr, width, bufp);
-    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 0);
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 0);  // Write LED off
     return (rc);
 }
 
@@ -249,12 +249,12 @@ prom_erase(uint mode, uint32_t addr, uint32_t len)
         return (RC_BUSY);
 
     ee_enable();
-    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);  // Write LED on
     if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP))
         rc = ee_erase(mode, addr >> 2, len >> 2, 1);
     else
         rc = ee_erase(mode, addr >> 1, len >> 1, 1);
-    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 0);
+    gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 0);  // Write LED off
     return (rc);
 #else
     return (RC_SUCCESS);

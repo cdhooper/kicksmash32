@@ -250,7 +250,7 @@ gpio_getmode(uint32_t GPIOx, uint pin)
  * ----------------
  * Convert the specified GPIO number to its respective port address.
  */
-static uint32_t
+uint32_t
 gpio_num_to_gpio(uint num)
 {
     static const uint32_t gpios[] = {
@@ -569,6 +569,15 @@ gpio_assign(int whichport, int pins, const char *assign)
     for (mode = 0; mode < ARRAY_SIZE(gpio_mode_short); mode++) {
         if (strcasecmp(gpio_mode_short[mode], assign) == 0) {
             gpio_setmode(gpio, pins, mode);
+            return;
+        }
+    }
+    if (pins == 0xffff) {
+        int pos = 0;
+        uint value;
+        if ((sscanf(assign, "%x%n", &value, &pos) == 1) && (pos > 2)) {
+            /* At least two digits */
+            GPIO_ODR(gpio) = value;
             return;
         }
     }
