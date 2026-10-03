@@ -16,6 +16,8 @@
 #ifndef _VECTORS_H
 #define _VECTORS_H
 
+#define INT_COUNTER(x)   (*VADDR32(RAM_BASE + 0x1000 + (x) * 4))
+
 void vectors_init(void *base);
 void irq_show_regs(uint which);
 

@@ -60,7 +60,6 @@ const char RomID[] = "$VER: KickSmash ROM Switcher "VERSION" (" BUILD_DATE" "BUI
 #define COUNTER2     (RAM_BASE + 0x1008)
 #define COUNTER3     (RAM_BASE + 0x100c)
 #define STACK_BASE   (RAM_BASE + 0x10000 - 4)
-#define GLOBALS_BASE (RAM_BASE + 0x30000)
 
 #define BACKGROUND_COLOR(x) *COLOR00 = (x)
 
@@ -127,9 +126,7 @@ globals_init(void)
     memcpy(globals, data_start, data_size);
     memset(globals + data_size, 0, bss_size);
 
-    globals += 0x7ffe;  // offset that gcc applies to a4-relative globals
-    __asm("move.l %0,a4" :: "r" (globals));  // set up globals pointer
-    __asm("move.l a4,0x100");  // save globals pointer at fixed location
+    GET_A4();  // set up the A4 globals pointer
 }
 
 __attribute__ ((section (".reset_hi")))
@@ -138,16 +135,19 @@ reset_hi(void)
 {
     const uint stack_base = STACK_BASE;
 
-    /* Delay for hardware init to complete */
-    __asm("move.w #0x100, d0 \n"
-          "0: dbra d0, 0b");
+    /* Disable interrupts */
+    __asm("move.w #0x2700,sr");
 
     /* Set up stack in low 64K of chipmem */
     __asm("move.l %0, sp" :: "r" (stack_base));
 
+    /* Delay for hardware init to complete */
+    __asm("move.w #0x100, d0 \n"
+          "0: dbra d0, 0b");
+
     /* Turn off ROM overlay (OVL) and make LED stay dim */
-    __asm("move.b #3, 0xbfe201 \n"  // Set CIA A DRA bit 0 and 1 as output
-          "move.b #2, 0xbfe001");   // Set CIA A PRA bit 0=OVL, bit 1=LED
+    __asm("move.b #3, 0xbfe201 \n\t" // Set CIA A DRA bit 0 and 1 as output
+          "move.b #2, 0xbfe001");    // Set CIA A PRA bit 0=OVL, bit 1=LED
 
     /* Green background color */
     __asm("move.w #0x0f0, 0xdff180");  // Set video background color to green
@@ -156,7 +156,7 @@ reset_hi(void)
 }
 
 int
-main_poll()
+main_poll(void)
 {
     if (cmdline())
         return (1);
@@ -168,17 +168,16 @@ main_poll()
 void __attribute__ ((noinline))
 setup(void)
 {
-    irq_disable();
+    vectors_init((void *)VECTORS_BASE);
     globals_init();
     BACKGROUND_COLOR(0x00f);  // Bright Blue background
     chipset_init_early();
-    vectors_init((void *)VECTORS_BASE);
+    *CIAA_PRA = 0x00;         // Set power LED bright
+    cpu_control_init();       // Get CPU type
+    cache_init();             // Enable cache
+    cache_flush();            // Flush cache
+    *ADDR32(0) = (uintptr_t) COLOR00;  // Help catch NULL pointer usage
     irq_enable();
-    *CIAA_PRA = 0x00;    // Set power LED bright
-    cpu_control_init();  // Get CPU type
-    cache_init();        // Enable cache
-    cache_flush();       // Flush cache
-    memset(ADDR8(0), 0xa5, 0x100);  // Help catch NULL pointer usage
     serial_init();
     serial_puts("\n\033[31m");
     serial_puts(RomID + 6);
@@ -192,14 +191,14 @@ setup(void)
 
     timer_init();
     serial_putc('D');
-    serial_init();  // Now that ECLK is known
+    serial_init();            // Now that ECLK is known
     serial_putc('E');
     audio_init();
     serial_putc('F');
     BACKGROUND_COLOR(0x008);  // Half Blue background
     serial_putc('G');
     keyboard_init();
-    serial_putc('J');
+    serial_putc('H');
     mouse_init();
     serial_putc('I');
     BACKGROUND_COLOR(0x004);  // Midnight Blue background
@@ -248,11 +247,7 @@ setup(void)
 void
 debug_cmdline(void)
 {
-    /* Set up globals (compile with -fbaserel for a4 to be globals pointer) */
-    uint8_t *globals = (uint8_t *) (GLOBALS_BASE);  // Globals begin at 192K
-    globals += 0x7ffe;  // offset that gcc applies to a4-relative globals
-    __asm("move.l %0,a4" :: "r" (globals));  // set up globals pointer
-    __asm("move.l a4,0x100");  // save globals pointer at fixed location
+    GET_A4();  // set up the A4 globals pointer
 
 //  globals_init();
 

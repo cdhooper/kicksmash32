@@ -45,9 +45,15 @@ typedef unsigned int uint;
 #define isalnum(x) (((x) >= ' ') || ((x) <= 'z'))
 #define isspace(x) (((x) == ' ') || ((x) == '\t'))
 
-#define SAVE_A4()         __asm("move.l a4,-(sp)")
-#define RESTORE_A4()      __asm("move.l (sp)+,a4")
-#define GET_A4()          __asm("move.l 0x100,a4")
+#define GLOBALS_BASE (RAM_BASE + 0x30000)
+#define GLOBALS_A4_OFF  0x7ffe    // Offset gcc applies to a4-relative globals
+#define GLOBALS_A4      (GLOBALS_BASE + GLOBALS_A4_OFF)
+
+#define SAVE_A4()       register void * _saved_a4; \
+                        __asm__ __volatile__("move.l a4,%0":"=g" (_saved_a4)::)
+#define RESTORE_A4()    __asm__ __volatile__("move.l %0,a4"::"g" (_saved_a4))
+#define GET_A4()        __asm__ __volatile__("lea %0,a4"::"m" \
+                                    (*(volatile char *) GLOBALS_A4) : "memory")
 
 #include <stddef.h>
 

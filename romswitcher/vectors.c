@@ -35,7 +35,7 @@
  *    0x00000100     [0x4] pointer to globals
  *    0x00000120    [0x50] register save area
  *    0x00000200   [0x100] vectors
- *    0x00001000    [0x80] runtime counters
+ *    0x00001000    [0x80] runtime interrupt counters
  *    0x00001080    [0x80] sprite data
  *    0x00001100  [0xff00] stack
  *    0x00010000 [0x10000] bsschip
@@ -45,20 +45,13 @@
  *    0x00030000 [0x10000] globals
  */
 
-#define COUNTER(x)   (*ADDR32(RAM_BASE + 0x1000 + (x) * 4))
-#define STACK_BASE   (RAM_BASE + 0x10000 - 4)
-#define GLOBALS_BASE (RAM_BASE + 0x10000)
-
 #define FULL_STACK_REGS 0x120
-#if 1
+
 /* Caution: Hard-coded addresses below */
 #define SAVE_FULL_FRAME() __asm("movem.l d0-d7/a0-a7,0x120\n\t" \
-                                "move.w 0(sp),0x160\n\t" \
-                                "move.l 2(sp),0x162\n\t" \
-                                "move.w 6(sp),0x166")
-#else
-#define SAVE_FULL_FRAME() __asm("movem.l d0-d7/a0-a7,0x120")
-#endif
+                                "move.w 0(sp),0x160\n\t" /* SR */ \
+                                "move.l 2(sp),0x162\n\t" /* PC */ \
+                                "move.w 6(sp),0x166")    /* Vect */
 
 typedef struct
 __attribute__((packed)) {
@@ -117,6 +110,8 @@ static const char *const vector_names[] = {
     "MC68851 Cfg",          // 57    0xe4      MC68851 PMMU Configuration Error
     "MC68851 Ill",          // 58    0xe8      MC68851 PMMU Illegal Operation
     "MC68851 Prt",          // 59    0xec      MC68851 PMMU Protocol Exception
+    "FPCP UEF",             // 60    0xf0      UEF / Unimplemented Eff Address
+    "Unimplemented Inst",   // 61    0xf4      Unimplemented Integer Instr (060)
                             // ...             Unassigned / reserved
                             // 64    0x100     User Defined Vector #0
                             // ...
@@ -148,433 +143,8 @@ get_vector_name(uint vector_offset)
     return (name);
 }
 
-
-static void Default(void);
-void reset_hi(void);
-__attribute__((noinline)) static void irq_debugger(uint mode);
-
-__attribute__((noinline))
 static void
-irq_debugger_msg(const char *msg)
-{
-    full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Warray-bounds"
-#if defined(__GNUC__) && (__GNUC__ >= 7)
-#pragma GCC diagnostic ignored "-Wstringop-overflow"
-#endif
-    memcpy(regs + 1, regs, sizeof (*regs));
-#pragma GCC diagnostic pop
-    printf(msg);
-    irq_debugger(1);
-}
-
-__attribute__ ((interrupt)) static void
-Default(void)
-{
-    char buf[40];
-    SAVE_A4();
-    GET_A4();
-    COUNTER(0)++;  // 0x1000
-    if (COUNTER(0) <= 5) {
-        uint32_t sp_reg;
-        uint16_t vector_offset;
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Warray-bounds"
-#if defined(__GNUC__) && (__GNUC__ >= 7)
-#pragma GCC diagnostic ignored "-Wstringop-overflow"
-#endif
-        full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
-        memcpy(regs + 1, regs, sizeof (*regs));
-        sp_reg = regs->a[7];
-        vector_offset = *ADDR16(sp_reg + 6) & 0xff;
-        if ((vector_offset < 0x60) ||
-            ((vector_offset >= 0x80) && (vector_offset < 0x100))) {
-            /* Fatal exception */
-            irq_debugger(1);
-        } else if (COUNTER(0) <= 3) {
-            irq_show_regs(1);
-        } else if (COUNTER(0) <= 20) {
-            sprintf(buf, "\n%s\n", get_vector_name(vector_offset));
-            serial_puts(buf);
-        }
-#pragma GCC diagnostic pop
-    }
-    RESTORE_A4();
-}
-
-__attribute__ ((interrupt)) void
-Audio(void)
-{
-    /* Clear audio interrupts */
-    *INTREQ = INTREQ_AUD0 | INTREQ_AUD1 | INTREQ_AUD2 | INTREQ_AUD3;
-//  *INTENA = INTENA_AUD0 | INTENA_AUD1 | INTENA_AUD2 | INTENA_AUD3; // Disable
-
-    SAVE_A4();
-    GET_A4();
-    COUNTER(4)++;  // 0x1010
-    audio_handler();
-    RESTORE_A4();
-}
-
-__attribute__ ((interrupt)) void
-DiskBlk(void)
-{
-    COUNTER(1)++;  // 0x1004
-//  Default();
-}
-
-__attribute__ ((interrupt)) void
-Ports(void)
-{
-    uint8_t st;
-    *INTREQ  = INTREQ_PORTS;  // clear interrupt
-    st = *CIAA_ICR;
-
-    COUNTER(2)++;  // 0x1008
-
-    /*
-     * If additional interrupts are handled by this routine in the
-     * future, keyboard_irq() will need to change because it's
-     * greedy with spin loops.
-     */
-    if (st & CIA_ICR_TA) {
-        *CIAA_ICR = CIA_ICR_TA;  // Disable Timer interrupt
-        *COLOR00 = 0xdcc;  // Yellow background !YAY DEBUG!
-    }
-    if (st & CIA_ICR_SP) {
-        /* Keyboard serial input */
-        SAVE_A4();
-        GET_A4();
-        keyboard_irq();
-        RESTORE_A4();
-    }
-}
-
-__attribute__ ((interrupt)) static void
-VBlank(void)
-{
-    SAVE_A4();
-    GET_A4();
-
-    static uint16_t mouse_quad_last = 0xffff;
-    uint16_t mouse_quad_cur;
-    static uint8_t cop_miss;
-
-    /*
-     * The main job of this function is to the reset the bitplane and
-     * sprite DMA pointers. This operation must be done at each vertical
-     * blank. These two operations are also done by the Copper. It is
-     * implemented this way in the ROM Switcher so that if either interrupt
-     * service stops (CPU hang) or the Copper stops (Agnus register
-     * corruption or severe memory fetch failures) that video continues
-     * to be updated.
-     */
-    if (*ADKCONR & 0x0400) {
-        /* Copper is running */
-        *ADKCON = 0x0400;  // Clear "Copper is alive"
-        cop_miss = 0;
-        *COLOR01 = 0x000;  // Black when VBlank and Copper are working
-    } else {
-        /*
-         * A single miss is normal on a fast CPU: this handler can run
-         * before the Copper has reached its "alive" write in the current
-         * frame, right after having cleared the previous frame's flag.
-         * Two misses in a row mean the Copper really stopped. The counter
-         * saturates so a long outage cannot wrap it back to a single miss.
-         * Either way this handler ran, so override the Copper's Dark
-         * Violet unless the Copper is gone.
-         */
-        if (cop_miss < 2)
-            cop_miss++;
-        *COLOR01 = (cop_miss >= 2) ? 0x721 : 0x000;  // Copper color when Copper is not working
-    }
-
-    /* Bitplane pointers are normally updated by the Copper */
-    *BPL1PT = BITPLANE_0_BASE;  // Bitplane 0 base address
-    *BPL2PT = BITPLANE_1_BASE;  // Bitplane 1 base address
-    *BPL3PT = BITPLANE_2_BASE;  // Bitplane 2 base address
-
-    *INTREQ = INTREQ_VERTB;
-    COUNTER(3)++;  // 0x100c
-
-    uint32_t sr = irq_disable();
-    uint16_t cur = eclk_ticks();
-    uint16_t diff = eclk_last_update - cur;
-    timer_tick_base += diff;
-    eclk_last_update = cur;
-    irq_restore(sr);
-
-    int8_t move_x;
-    int8_t move_y;
-    mouse_quad_cur = *VADDR16(JOY0DAT);  // mouse X and Y counters
-    if (mouse_quad_last == 0xffff)
-        mouse_quad_last = mouse_quad_cur;
-    move_x = (mouse_quad_cur & 0xff) - (mouse_quad_last & 0xff);
-    move_y = (mouse_quad_cur >> 8) - (mouse_quad_last >> 8);
-    mouse_x += move_x * 2;
-    mouse_y += move_y;
-    if (mouse_x < 0)
-        mouse_x = 0;
-    if (mouse_x > SCREEN_WIDTH - 1)
-        mouse_x = SCREEN_WIDTH - 1;
-    if (mouse_y < 0)
-        mouse_y = 0;
-    if (mouse_y > SCREEN_HEIGHT + 8)
-        mouse_y = SCREEN_HEIGHT + 8;
-    mouse_quad_last = mouse_quad_cur;
-
-    /*
-     * The first 32-bit word of the sprite data:
-     *     Bit 31-24  Bits 0-7 of VSTART
-     *     Bit 16-23  Bits 1-8 of HSTART
-     *     Bit 15-8   Bits 0-7 of VSTOP
-     *     Bit 7      Attach this odd # sprite to previous even # sprite
-     *     Bit 6-3    Unused
-     *     Bit 2      Bit 8 of VSTART
-     *     Bit 1      Bit 8 of VSTOP
-     *     Bit 0      Bit 0 of HSTART
-     */
-
-    /* Position mouse pointer */
-    uint x_start = mouse_x / 2 + 0x80 + MOUSE_SPRITE_XOFFSET;
-    uint y_start = mouse_y + 0x2c;
-    uint y_end   = y_start + MOUSE_SPRITE_HEIGHT;
-
-    /* Mouse pointer */
-    if (sprite0_data != NULL) {
-        sprite0_data[0] = sprite_calcpos(x_start, y_start, y_end);
-
-        /* Position cursor */
-        if (cursor_visible) {
-            if (cursor_visible == 1) {
-                x_start = cursor_x_start / 2 + cursor_x * 4 + 0x80;
-                y_start = cursor_y_start + cursor_y * 8 + 0x2c;
-            } else {
-                x_start = dbg_cursor_x * 4 + 0x80;
-                y_start = dbg_cursor_y * 8 + 0x2c;
-            }
-            y_end = y_start + 8;
-            sprite1_data[0] = sprite_calcpos(x_start, y_start, y_end);
-        } else {
-            sprite1_data[0] = 0x00000000;
-        }
-
-        /* Sprite pointers are normally updated by the Copper */
-        *SPR0PTH = (uintptr_t) sprite0_data;
-        *SPR1PTH = (uintptr_t) spritex_data;
-        *SPR2PTH = (uintptr_t) sprite1_data;
-        *SPR3PTH = (uintptr_t) spritex_data;
-        *SPR4PTH = (uintptr_t) spritex_data;
-        *SPR5PTH = (uintptr_t) spritex_data;
-        *SPR6PTH = (uintptr_t) spritex_data;
-        *SPR7PTH = (uintptr_t) spritex_data;
-    }
-
-    if (vblank_ints++ > 180) {  // 3 seconds
-        irq_debugger_msg("\nStuck?\n");
-    }
-    RESTORE_A4();
-}
-
-/*
- * Null copper list
- *
- * cp = null_mode_copper_list = alloc_chipmem(sizeof(cop_t) * 4);
- * CMOVE(cp, R_COLOR00, 0x0000);   // background is black
- * CMOVE(cp, R_BPLCON0, 0x0000);   // no planes to fetch from
- * CWAIT(cp, 255, 255);    // COPEND
- * CWAIT(cp, 255, 255);    // COPEND really
- *
- * // install this list and turn DMA on
- * custom.cop1lc = PREP_DMA_MEM(null_mode_copper_list);
- * custom.copjmp1 = 0;
- * custom.dmacon = DMAF_SETCLR | DMAF_MASTER | DMAF_RASTER | DMAF_COPPER;
- */
-
-/* Serial() is Amiga interrupt L5 (Serial RBF, DSKSYNC) */
-__attribute__ ((interrupt)) void
-Serial(void)
-{
-    SAVE_A4();
-    GET_A4();
-    COUNTER(5)++;  // 0x1014
-    serial_poll();
-    RESTORE_A4();
-}
-
-/*
- * NMI() is Amiga interrupt L7 (Non-Maskable Interrupt)
- */
-__attribute__ ((interrupt)) void
-NMI(void)
-{
-    COUNTER(7)++;  // 0x101c
-    Default();
-}
-
-#if 0
-/*
- * Int6() handles interrupts from CIAB, among other CPU INT6 sources
- */
-__attribute__ ((interrupt)) void
-Int6(void)
-{
-    irq_debugger_msg("Int6\n");
-    reset_cpu();
-}
-#endif
-
-#define VECTOR_WRAP(func) void _##func(void) { SAVE_FULL_FRAME(); func(); }
-#define VECTOR(func) _##func
-
-VECTOR_WRAP(Audio);
-VECTOR_WRAP(VBlank);
-VECTOR_WRAP(DiskBlk);
-VECTOR_WRAP(Ports);
-VECTOR_WRAP(Serial);
-VECTOR_WRAP(NMI);
-VECTOR_WRAP(Default);
-
-/*
- *  Vector Address Function  Description
- *  0      0                 Reset initial SP
- *  1      4       reset_hi  Reset initial PC
- *  2      8       BusErr    Bus Error
- *  3      c       AddrErr   Address Error
- *  4      10      IllInst   Illegal Instruction
- *  5      14      DivZero   Divide by Zero
- *  6      18      ChkInst   Check Instruction (CHK, CHK2)
- *  7      1c      TrapV     Trap Vector (cpTRAPcc, TRAPcc, TRAPV)
- *  8      20      PrivVio   Privilege Violation
- *  9      24      Trace     Instruction Trace
- *  10     28      ExLineA   Unimplemented Instruction (FPU line A)
- *  11     2c      ExLineF   Unimplemented Instruction (FPU line F)
- *  12     30      ?         Unassigned
- *  13     34      CopErr    Coprocessor Protocol Violation
- *  14     38      FmtErr    Format Error
- *  15     3c      UninitI   Uninitialized Interrupt
- *  ...                      Unassigned / reserved
- *  24     60      SpurIRQ   Spurious Interrupt (TBE)
- *  25     64      DiskBlk   L1 (DSKBLK, SOFTINT)
- *  26     68      Ports     L2 (CIA-A, Zorro, onboard SCSI)
- *  27     6c      VBlank    L3 (VERTB, COPER, BLIT)
- *  28     70      Audio     L4 (AUD0, AUD1, AUD2, AUD3)
- *  29     74      Serial    L5 (Serial RBF, DSKSYNC)
- *  30     78      Int6      L6 (EXTER / INTEN, CIA-B)
- *  31     7c      NMI       L7 NMI
- *  32     80                Trap #0
- *  ...                      Traps #1..#6
- *  39     9c                Trap #7 - generated by gcc for NULL dereference
- *  ...                      Traps #8..#14
- *  47     bc                Trap #15
- *  48     c0                FPCP Branch or Set on Unordered Condition
- *  49     c4                FPCP Inexact Result
- *  50     c8                FPCP Divide by Zero
- *  51     cc                FPCP Underflow
- *  52     d0                FPCP Operand Error
- *  53     d4                FPCP Overflow
- *  54     d8                FPCP Signaling NAN
- *  55     dc                Unassigned / reserved
- *  56     e0                MMU Configuration Error
- *  57     e4                MC68851-specific
- *  58     e8                MC68851-specific
- *  ...                      Unassigned / reserved
- *  64     100               User Defined Vector #0
- *  ...
- *  255    3fc               User Defined Vector #191
- */
-#define INITSP (void *)0x80000
-
-__attribute__ ((section (".text")))
-const void *vectors[] =
-{
-    INITSP,          reset_hi,        VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(DiskBlk), VECTOR(Ports),   VECTOR(VBlank),
-    VECTOR(Audio),   VECTOR(Serial),  VECTOR(Default), VECTOR(NMI),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default),
-};
-
-void
-vectors_init(void *base)
-{
-#undef VECTOR_BASE_IN_RAM
-#ifdef VECTOR_BASE_IN_RAM
-    memcpy(base, vectors, sizeof (vectors));
-    __asm("movec %0,VBR" :: "r" (base));  // Set up vector base in RAM
-#else
-    (void) base;
-    __asm("movec %0,VBR" :: "r" (vectors));  // Set up vector base in ROM
-#endif
-
-    memset(ADDR32(0x1000), 0, 0x20);  // Wipe interrupt counters
-}
-
-void
-irq_show_regs(uint which)
+irq_show_regs_at(full_stack_regs_t *regs)
 {
     uint32_t *sp;
     uint32_t sp_reg;
@@ -583,9 +153,7 @@ irq_show_regs(uint which)
     uint16_t vector_offset;
     uint reg;
     uint x;
-    full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
-    if (which != 0)
-        regs++;
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #if defined(__GNUC__) && (__GNUC__ >= 7)
@@ -700,39 +268,487 @@ irq_show_regs(uint which)
     printf("\n");
 }
 
-__attribute__((noinline))
-static void
-irq_debugger(uint mode)
+void
+irq_show_regs(uint which)
 {
-    extern uint8_t serial_active;
-    full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
+    full_stack_regs_t *regs;
 
+    if (which == 1)
+        regs = (full_stack_regs_t *)((uintptr_t) FULL_STACK_REGS) + 1;
+    else
+        regs = (full_stack_regs_t *)(uintptr_t) FULL_STACK_REGS;
+
+    irq_show_regs_at(regs);
+}
+
+static void Default(void);
+void reset_hi(void);
+__attribute__((noinline)) void irq_debugger(full_stack_regs_t *regs);
+
+__attribute__ ((interrupt)) static void
+Except_report(void)
+{
     SAVE_A4();
     GET_A4();
+    INT_COUNTER(0)++;  // 0x1000
 
-    vblank_ints = 0;
-    serial_active = 1;
-
-    /*
-     * mode
-     * 0 - CPU regs need to be copied from save area
-     * 1 - CPU regs have already been copied from save area
-     * 2 - Partial CPU regs are on the stack
-     */
+    full_stack_regs_t *regsave = (void *)(uintptr_t) FULL_STACK_REGS;
+    full_stack_regs_t regs;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #if defined(__GNUC__) && (__GNUC__ >= 7)
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
 #endif
-    if (mode == 0)
-        memcpy(regs + 1, regs, sizeof (*regs));
-    regs++;
-    irq_show_regs(1);
-    printf("Forcing cmdline...\n");
-    debug_cmdline();
+    memcpy(&regs, regsave, sizeof (regs));  // Capture last frame
+#pragma GCC diagnostic pop
+    irq_debugger(&regs);
     RESTORE_A4();
-#if 0
-    /* Don't attempt to recover from exception */
-    reset_cpu();
+}
+
+/*
+ * Except() is the processor Exception handler vector.
+ */
+__attribute__ ((interrupt)) static void
+Except(void)
+{
+    full_stack_regs_t *regs = (void *)(uintptr_t) FULL_STACK_REGS;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#if defined(__GNUC__) && (__GNUC__ >= 7)
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
 #endif
+    memcpy(regs + 1, regs, sizeof (*regs));  // Capture regs to exception save
+#pragma GCC diagnostic pop
+    Except_report();
+}
+
+__attribute__ ((interrupt)) static void
+Default(void)
+{
+    INT_COUNTER(6)++;  // 0x1018
+    INT_COUNTER(8)++;  // 0x1020
+    if (INT_COUNTER(8) == 100) {
+        /*
+         * This counter is normally cleared by the regular polling loop.
+         * If the polling loop is not making progress, such as due to a
+         * spurious interrupt storm, then this counter will reach the
+         * limit which triggers entry here.
+         */
+        Except_report();
+    }
+}
+
+__attribute__ ((interrupt)) void
+Audio(void)
+{
+    /* Clear audio interrupts */
+    *INTREQ = INTREQ_AUD0 | INTREQ_AUD1 | INTREQ_AUD2 | INTREQ_AUD3;
+//  *INTENA = INTENA_AUD0 | INTENA_AUD1 | INTENA_AUD2 | INTENA_AUD3; // Disable
+
+    SAVE_A4();
+    GET_A4();
+    INT_COUNTER(4)++;  // 0x1010
+    audio_handler();
+    RESTORE_A4();
+}
+
+__attribute__ ((interrupt)) void
+DiskBlk(void)
+{
+    INT_COUNTER(1)++;  // 0x1004
+    Default();
+}
+
+__attribute__ ((interrupt)) void
+Ports(void)
+{
+    uint8_t st;
+    *INTREQ  = INTREQ_PORTS;  // clear interrupt
+    st = *CIAA_ICR;
+
+    INT_COUNTER(2)++;  // 0x1008
+
+    /*
+     * If additional interrupts are handled by this routine in the
+     * future, keyboard_irq() will need to change because it's
+     * greedy with spin loops.
+     */
+    if (st & CIA_ICR_TA) {
+        *CIAA_ICR = CIA_ICR_TA;  // Disable Timer interrupt
+        *COLOR00 = 0xdcc;  // Yellow background !YAY DEBUG!
+    }
+    if (st & CIA_ICR_SP) {
+        /* Keyboard serial input */
+        SAVE_A4();
+        GET_A4();
+        keyboard_irq();
+        RESTORE_A4();
+    }
+}
+
+__attribute__ ((interrupt)) static void
+VBlank(void)
+{
+    SAVE_A4();
+    GET_A4();
+
+    static uint16_t mouse_quad_last = 0xffff;
+    uint16_t mouse_quad_cur;
+    static uint8_t cop_miss;
+
+    /*
+     * The main job of this function is to the reset the bitplane and
+     * sprite DMA pointers. This operation must be done at each vertical
+     * blank. These two operations are also done by the Copper. It is
+     * implemented this way in the ROM Switcher so that if either interrupt
+     * service stops (CPU hang) or the Copper stops (Agnus register
+     * corruption or severe memory fetch failures) that video continues
+     * to be updated.
+     */
+    if (*ADKCONR & 0x0400) {
+        /* Copper is running */
+        *ADKCON = 0x0400;  // Clear "Copper is alive"
+        cop_miss = 0;
+        *COLOR01 = 0x000;  // Black when VBlank and Copper are working
+    } else {
+        /*
+         * A single miss is normal on a fast CPU: this handler can run
+         * before the Copper has reached its "alive" write in the current
+         * frame, right after having cleared the previous frame's flag.
+         * Two misses in a row mean the Copper really stopped. The counter
+         * saturates so a long outage cannot wrap it back to a single miss.
+         * Either way this handler ran, so override the Copper's Dark
+         * Violet unless the Copper is gone.
+         */
+        if (cop_miss < 2)
+            cop_miss++;
+
+        /* Assign copper color when Copper is not working */
+        *COLOR01 = (cop_miss >= 2) ? 0x721 : 0x000;
+    }
+
+    /* Bitplane pointers are normally updated by the Copper */
+    *BPL1PT = BITPLANE_0_BASE;  // Bitplane 0 base address
+    *BPL2PT = BITPLANE_1_BASE;  // Bitplane 1 base address
+    *BPL3PT = BITPLANE_2_BASE;  // Bitplane 2 base address
+
+    *INTREQ = INTREQ_VERTB;
+    INT_COUNTER(3)++;  // 0x100c
+
+    uint32_t sr = irq_disable();
+    uint16_t cur = eclk_ticks();
+    uint16_t diff = eclk_last_update - cur;
+    timer_tick_base += diff;
+    eclk_last_update = cur;
+    irq_restore(sr);
+
+    int8_t move_x;
+    int8_t move_y;
+    mouse_quad_cur = *VADDR16(JOY0DAT);  // mouse X and Y counters
+    if (mouse_quad_last == 0xffff)
+        mouse_quad_last = mouse_quad_cur;
+    move_x = (mouse_quad_cur & 0xff) - (mouse_quad_last & 0xff);
+    move_y = (mouse_quad_cur >> 8) - (mouse_quad_last >> 8);
+    mouse_x += move_x * 2;
+    mouse_y += move_y;
+    if (mouse_x < 0)
+        mouse_x = 0;
+    if (mouse_x > SCREEN_WIDTH - 1)
+        mouse_x = SCREEN_WIDTH - 1;
+    if (mouse_y < 0)
+        mouse_y = 0;
+    if (mouse_y > SCREEN_HEIGHT + 8)
+        mouse_y = SCREEN_HEIGHT + 8;
+    mouse_quad_last = mouse_quad_cur;
+
+    /*
+     * The first 32-bit word of the sprite data:
+     *     Bit 31-24  Bits 0-7 of VSTART
+     *     Bit 16-23  Bits 1-8 of HSTART
+     *     Bit 15-8   Bits 0-7 of VSTOP
+     *     Bit 7      Attach this odd # sprite to previous even # sprite
+     *     Bit 6-3    Unused
+     *     Bit 2      Bit 8 of VSTART
+     *     Bit 1      Bit 8 of VSTOP
+     *     Bit 0      Bit 0 of HSTART
+     */
+
+    /* Position mouse pointer */
+    uint x_start = mouse_x / 2 + 0x80 + MOUSE_SPRITE_XOFFSET;
+    uint y_start = mouse_y + 0x2c;
+    uint y_end   = y_start + MOUSE_SPRITE_HEIGHT;
+
+    /* Mouse pointer */
+    if (sprite0_data != NULL) {
+        sprite0_data[0] = sprite_calcpos(x_start, y_start, y_end);
+
+        /* Position cursor */
+        if (cursor_visible) {
+            if (cursor_visible == 1) {
+                x_start = cursor_x_start / 2 + cursor_x * 4 + 0x80;
+                y_start = cursor_y_start + cursor_y * 8 + 0x2c;
+            } else {
+                x_start = dbg_cursor_x * 4 + 0x80;
+                y_start = dbg_cursor_y * 8 + 0x2c;
+            }
+            y_end = y_start + 8;
+            sprite1_data[0] = sprite_calcpos(x_start, y_start, y_end);
+        } else {
+            sprite1_data[0] = 0x00000000;
+        }
+
+        /* Sprite pointers are normally updated by the Copper */
+        *SPR0PTH = (uintptr_t) sprite0_data;
+        *SPR1PTH = (uintptr_t) spritex_data;
+        *SPR2PTH = (uintptr_t) sprite1_data;
+        *SPR3PTH = (uintptr_t) spritex_data;
+        *SPR4PTH = (uintptr_t) spritex_data;
+        *SPR5PTH = (uintptr_t) spritex_data;
+        *SPR6PTH = (uintptr_t) spritex_data;
+        *SPR7PTH = (uintptr_t) spritex_data;
+    }
+
+    if (vblank_ints++ > 180) {  // 3 seconds
+        printf("\nStuck?\n");
+        full_stack_regs_t *regsave = (void *)(uintptr_t) FULL_STACK_REGS;
+        full_stack_regs_t regs;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#if defined(__GNUC__) && (__GNUC__ >= 7)
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
+        memcpy(&regs, regsave, sizeof (regs));  // Capture VBlank entry frame
+#pragma GCC diagnostic pop
+        irq_debugger(&regs);
+    }
+    RESTORE_A4();
+}
+
+/*
+ * Null copper list
+ *
+ * cp = null_mode_copper_list = alloc_chipmem(sizeof(cop_t) * 4);
+ * CMOVE(cp, R_COLOR00, 0x0000);   // background is black
+ * CMOVE(cp, R_BPLCON0, 0x0000);   // no planes to fetch from
+ * CWAIT(cp, 255, 255);    // COPEND
+ * CWAIT(cp, 255, 255);    // COPEND really
+ *
+ * // install this list and turn DMA on
+ * custom.cop1lc = PREP_DMA_MEM(null_mode_copper_list);
+ * custom.copjmp1 = 0;
+ * custom.dmacon = DMAF_SETCLR | DMAF_MASTER | DMAF_RASTER | DMAF_COPPER;
+ */
+
+/* Serial() is Amiga interrupt L5 (Serial RBF, DSKSYNC) */
+__attribute__ ((interrupt)) void
+Serial(void)
+{
+    SAVE_A4();
+    GET_A4();
+    INT_COUNTER(5)++;  // 0x1014
+    serial_poll();
+    RESTORE_A4();
+}
+
+/*
+ * NMI() is Amiga interrupt L7 (Non-Maskable Interrupt)
+ */
+__attribute__ ((interrupt)) void
+NMI(void)
+{
+    INT_COUNTER(7)++;  // 0x101c
+    Default();
+}
+
+#define VECTOR_WRAP(func)   __attribute__ ((interrupt)) \
+                            void _##func(void)          \
+                            {                           \
+                                SAVE_FULL_FRAME();      \
+                                func();                 \
+                            }
+#define VECTOR(func) _##func
+
+VECTOR_WRAP(Audio);
+VECTOR_WRAP(VBlank);
+VECTOR_WRAP(DiskBlk);
+VECTOR_WRAP(Ports);
+VECTOR_WRAP(Serial);
+VECTOR_WRAP(NMI);
+VECTOR_WRAP(Default);
+VECTOR_WRAP(Except);
+
+/*
+ *  Vector Address Function  Description
+ *  0      0                 Reset initial SP
+ *  1      4       reset_hi  Reset initial PC
+ *  2      8       BusErr    Bus Error
+ *  3      c       AddrErr   Address Error
+ *  4      10      IllInst   Illegal Instruction
+ *  5      14      DivZero   Divide by Zero
+ *  6      18      ChkInst   Check Instruction (CHK, CHK2)
+ *  7      1c      TrapV     Trap Vector (cpTRAPcc, TRAPcc, TRAPV)
+ *  8      20      PrivVio   Privilege Violation
+ *  9      24      Trace     Instruction Trace
+ *  10     28      ExLineA   Unimplemented Instruction (FPU line A)
+ *  11     2c      ExLineF   Unimplemented Instruction (FPU line F)
+ *  12     30      ?         Unassigned
+ *  13     34      CopErr    Coprocessor Protocol Violation
+ *  14     38      FmtErr    Format Error
+ *  15     3c      UninitI   Uninitialized Interrupt
+ *  ...                      Unassigned / reserved
+ *  24     60      SpurIRQ   Spurious Interrupt (TBE)
+ *  25     64      DiskBlk   L1 (DSKBLK, SOFTINT)
+ *  26     68      Ports     L2 (CIA-A, Zorro, onboard SCSI)
+ *  27     6c      VBlank    L3 (VERTB, COPER, BLIT)
+ *  28     70      Audio     L4 (AUD0, AUD1, AUD2, AUD3)
+ *  29     74      Serial    L5 (Serial RBF, DSKSYNC)
+ *  30     78      Int6      L6 (EXTER / INTEN, CIA-B)
+ *  31     7c      NMI       L7 NMI
+ *  32     80                Trap #0
+ *  ...                      Traps #1..#6
+ *  39     9c                Trap #7 - generated by gcc for NULL dereference
+ *  ...                      Traps #8..#14
+ *  47     bc                Trap #15
+ *  48     c0                FPCP Branch or Set on Unordered Condition
+ *  49     c4                FPCP Inexact Result
+ *  50     c8                FPCP Divide by Zero
+ *  51     cc                FPCP Underflow
+ *  52     d0                FPCP Operand Error
+ *  53     d4                FPCP Overflow
+ *  54     d8                FPCP Signaling NAN
+ *  55     dc                Unassigned / reserved
+ *  56     e0                MMU Configuration Error
+ *  57     e4                MC68851-specific PMMU Configuration Error
+ *  58     e8                MC68851-specific PMMU Illegal Operation
+ *  59     ec                MC68851-specific PMMU Protocol Exception
+ *  60     f0                FPCP UEF / Unimplemented Effective Address
+ *  61     f4                Unimplemented integer instruction (68060)
+ *  ...                      Unassigned / reserved
+ *  64     100               User Defined Vector #0
+ *  ...
+ *  255    3fc               User Defined Vector #191
+ */
+#define INITSP (void *)0x80000
+
+__attribute__ ((section (".text"), aligned(0x20)))
+const void *vectors[] =
+{
+    INITSP,          reset_hi,        VECTOR(Except),  VECTOR(Except),  // 0
+    VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  // 4
+    VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  // 8
+    VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  // 12
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 16
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 20
+    VECTOR(Default), VECTOR(DiskBlk), VECTOR(Ports),   VECTOR(VBlank),  // 24
+    VECTOR(Audio),   VECTOR(Serial),  VECTOR(Default), VECTOR(NMI),     // 28
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 32
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 36
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 40
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 44
+    VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  // 48
+    VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  // 52
+    VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  // 56
+    VECTOR(Except),  VECTOR(Except),  VECTOR(Default), VECTOR(Default), // 60
+
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 64
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 68
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 72
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 76
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 80
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 84
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 88
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 92
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 96
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 100
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 104
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 108
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 112
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 116
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 120
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 124
+
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 128
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 132
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 136
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 140
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 144
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 148
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 152
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 156
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 160
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 164
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 168
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 172
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 176
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 180
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 184
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 188
+
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 192
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 196
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 200
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 204
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 208
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 212
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 216
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 220
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 224
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 228
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 232
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 236
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 240
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 244
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 248
+    VECTOR(Default), VECTOR(Default), VECTOR(Default), VECTOR(Default), // 252
+};
+
+void
+vectors_init(void *base)
+{
+#undef VECTOR_BASE_IN_RAM
+#ifdef VECTOR_BASE_IN_RAM
+    memcpy(base, vectors, sizeof (vectors));
+    __asm("movec %0,VBR" :: "r" (base));  // Set up vector base in RAM
+#else
+    (void) base;
+    __asm("movec %0,VBR" :: "r" (vectors));  // Set up vector base in ROM
+#endif
+
+    memset((void *)&INT_COUNTER(0), 0, 10 * 4);  // Wipe interrupt counters
+}
+
+__attribute__((noinline))
+void
+irq_debugger(full_stack_regs_t *regs)
+{
+    extern uint8_t serial_active;
+
+    if (INT_COUNTER(9) < 4) {
+        /* Allow up to four stacked exceptions */
+        INT_COUNTER(9)++;
+        vblank_ints = 0;
+        serial_active = 1;
+
+        irq_show_regs_at(regs);
+        printf("Forcing cmdline...\n");
+        debug_cmdline();
+        INT_COUNTER(9)--;
+    } else {
+        /* Give up */
+        uint count;
+        uint delay;
+        INT_COUNTER(10) = regs->pc;
+        INT_COUNTER(11) = regs->vect;
+        *COLOR00 = 0xf00;   // Red screen of death
+        *CIAA_DDRA = 0x03;  // CIA LED+OVL=output
+        for (count = 0; count < 20; count++) {
+            *CIAA_PRA = 0x00;         // Set power LED bright
+            for (delay = 0; delay < 40000; delay++)
+                (void) *CIAA_PRA;   // about 50 ms
+            *CIAA_PRA = 0x02;         // Set power LED dim
+            for (delay = 0; delay < 40000; delay++)
+                (void) *CIAA_PRA;   // about 50 ms
+        }
+        reset_cpu();
+    }
 }

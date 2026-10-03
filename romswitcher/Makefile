@@ -37,7 +37,8 @@ GCC_VER := $(shell $(CC) -dumpversion 2>/dev/null)
 CFLAGS  := -Wall -Wextra -Wno-pointer-sign -Wno-format -Wno-strict-aliasing
 CFLAGS  += -Wno-sign-compare -fomit-frame-pointer
 CFLAGS  += -fno-delete-null-pointer-checks
-CFLAGS  += -DROMFS -DSTANDALONE -DEMBEDDED_CMD -fbaserel -resident -mcpu=68060
+CFLAGS  += -fbaserel -resident -mcpu=68060 -msoft-float
+CFLAGS  += -DROMFS -DSTANDALONE -DEMBEDDED_CMD
 CFLAGS  += -DHAVE_SPACE_PHYS
 CFLAGS  += -DRAM_BASE=0x00000000
 CFLAGS  += -I. -I$(FW) -I$(AM)
@@ -132,6 +133,7 @@ $(OBJDIR)/picassoiv.o: autoconfig.h picassoiv.h timer.h cache.h
 $(OBJDIR)/draw.o: draw.h intuition.h
 $(OBJDIR)/intuition.o: draw.h intuition.h
 $(OBJDIR)/cache.o $(OBJDIR)/main.o $(OBJDIR)/med_cpu.o: $(AM)/cpu_control.h
+$(OBJDIR)/med_cpu.o: cpu_fault.h
 $(OBJDIR)/sm_msg.o $(OBJDIR)/sm_msg_core.o: $(AM)/cpu_control.h $(AM)/sm_msg.h $(FW)/smash_cmd.h $(AM)/host_cmd.h
 
 $(MED_OBJS): med_cmdline.h med_cmds.h med_main.h med_readline.h pcmds.h

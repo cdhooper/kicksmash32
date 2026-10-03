@@ -101,7 +101,7 @@ show_fault_valid:
                    "cpu fault berr  - cause Bus Error\n"
                    "cpu fault chk   - cause CHK fault\n"
                    "cpu fault div0  - cause Divide By Zero fault\n"
-                   "cpu fault fdiv  - cause FPU Divide by Zero fault\n"
+                   "cpu fault fdiv  - cause FPU Divide By Zero fault\n"
                    "cpu fault fline - cause F-Line instruction fault\n"
                    "cpu fault fmt   - cause Format Error (FPU)\n"
                    "cpu fault fpoe  - cause Floating Point Operand Error\n"
@@ -142,8 +142,8 @@ show_fault_valid:
             CPU_FAULT_FDIV();
             (void) fpu_get_fpsr();
         } else if (strcmp(argv[2], "fpoe") == 0) {
-            /* Generate FPCP Operand Error */
-            CPU_FAULT_FPCP();
+            /* Generate FPU Operand Error */
+            CPU_FAULT_FPOE();
         } else if (strcmp(argv[2], "fpuc") == 0) {
             /* Clear FPU fault state */
             CPU_FAULT_FPUC();

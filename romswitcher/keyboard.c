@@ -204,6 +204,28 @@ scan_convert_to_ascii(uint8_t scancode)
     return (ch);
 }
 
+unsigned int
+scan_convert_from_ascii(uint8_t ascii)
+{
+    uint pos;
+    uint mod = 0;
+    uint8_t ch = ascii;
+    if (ascii < 32) {  // ^@ through ^Z, plus a few
+        /* Control key sequence */
+        mod |= 0x20000;  // Ctrl
+        ch += 'a' - 1;   // Pick ASCII key
+    }
+    for (pos = 0; pos < ARRAY_SIZE(key_scancode_to_ascii); pos++) {
+        if (ch == key_scancode_to_ascii[pos].ascii) {
+            return (ascii | (key_scancode_to_ascii[pos].scancode << 8) | mod);
+        } else if (ch == key_scancode_to_ascii[pos].ascii_shifted) {
+            mod |= 0x10000;  // Shift
+            return (ascii | (key_scancode_to_ascii[pos].scancode << 8) | mod);
+        }
+    }
+    return (ascii);
+}
+
 static uint
 shift_state_flag(uint8_t scancode)
 {

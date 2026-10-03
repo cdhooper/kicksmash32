@@ -75,5 +75,6 @@ void     Text(RastPort *rp, const char * text, uint len);
 uint16_t TextLength(struct RastPort *rp, const char *text, uint count);
 PLANEPTR AllocRaster(uint width, uint height);
 void     FreeRaster(PLANEPTR p, uint width, uint height);
+void     serial_report(uint bank, const char *action, const char *name);
 
 #endif /* _DRAW_H */
