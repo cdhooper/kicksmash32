@@ -80,6 +80,32 @@ get_cpu(void)
 {
     unsigned int cpu_type = 0;
 
+    /*
+     * XXX: This code will likely fail on 68000 because cacr does not
+     *      exist on that processor (illegal instruction). It would be
+     *      best to first set bit 14 in sr, and if it remains 0, then
+     *      the CPU is 68000, 68008, or 68010.
+     *          move.w  sr, d1      // Save DR
+     *          ori.w #$4000, sr    // Set bit 14 (Trace bit)
+     *          move.w d1, sr       // Write SR
+     *          move.w sr, d2       // Read DR
+     *          andi.w #bfff, d1
+     *          move.w d1, sr       // Restore SR
+     *          btst #14, d2
+     *          bne.s 1f            // Is 68020+
+     *
+     *      To detect 68000 vs 68010, use a pipeline quirk trick, where
+     *      an address register autodecrement is pushed.
+     *          lea     .test_space(pc), a0  // Local buffer
+     *
+     *          move.l  a0, d1      // Save original A0
+     *          movem.l a0, -(a0)   // Write A0 and autodecrement (quirk)
+     *          move.l (a0), d0     // Read back
+     *          cmp.l d1, d0
+     *          beq.s 3f            // Is 68000
+     *          move.l #68010, %0   // Is 68010
+     *          bra 3f
+     */
     __asm__ volatile(
         "move.l #68000, %0\n"      // Default to 68000
         "move.l #0x80000100, d1\n" // Enable 68020, 68030 and 68040+ D cache

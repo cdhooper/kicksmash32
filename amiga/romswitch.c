@@ -768,7 +768,7 @@ bank_state_save(void)
     }
     if (had_error == 0) {
         update_status("Success");
-        memcpy(&info, &info_saved, sizeof (info));
+        memcpy(&info_saved, &info, sizeof (info));
     }
 }
 
@@ -1151,6 +1151,10 @@ update_switchto(int bank)
 
     if (update_switch_box())
         RefreshGList(gadget_switchto_pre, window, NULL, -1);
+
+#ifdef STANDALONE
+    serial_report(bank_switchto, "Select", info.bi_name[bank_switchto]);
+#endif
 }
 
 static void
@@ -1169,6 +1173,10 @@ update_switchto_updown(int incdec)
 
     if (update_switch_box())
         RefreshGList(gadget_switchto_pre, window, NULL, -1);
+
+#ifdef STANDALONE
+    serial_report(bank_switchto, "Select", info.bi_name[bank_switchto]);
+#endif
 }
 
 /*
@@ -2018,6 +2026,10 @@ event_loop(void)
                             SetAPen(rp, 0);
                             sbox(gadget_switch_x, gadget_switch_y,
                                  gadget_switch_w, gadget_switch_h);
+#ifdef STANDALONE
+                            serial_report(bank_switchto, "Reboot",
+                                          info.bi_name[bank_switchto]);
+#endif
                             bank_set_current_and_reboot();
                             break;
                         case RAWKEY_TAB: // key down Tab

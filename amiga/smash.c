@@ -132,7 +132,7 @@ static const char cmd_read_options[] =
     "   dump         save hex/ASCII instead of binary (-d)\n"
     "   file <name>  file where to save content (-f)\n"
     "   len <hex>    length to read in bytes (-l)\n"
-    "   swap <mode>  byte swap mode (1032, 2301, 3210) (-s)\n"
+    "   swap <mode>  byte swap mode (auto, 1032, 2301, 3210) (-s)\n"
     "   yes          skip prompt (-y)\n";
 
 static const char cmd_write_options[] =
@@ -143,7 +143,7 @@ static const char cmd_write_options[] =
 //  "   dump         save hex/ASCII instead of binary (-d)\n"
     "   file <name>  file from which to read (-f)\n"
     "   len <hex>    length to program in bytes (-l)\n"
-    "   swap <mode>  byte swap mode (1032, 2301, 3210) (-s)\n"
+    "   swap <mode>  byte swap mode (auto, 1032, 2301, 3210) (-s)\n"
     "   yes          skip prompt (-y)\n";
 
 static const char cmd_verify_options[] =
@@ -153,7 +153,7 @@ static const char cmd_verify_options[] =
 //  "   dump         save hex/ASCII instead of binary (-d)\n"
     "   file <name>  file to verify against (-f)\n"
     "   len <hex>    length to read in bytes (-l)\n"
-    "   swap <mode>  byte swap mode (1032, 2301, 3210) (-s)\n"
+    "   swap <mode>  byte swap mode (auto, 1032, 2301, 3210) (-s)\n"
     "   yes          skip prompt (-y)\n";
 
 static const char cmd_erase_options[] =
@@ -2536,37 +2536,97 @@ get_file_size(const char *filename)
     return (fb.fib_Size);
 }
 
-#define SWAPMODE_A500  0xA500   // Amiga 16-bit ROM format
-#define SWAPMODE_A3000 0xA3000  // Amiga 32-bit ROM format
+#define SWAPMODE_AUTO  0xAAAA  // Automatic 32-bit ROM swapping
 
 #define SWAP_TO_ROM    0  // Bytes originated in a file (to be written in ROM)
 #define SWAP_FROM_ROM  1  // Bytes originated in ROM (to be written to a file)
 
 /*
- * execute_swapmode() swaps bytes in the specified buffer according to the
- *                    currently active swap mode.
+ * detect_swapmode() determines the byte swap operation to perform on a ROM
+ *                   image when one of the automatic swap mode
+ *                   (SWAPMODE_AUTO) has been requested.
+ *                   The operation is chosen from the Kickstart ROM header
+ *                   at the start of the image, so this function must only
+ *                   be called once for an image, with the first bytes of
+ *                   that image. The swap mode which is returned is then
+ *                   used with execute_swapmode() for all of the image.
  *
- * @param  [io]  buf      - Buffer to modify.
- * @param  [in]  len      - Length of data in the buffer.
- * @global [in]  dir      - Image swap direction (SWAP_TO_ROM or SWAP_FROM_ROM)
- * @global [in]  swapmode - Swap operation to perform (0123, 3210, etc)
- * @return       None.
+ * @param  [in]  buf      - First four bytes of the ROM image.
+ * @param  [in]  dir      - Image swap direction (SWAP_TO_ROM or SWAP_FROM_ROM)
+ * @param  [in]  swapmode - Requested swap mode (1032, 3210, auto, etc)
+ * @return       Swap operation to perform (0123, 1032, 2301, or 3210).
+ * @return       VALUE_UNASSIGNED - ROM image format was not recognized.
  */
-static void
-execute_swapmode(uint8_t *buf, uint len, uint dir, uint swapmode)
+static uint
+detect_swapmode(const uint8_t *buf, uint dir, uint swapmode)
 {
-    uint    pos;
-    uint8_t temp;
     static const uint8_t str_f94e1411[] = { 0xf9, 0x4e, 0x14, 0x11 };
     static const uint8_t str_11144ef9[] = { 0x11, 0x14, 0x4e, 0xf9 };
     static const uint8_t str_1411f94e[] = { 0x14, 0x11, 0xf9, 0x4e };
     static const uint8_t str_4ef91114[] = { 0x4e, 0xf9, 0x11, 0x14 };
+    uint detected = VALUE_UNASSIGNED;
+
+    switch (swapmode) {
+        case SWAPMODE_AUTO:
+            if (dir == SWAP_TO_ROM) {
+                /* Need bytes in order: f9 4e 14 11 */
+                if (memcmp(buf, str_f94e1411, 4) == 0)
+                    return (123);    // Already in desired order
+                if (memcmp(buf, str_11144ef9, 4) == 0)
+                    detected = 3210;  // Swap bytes in 32-bit longs
+                else if (memcmp(buf, str_1411f94e, 4) == 0)
+                    detected = 2301;  // Swap adjacent 16-bit words
+                else if (memcmp(buf, str_4ef91114, 4) == 0)
+                    detected = 1032;  // Swap odd/even bytes
+            }
+            if (dir == SWAP_FROM_ROM) {
+                /* Need bytes in order: 11 14 4e f9 */
+                if (memcmp(buf, str_11144ef9, 4) == 0)
+                    return (123);    // Already in desired order
+                if (memcmp(buf, str_f94e1411, 4) == 0)
+                    detected = 3210;  // Swap bytes in 32-bit longs
+                else if (memcmp(buf, str_4ef91114, 4) == 0)
+                    detected = 2301;  // Swap adjacent 16-bit words
+                else if (memcmp(buf, str_1411f94e, 4) == 0)
+                    detected = 1032;  // Swap odd/even bytes
+            }
+            break;
+        default:
+            return (swapmode);  // Not an automatic mode
+    }
+
+    if (detected == VALUE_UNASSIGNED) {
+        printf("Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
+               buf[0], buf[1], buf[2], buf[3]);
+    } else {
+        printf("Swap mode %u\n", detected);
+    }
+    return (detected);
+}
+
+/*
+ * execute_swapmode() swaps bytes in the specified buffer according to the
+ *                    specified swap operation. An automatic swap mode must
+ *                    first be converted to a swap operation by
+ *                    detect_swapmode().
+ *
+ * @param  [io]  buf      - Buffer to modify.
+ * @param  [in]  len      - Length of data in the buffer.
+ * @param  [in]  swapmode - Swap operation to perform (0123, 3210, etc)
+ * @return       None.
+ */
+static void
+execute_swapmode(uint8_t *buf, uint len, uint swapmode)
+{
+    uint    pos;
+    uint8_t temp;
 
     switch (swapmode) {
         case 0:
+        case 123:
         case 0123:
+        default:
             return;  // Normal (no swap)
-        swap_1032:
         case 1032:
             /* Swap adjacent bytes in 16-bit words */
             for (pos = 0; pos < len - 1; pos += 2) {
@@ -2575,7 +2635,6 @@ execute_swapmode(uint8_t *buf, uint len, uint dir, uint swapmode)
                 buf[pos + 1] = temp;
             }
             return;
-        swap_2301:
         case 2301:
             /* Swap adjacent (16-bit) words */
             for (pos = 0; pos < len - 3; pos += 4) {
@@ -2587,7 +2646,6 @@ execute_swapmode(uint8_t *buf, uint len, uint dir, uint swapmode)
                 buf[pos + 3] = temp;
             }
             return;
-        swap_3210:
         case 3210:
             /* Swap bytes in 32-bit longs */
             for (pos = 0; pos < len - 3; pos += 4) {
@@ -2599,65 +2657,6 @@ execute_swapmode(uint8_t *buf, uint len, uint dir, uint swapmode)
                 buf[pos + 2] = temp;
             }
             return;
-        case SWAPMODE_A500:
-            if (dir == SWAP_TO_ROM) {
-                /* Need bytes in order: 14 11 f9 4e */
-                if (memcmp(buf, str_1411f94e, 4) == 0)
-                    return;  // Already in desired order
-                if (memcmp(buf, str_11144ef9, 4) == 0) {
-                    printf("Swap mode 2301\n");
-                    goto swap_2301;  // Swap adjacent 16-bit words
-                }
-            }
-            if (dir == SWAP_FROM_ROM) {
-                /* Need bytes in order: 11 14 4e f9 */
-                if (memcmp(buf, str_11144ef9, 4) == 0)
-                    return;  // Already in desired order
-                if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swap mode 1032\n");
-                    goto swap_1032;  // Swap odd/even bytes
-                }
-            }
-            goto unrecognized;
-        case SWAPMODE_A3000:
-            if (dir == SWAP_TO_ROM) {
-                /* Need bytes in order: f9 4e 14 11 */
-                if (memcmp(buf, str_f94e1411, 4) == 0)
-                    return;  // Already in desired order
-                if (memcmp(buf, str_11144ef9, 4) == 0) {
-                    printf("Swap mode 3210\n");
-                    goto swap_3210;  // Swap bytes in 32-bit longs
-                }
-                if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swap mode 2301\n");
-                    goto swap_2301;  // Swap adjacent 16-bit words
-                }
-                if (memcmp(buf, str_4ef91114, 4) == 0) {
-                    printf("Swap mode 1032\n");
-                    goto swap_1032;  // Swap odd/even bytes
-                }
-            }
-            if (dir == SWAP_FROM_ROM) {
-                /* Need bytes in order: 11 14 4e f9 */
-                if (memcmp(buf, str_11144ef9, 4) == 0)
-                    return;  // Already in desired order
-                if (memcmp(buf, str_f94e1411, 4) == 0) {
-                    printf("Swap mode 3210\n");
-                    goto swap_3210;  // Swap bytes in 32-bit longs
-                }
-                if (memcmp(buf, str_4ef91114, 4) == 0) {
-                    printf("Swap mode 2301\n");
-                    goto swap_2301;  // Swap adjacent 16-bit words
-                }
-                if (memcmp(buf, str_1411f94e, 4) == 0) {
-                    printf("Swap mode 1032\n");
-                    goto swap_1032;  // Swap odd/even bytes
-                }
-            }
-unrecognized:
-            printf("Unrecognized Amiga ROM format: %02x %02x %02x %02x\n",
-                   buf[0], buf[1], buf[2], buf[3]);
-            exit(EXIT_FAILURE);
     }
 }
 
@@ -3081,7 +3080,7 @@ erase_flash(uint bank, uint addr, uint len, uint flag_yes)
         return (MSG_STATUS_BAD_DATA);
     }
     if (mode == 32) {
-        cb2 = get_chip_block_info(flash_dev1);
+        cb2 = get_chip_block_info(flash_dev2);
         if (cb2 == NULL) {
             printf("Failed to determine erase block information for %08x\n",
                    flash_dev2);
@@ -3180,6 +3179,61 @@ erase_flash(uint bank, uint addr, uint len, uint flag_yes)
     return (rc);
 }
 
+/*
+ * probe_swapmode() converts an automatic swap mode (SWAPMODE_AUTO) to
+ *                  the swap operation to use for an entire read, write,
+ *                  or verify. The ROM header at the start of the image
+ *                  is probed once, here. Following chunks of the image
+ *                  do not start with a ROM header, so they must not be
+ *                  probed.
+ *
+ *                  A read probes the image which is in flash. A write or
+ *                  verify probes the image which is in the file.
+ *
+ * @param  [in]  readmode - Non-zero if flash is being read to a file.
+ * @param  [in]  filename - File to probe when not reading from flash.
+ * @param  [in]  bank     - Flash bank to probe when reading from flash.
+ * @param  [in]  addr     - Starting address within the flash bank.
+ * @param  [in]  swapmode - Requested swap mode (0123, 3210, auto, etc)
+ * @return       Swap operation to perform (0123, 1032, 2301, or 3210).
+ * @return       VALUE_UNASSIGNED - failure, or ROM image was not recognized.
+ */
+static uint
+probe_swapmode(uint readmode, const char *filename, uint bank, uint addr,
+               uint swapmode)
+{
+    uint32_t hdr = 0;  // read_from_flash() copies 32-bit values
+    uint     rc;
+
+    if (swapmode != SWAPMODE_AUTO)
+        return (swapmode);  // Not an automatic mode
+
+    if (readmode) {
+        rc = read_from_flash(bank + addr / ROM_WINDOW_SIZE,
+                             addr & (ROM_WINDOW_SIZE - 1),
+                             &hdr, sizeof (hdr));
+        if (rc != 0) {
+            printf("Kicksmash failure (%s)\n", smash_err(rc));
+            return (VALUE_UNASSIGNED);
+        }
+    } else {
+        FILE *file = fopen(filename, "r");
+        int   bytes;
+
+        if (file == NULL) {
+            printf("Failed to open \"%s\", for read\n", filename);
+            return (VALUE_UNASSIGNED);
+        }
+        bytes = fread(&hdr, 1, sizeof (hdr), file);
+        fclose(file);
+        if (bytes < (int) sizeof (hdr)) {
+            printf("Failed to read %u bytes from %s\n",
+                   (uint) sizeof (hdr), filename);
+            return (VALUE_UNASSIGNED);
+        }
+    }
+    return (detect_swapmode((uint8_t *) &hdr, SWAP_FROM_ROM, swapmode));
+}
 
 /*
  * cmd_readwrite
@@ -3210,7 +3264,7 @@ cmd_readwrite(int argc, char *argv[])
     uint        bank_sub;
     uint        bank_size;
     FILE       *file;
-    uint        swapmode = 0123;  // no swap
+    uint        swapmode = SWAPMODE_AUTO;  // auto swap
     uint        writemode = 0;
     uint        verifymode = 0;
     uint        readmode = 0;
@@ -3325,30 +3379,18 @@ usage:
                                    argv[0], ptr);
                             goto usage;
                         }
-                        if ((strcasecmp(argv[arg], "a3000") == 0) ||
-                            (strcasecmp(argv[arg], "a4000") == 0) ||
-                            (strcasecmp(argv[arg], "a3000t") == 0) ||
-                            (strcasecmp(argv[arg], "a4000t") == 0) ||
-                            (strcasecmp(argv[arg], "a1200") == 0)) {
-                            swapmode = SWAPMODE_A3000;
-                            break;
-                        }
-                        if ((strcasecmp(argv[arg], "a500") == 0) ||
-                            (strcasecmp(argv[arg], "a600") == 0) ||
-                            (strcasecmp(argv[arg], "a1000") == 0) ||
-                            (strcasecmp(argv[arg], "a2000") == 0) ||
-                            (strcasecmp(argv[arg], "cdtv") == 0)) {
-                            swapmode = SWAPMODE_A500;
+                        if (strcasecmp(argv[arg], "auto") == 0) {
+                            swapmode = SWAPMODE_AUTO;
                             break;
                         }
                         pos = 0;
                         if ((sscanf(argv[arg], "%u%n", &swapmode, &pos) != 1) ||
                             (pos == 0) || (argv[arg][pos] != '\0') ||
-                            ((swapmode != 0123) && (swapmode != 1032) &&
+                            ((swapmode != 123) && (swapmode != 1032) &&
                              (swapmode != 2301) && (swapmode != 3210))) {
                             printf("Invalid argument \"%s\" for %s %s\n",
                                    argv[arg], argv[0], ptr);
-                            printf("Use 1032, 2301, or 3210\n");
+                            printf("Use auto, 0123, 1032, 2301, or 3210\n");
                             return (1);
                         }
                         break;
@@ -3459,6 +3501,15 @@ usage:
             printf(" (ASCII dump)");
         printf("\n");
     }
+
+    /*
+     * An automatic swap mode is converted here, once, to the swap operation
+     * which is then used for every chunk of the read, write, and verify.
+     */
+    swapmode = probe_swapmode(readmode, filename, bank, addr, swapmode);
+    if (swapmode == VALUE_UNASSIGNED)
+        return (1);
+
     if ((!flag_yes) && (!file_is_stdio || (flag_dump && (len >= 0x1000))) &&
         (!are_you_sure("Proceed"))) {
         return (1);
@@ -3552,7 +3603,7 @@ usage:
                 }
             }
 
-            execute_swapmode(buf, xlen, SWAP_FROM_ROM, swapmode);
+            execute_swapmode(buf, xlen, swapmode);
 
             if (writemode) {
                 /* Write to flash */
@@ -3634,7 +3685,7 @@ usage:
                 printf("\nKicksmash failure (%s)\n", smash_err(rc));
                 break;
             }
-            execute_swapmode(buf, xlen, SWAP_FROM_ROM, swapmode);
+            execute_swapmode(buf, xlen, swapmode);
 
             if (memcmp(buf, vbuf, xlen) != 0) {
                 uint pos;

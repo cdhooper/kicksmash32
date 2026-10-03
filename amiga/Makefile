@@ -3,6 +3,7 @@
 #
 
 SMASH_PROG   := smash
+STOOL_PROG   := smashtool
 FS_PROG      := smashfs
 FTP_PROG     := smashftp
 FSROM_PROG   := smashfsrom
@@ -11,7 +12,7 @@ SWITCH_PROG  := romswitch
 NET_PROG     := smashnet
 NETDRV_PROG  := smashnet.device
 
-ALL_PROGS    := $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) \
+ALL_PROGS    := $(SMASH_PROG) $(STOOL_PROG) $(FS_PROG) $(FTP_PROG) \
                 $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(NET_PROG) \
                 $(NETDRV_PROG)
 
@@ -22,6 +23,9 @@ NETDRV_OBJDIR := objs.netdrv
 CRC32_C      := ../fw/crc32.c
 SMASH_SRCS   := smash.c sm_msg.c sm_msg_core.c cpu_control.c $(CRC32_C)
 SMASH_HDRS   := cpu_control.h sm_msg.h sm_file.h host_cmd.h \
+                ../fw/smash_cmd.h ../fw/crc32.h
+STOOL_SRCS   := smashtool.c sm_msg.c sm_msg_core.c cpu_control.c $(CRC32_C)
+STOOL_HDRS   := cpu_control.h sm_msg.h host_cmd.h \
                 ../fw/smash_cmd.h ../fw/crc32.h
 FS_SRCS      := fs_hand.c fs_timer.c fs_vol.c fs_packet.c \
 		printf.c sm_msg.c sm_msg_core.c sm_file.c cpu_control.c $(CRC32_C)
@@ -107,7 +111,7 @@ ifeq (, $(shell which $(CC) 2>/dev/null ))
 $(error "No $(CC) in PATH: maybe do PATH=$$PATH:/opt/amiga13/bin")
 endif
 
-all: $(SMASH_PROG) $(FS_PROG) $(FTP_PROG) $(FSROM_PROG) $(FSROM_PROG_D) $(SWITCH_PROG) $(NET_PROG) $(NETDRV_PROG)
+all: $(ALL_PROGS)
 	@:
 
 gdb:
@@ -124,6 +128,7 @@ $(3) += $(patsubst %,$(2)/%,$(filter-out $(2)/%,$(basename $(notdir $(1))).o))
 endef
 
 $(foreach SRCFILE,$(SMASH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),SMASH_OBJS)))
+$(foreach SRCFILE,$(STOOL_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),STOOL_OBJS)))
 $(foreach SRCFILE,$(FS_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),FS_OBJS)))
 $(foreach SRCFILE,$(FTP_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),FTP_OBJS)))
 $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR),FSROM_OBJS)))
@@ -132,7 +137,7 @@ $(foreach SRCFILE,$(SWITCH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDI
 $(foreach SRCFILE,$(NET_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),NET_OBJS)))
 $(foreach SRCFILE,$(NETDRV_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(NETDRV_OBJDIR),NETDRV_OBJS)))
 
-OBJS := $(sort $(SMASH_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS) $(NET_OBJS) $(NETDRV_OBJS))
+OBJS := $(sort $(SMASH_OBJS) $(STOOL_OBJS) $(FS_OBJS) $(FTP_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D) $(SWITCH_OBJS) $(NET_OBJS) $(NETDRV_OBJS))
 
 # Add special flags for ROMable code
 $(FSROM_OBJS):: CFLAGS += $(CFLAGS_ROMFS) -DNO_DEBUG
@@ -158,12 +163,13 @@ $(FTP_OBJS): $(FTP_HDRS)
 $(NET_OBJS) $(NETDRV_OBJS): $(NET_HDRS)
 
 $(SMASH_PROG): $(SMASH_OBJS)
+$(STOOL_PROG): $(STOOL_OBJS)
 $(FTP_PROG): $(FTP_OBJS)
 $(FSROM_PROG): $(FSROM_OBJS) fs_rom.ld
 $(FSROM_PROG_D): $(FSROM_OBJS_D) fs_rom.ld
 $(SWITCH_PROG): $(SWITCH_OBJS) fs_rom.ld
 
-$(SMASH_PROG):
+$(SMASH_PROG) $(STOOL_PROG):
 	@echo Building $@
 	$(QUIET)$(CC) $^ $(LDFLAGS_SMASH) -o $@
 
