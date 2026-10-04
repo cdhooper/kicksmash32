@@ -37,7 +37,6 @@
 
 /*
  * Memory map
- *    0x00000100     [0x4] pointer to globals
  *    0x00000120    [0x50] register save area
  *    0x00000200   [0x100] vectors
  *    0x00001000    [0x80] runtime counters
@@ -49,6 +48,12 @@
  *    0x0002a000  [0x5000] bitplane 2
  *    0x00030000 [0x10000] globals
  *    0x00040000 [0x10000] malloc RAM
+ *
+ * XXX: The 0x120 and 0x200 areas need to be reconsidered for compatibility
+ *      with the 68000 CPU. That CPU must have vectors at 0x00000000. The
+ *      vectors_init() code will need to change to detect 68000 and copy
+ *      the vectors there rather than relying on VBR to ROM. See get_cpu()
+ *      for a cheap method to detect 68000/68008/68010.
  */
 
 __attribute__ ((section (".romver")))
@@ -205,15 +210,15 @@ setup(void)
     screen_output_set(0);
     autoconfig_init();
     *INTREQ = 0x7fff;            // Clear all interrupt requests
-    *INTENA   = INTENA_SETCLR |  // Set
-                INTENA_INTEN |   // Enable interrupts
-                INTENA_VERTB;    // Vertical blank
     serial_putc('J');
     serial_puts("\n");
     autoconfig_configure_all();
+    *INTENA   = INTENA_SETCLR |  // Set
+                INTENA_INTEN |   // Enable interrupts
+                INTENA_VERTB;    // Vertical blank
+    serial_putc('K');
     picassoiv_enable_flicker_fixer();
     screen_output_set(1);
-    serial_putc('K');
 
     gui_wants_all_input = 1;
     rl_initialize();

@@ -1936,7 +1936,7 @@ detect_byte_order(uint8_t *bufp)
         { BESWAP(0x11114ef9), BESWAP(0x00fc00d2) },  // 1.3
         { BESWAP(0x612e4447), BESWAP(0x00f80190) },  // DiagROM 2.x Beta
         { BESWAP(0x11144447), BESWAP(0x00f800d6) },  // DiagROM 2.x
-        { BESWAP(0x11144ef9), BESWAP(0x00f80010) },  // ROM Switcher
+        { BESWAP(0x11144ef9), BESWAP(0x00f80010) },  // Old ROM Switcher
         { BESWAP(0x11114ef9), BESWAP(0x00f8048c) },  // Logica-Dialoga
         { BESWAP(0x11114ef9), BESWAP(0x00f800f8) },  // AROS
     };

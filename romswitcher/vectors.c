@@ -31,28 +31,22 @@
 #include "main.h"
 
 /*
- * Memory map
- *    0x00000100     [0x4] pointer to globals
- *    0x00000120    [0x50] register save area
- *    0x00000200   [0x100] vectors
- *    0x00001000    [0x80] runtime interrupt counters
- *    0x00001080    [0x80] sprite data
- *    0x00001100  [0xff00] stack
- *    0x00010000 [0x10000] bsschip
- *    0x00020000  [0x5000] bitplane 0
- *    0x00025000  [0x5000] bitplane 1
- *    0x0002a000  [0x5000] bitplane 2
- *    0x00030000 [0x10000] globals
+ * See main.c for the memory map.
  */
-
 #define FULL_STACK_REGS 0x120
 
-/* Caution: Hard-coded addresses below */
-#define SAVE_FULL_FRAME() __asm("movem.l d0-d7/a0-a7,0x120\n\t" \
-                                "move.w 0(sp),0x160\n\t" /* SR */ \
-                                "move.l 2(sp),0x162\n\t" /* PC */ \
-                                "move.w 6(sp),0x166")    /* Vect */
+#define SAVE_FULL_FRAME() __asm__ __volatile__( \
+                            "movem.l d0-d7/a0-a7,%c0\n\t" \
+                            "move.w 0(sp),%c0+0x40\n\t"  /* SR */ \
+                            "move.l 2(sp),%c0+0x42\n\t"  /* PC */ \
+                            "move.w 6(sp),%c0+0x46"      /* Vect */ \
+                            :: "i" (FULL_STACK_REGS) : "memory")
 
+/*
+ * This structure has a size of 0x48 bytes, and there are two in memory:
+ * The first at 0x120 is the interrupt/exception save area.
+ * The second at 0x168 is reserved for snapshots of exception frames.
+ */
 typedef struct
 __attribute__((packed)) {
     uint32_t d[8];
@@ -579,8 +573,8 @@ VECTOR_WRAP(Except);
 
 /*
  *  Vector Address Function  Description
- *  0      0                 Reset initial SP
- *  1      4       reset_hi  Reset initial PC
+ *  0      0                 Reset initial SP (not used with VBR)
+ *  1      4       reset_hi  Reset initial PC (not used with VBR)
  *  2      8       BusErr    Bus Error
  *  3      c       AddrErr   Address Error
  *  4      10      IllInst   Illegal Instruction
@@ -628,12 +622,10 @@ VECTOR_WRAP(Except);
  *  ...
  *  255    3fc               User Defined Vector #191
  */
-#define INITSP (void *)0x80000
-
 __attribute__ ((section (".text"), aligned(0x20)))
 const void *vectors[] =
 {
-    INITSP,          reset_hi,        VECTOR(Except),  VECTOR(Except),  // 0
+    VECTOR(Default), VECTOR(Default), VECTOR(Except),  VECTOR(Except),  // 0
     VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  // 4
     VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  // 8
     VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  VECTOR(Except),  // 12

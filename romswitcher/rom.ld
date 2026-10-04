@@ -14,19 +14,21 @@ MEMORY
 SECTIONS
 {
     PROVIDE(___machtype = 0x0);
-    .text :
+    .text : SUBALIGN(2)
     {
         *(.reset)
-        _reset_cont = .;
-        . = ALIGN(0x00000010);  /* 0x00f80010 */
+        . = 0xd2;
         *(.reset_hi)
         *(.romver)
+    } > rom
+
+    .text_rest : {
         *(.text)
         *(.vectors)
         _etext = .;
     } > rom
 
-    .rodata ADDR(.text) + SIZEOF(.text) :
+    .rodata ADDR(.text_rest) + SIZEOF(.text_rest) :
     {
         *(.rodata)
         _copy_to_ram_start = .;
