@@ -109,17 +109,47 @@ struct netif_backend {
      * Optional: NULL if a backend needs no elevation step of its own.
      */
     int (*ensure_privilege)(int argc, char *argv[]);
-
-    int (*parse_args)(int argc, char *argv[]);
 };
 
-/* Returns the backend for the current platform. */
-const struct netif_backend *netif_backend_get(void);
-
+/*
+ * Network modes. A mode selects *how* a platform reaches the network,
+ * for platforms which have more than one way of doing it. Each
+ * platform file (netif_linux.c / netif_macos_bpf.c / netif_windows.c)
+ * publishes the modes it supports through netif_backend_modes(); the
+ * shared code in hostsmash_netif.c matches the user's -m/--mode
+ * argument against that table and stores the result in
+ * g_netif_cfg.mode before netif_backend_get() is called.
+ *
+ * To add a mode: add an enumerator here, add a row to that platform's
+ * mode table, and act on g_netif_cfg.mode in that platform's
+ * netif_backend_get() (to return a different backend) or in its
+ * open() (to vary how a single backend sets itself up).
+ */
 typedef enum {
-    NETIF_MODE_TAP = 0, /* Default: Windows TAP Adapter */
-    NETIF_MODE_PCAP = 1 /* Original Npcap path */
+    NETIF_MODE_TAP = 0,     /* Windows: TAP-Windows6 virtual adapter */
+    NETIF_MODE_PCAP = 1,    /* Windows: Npcap capture on the physical NIC */
+    NETIF_MODE_MACVTAP = 2, /* Linux: bridge-mode macvtap */
+    NETIF_MODE_BPF = 3      /* macOS: BPF capture on the physical NIC */
 } netif_mode_t;
+
+typedef struct {
+    const char  *name;      /* What the user types for -m/--mode */
+    netif_mode_t mode;      /* Value stored in g_netif_cfg.mode */
+    const char  *desc;      /* One-line description, shown by --help */
+} netif_mode_desc_t;
+
+/*
+ * Returns this platform's table of supported modes, terminated by an
+ * entry with a NULL name. The first entry is the platform's default,
+ * used when no mode (or the mode "default") is given.
+ */
+const netif_mode_desc_t *netif_backend_modes(void);
+
+/*
+ * Returns the backend for the current platform and g_netif_cfg.mode,
+ * so g_netif_cfg.mode must be set before this is called.
+ */
+const struct netif_backend *netif_backend_get(void);
 
 typedef struct {
     netif_mode_t mode;

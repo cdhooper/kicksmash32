@@ -30,15 +30,15 @@
 
 #define MEM_FAULT_CAPTURE                                   \
     struct Task *thistask = (struct Task *) FindTask(NULL); \
-    uint8_t old_berr_dsack = *ADDR8(AMIGA_BERR_DSACK);      \
-    if (addr != AMIGA_BERR_DSACK)                           \
-        *ADDR8(AMIGA_BERR_DSACK) &= ~BIT(7);                \
+    uint32_t baseaddr = addr;                               \
+    if (baseaddr != AMIGA_BERR_DSACK)                       \
+        *ADDR8(AMIGA_BERR_DSACK) = 0x7f;                    \
     old_TrapCode = thistask->tc_TrapCode;                   \
     thistask->tc_TrapCode = (void *)(uintptr_t) trap_handler
 #define MEM_FAULT_RESTORE                                   \
     thistask->tc_TrapCode = old_TrapCode;                   \
-    if (addr != AMIGA_BERR_DSACK)                           \
-        *ADDR8(AMIGA_BERR_DSACK) = old_berr_dsack
+    if (baseaddr != AMIGA_BERR_DSACK)                       \
+        *ADDR8(AMIGA_BERR_DSACK) = 0xff;
 void trap_handler(void);
 APTR old_TrapCode;
 #else

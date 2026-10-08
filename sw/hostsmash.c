@@ -80,7 +80,7 @@ static const struct option long_opts[] = {
     { "len",      required_argument, NULL, 'l' },
     { "mount",    required_argument, NULL, 'm' },
     { "Mount",    required_argument, NULL, 'M' },
-    { "net",      no_argument,       NULL, 'n' },
+    { "net",      required_argument, NULL, 'n' },
     { "read",     no_argument,       NULL, 'r' },
     { "swap",     required_argument, NULL, 's' },
     { "term",     no_argument,       NULL, 't' },
@@ -107,7 +107,7 @@ static char short_opts[] = {
     'l', ':',    // --len <num>
     'm', ':',    // --mount <vol> <dir>
     'M', ':',    // --Mount <vol> <dir>
-    'n',         // --net
+    'n', ':',    // --net <mode>
     'r',         // --read <filename>
     's', ':',    // --swap <mode>
     't',         // --term
@@ -140,6 +140,8 @@ static const char usage_text[] =
 "    -i --identify           identify installed EEPROM\n"
 "    -l --len <num>          length in bytes\n"
 "    -m --mount <vol:> <dir> file serve directory path to Amiga volume\n"
+"    -n --net <mode>         network service for Amiga; mode is \"default\"\n"
+"                            or a mode shown by hostsmash_netif -h\n"
 "    -r --read <filename>    read EEPROM and write to file\n"
 "    -s --swap <mode>        byte swap mode (2301, 3210, 1032, noswap=0123)\n"
 "    -v --verify <filename>  verify file matches EEPROM contents\n"
@@ -4881,8 +4883,23 @@ errx(EXIT_FAILURE, "how did we get here?");
                     goto reswitch;
                 }
                 warnx("The -%c flag requires an argument", optopt);
-                if (optopt == 's')
-                    warnx("Valid options are 1032, 2301, or 3210\n");
+                if (optopt == 's') {
+                    errx(EXIT_FAILURE,
+                         "Valid options are 1032, 2301, or 3210\n");
+                }
+                if (optopt == 'n') {
+                    errx(EXIT_FAILURE,
+                         "Valid options:"
+#if defined(LINUX)
+                         " macvtap"
+#elif defined(OSX)  /* MacOS */
+                         " bpf"
+#elif defined(__MINGW32__)
+                         " pcap"
+                         " tap"
+#endif
+                         "\n");
+                }
                 usage(stderr);
                 exit(EXIT_FAILURE);
                 break;
@@ -4958,6 +4975,7 @@ errx(EXIT_FAILURE, "how did we get here?");
             case 'n':
                 mode = MODE_MSG;
                 amiga_net_service = 1;
+                netif_arg = optarg;
                 break;
             case 'r':
                 if (mode != MODE_UNKNOWN)

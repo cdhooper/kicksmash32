@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>    /* strcasecmp */
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
@@ -48,6 +49,15 @@ typedef unsigned int uint;
  * poll()-able fd for the capture handle, so the Windows build of
  * main() below uses a small thread-based loop instead of poll().
  *
+ * Platforms which have more than one way of reaching the network let
+ * you choose between them with -m <mode> (or --mode <mode>, or
+ * --mode=<mode>). This is the argument which hostsmash's -n <mode>
+ * option hands down. Run with -h for the modes this platform has; the
+ * mode "default" is accepted everywhere and means the platform's
+ * default. The chosen mode ends up in g_netif_cfg.mode, which each
+ * platform's netif_backend_get() / open() acts on -- see the comment
+ * above netif_mode_t in netif_backend.h.
+ *
  * Build with -DOSX on macOS so the OSX-specific branches below (only
  * the default-route detection needs one -- everything else platform-
  * specific lives behind netif_backend.h in netif_linux.c /
@@ -65,9 +75,17 @@ static const struct netif_backend *g_be;
 /* Cached MAC the Amiga side has told us about / that we told it */
 static uint8_t netif_hw_mac[6];
 
-#ifdef __MINGW32__
+/*
+ * Run-time configuration shared with the platform backend. The mode is
+ * set from the -m/--mode argument (or the platform default) before the
+ * backend is selected.
+ */
 netif_config_t g_netif_cfg;
 
+/* Mode table entry which g_netif_cfg.mode was taken from */
+static const netif_mode_desc_t *g_netif_mode;
+
+#ifdef __MINGW32__
 /*
  * Handle of the thread blocked reading stdin, so the console control
  * handler below can unstick it (see win_stdin_thread()).
@@ -247,6 +265,21 @@ get_default_iface(char *iface_buffer, size_t bufsize)
 #endif
 }
 
+/*
+ * print_modes() lists the network modes this platform supports, one
+ *               per line, each line starting with the given indent.
+ */
+static void
+print_modes(const char *indent)
+{
+    const netif_mode_desc_t *modes = netif_backend_modes();
+    const netif_mode_desc_t *m;
+
+    for (m = modes; m->name != NULL; m++)
+        fprintf(stderr, "%s%-8s %s%s\n", indent, m->name, m->desc,
+                (m == modes) ? " (default)" : "");
+}
+
 static void
 usage(const char *prog)
 {
@@ -262,10 +295,80 @@ usage(const char *prog)
             "                   link setup, instead of netlink.\n"
 #endif
             "  -h, --help       Show this help.\n"
+            "  -m, --mode <mode>\n"
+            "                   Network mode. On this platform, one of:\n",
+            prog);
+    print_modes("                     ");
+    fprintf(stderr,
             "\n"
             "If interface is omitted the host's current default-route\n"
-            "interface is used.\n",
-            prog);
+            "interface is used.\n");
+}
+
+/*
+ * select_mode() sets g_netif_cfg.mode from a mode name, which must be
+ *               either "default" or a name in this platform's mode
+ *               table. Returns 0 on success, -1 if the name is not a
+ *               mode of this platform.
+ */
+static int
+select_mode(const char *name)
+{
+    const netif_mode_desc_t *modes = netif_backend_modes();
+    const netif_mode_desc_t *m;
+
+    if (strcasecmp(name, "default") == 0) {
+        m = modes;
+    } else {
+        for (m = modes; m->name != NULL; m++)
+            if (strcasecmp(name, m->name) == 0)
+                break;
+        if (m->name == NULL)
+            return (-1);
+    }
+    g_netif_mode     = m;
+    g_netif_cfg.mode = m->mode;
+    return (0);
+}
+
+/*
+ * parse_mode_opt() handles the mode option in any of its forms:
+ *                  "-m <mode>", "--mode <mode>" or "--mode=<mode>".
+ *
+ * Returns 1 if argv[*argi] was the mode option, in which case it has
+ * been applied and *argi advanced past it; 0 if argv[*argi] is some
+ * other argument (*argi is not changed); or -1 if it was the mode
+ * option but was not usable, in which case the reason has been
+ * reported.
+ */
+static int
+parse_mode_opt(int argc, char *argv[], int *argi)
+{
+    const char *arg = argv[*argi];
+    const char *name;
+
+    if (strncmp(arg, "--mode=", 7) == 0) {
+        name = arg + 7;
+        *argi += 1;
+    } else if (strcmp(arg, "-m") == 0 || strcmp(arg, "--mode") == 0) {
+        if (*argi + 1 >= argc) {
+            fprintf(stderr, "%s requires a mode. Available modes:\n", arg);
+            print_modes("    ");
+            return (-1);
+        }
+        name = argv[*argi + 1];
+        *argi += 2;
+    } else {
+        return (0);
+    }
+
+    if (select_mode(name) < 0) {
+        fprintf(stderr, "Unknown network mode \"%s\". Available modes:\n",
+                name);
+        print_modes("    ");
+        return (-1);
+    }
+    return (1);
 }
 
 static void
@@ -489,7 +592,15 @@ main(int argc, char *argv[])
 
     WSAStartup(MAKEWORD(2, 2), &wsadata);
 
+    select_mode("default");
+
     while (argi < argc) {
+        int rc = parse_mode_opt(argc, argv, &argi);
+        if (rc < 0)
+            return (1);
+        if (rc > 0)
+            continue;
+
         if (strcmp(argv[argi], "-h") == 0 ||
             strcmp(argv[argi], "--help") == 0) {
             usage(argv[0]);
@@ -503,6 +614,8 @@ main(int argc, char *argv[])
         }
     }
 
+    /* The mode decides which backend this returns, so it comes first */
+    fprintf(stderr, "Network mode: %s\n", g_netif_mode->name);
     g_be = netif_backend_get();
 
     /*
@@ -566,8 +679,16 @@ main(int argc, char *argv[])
     int use_external_ip = 0;
     (void) use_external_ip;
 
+    select_mode("default");
+
     /* Simple option parsing (keep it dependency-free) */
     while (argi < argc) {
+        int rc = parse_mode_opt(argc, argv, &argi);
+        if (rc < 0)
+            return (1);
+        if (rc > 0)
+            continue;
+
         if (strcmp(argv[argi], "-e") == 0 ||
             strcmp(argv[argi], "--external") == 0) {
 #ifdef LINUX
@@ -591,6 +712,8 @@ main(int argc, char *argv[])
         }
     }
 
+    /* The mode decides which backend this returns, so it comes first */
+    fprintf(stderr, "Network mode: %s\n", g_netif_mode->name);
     g_be = netif_backend_get();
 
     /*

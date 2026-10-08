@@ -13,4 +13,6 @@ void sm_destroy_queues(void);
 uint netif_start(void);
 void netif_stop(void);
 
+extern const char *netif_arg;
+
 #endif /* _HOSTSMASH_NET_H */

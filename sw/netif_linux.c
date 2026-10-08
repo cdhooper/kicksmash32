@@ -704,6 +704,22 @@ static const struct netif_backend linux_backend = {
     .ensure_privilege = linux_ensure_privilege,
 };
 
+/*
+ * Modes supported on Linux; the first entry is the default. Only one
+ * for now. To add another, see the comment above netif_mode_t in
+ * netif_backend.h.
+ */
+static const netif_mode_desc_t linux_modes[] = {
+    { "macvtap", NETIF_MODE_MACVTAP, "Bridge-mode macvtap on the interface" },
+    { NULL,      NETIF_MODE_MACVTAP, NULL },
+};
+
+const netif_mode_desc_t *
+netif_backend_modes(void)
+{
+    return (linux_modes);
+}
+
 const struct netif_backend *
 netif_backend_get(void)
 {

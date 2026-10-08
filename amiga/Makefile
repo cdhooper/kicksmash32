@@ -68,10 +68,10 @@ CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 
 # Driver: no startup code and no libc initialization (the driver supplies
 # SysBase, malloc, free and atexit itself). Same recipe as the ROM builds.
-LDFLAGS_NETDRV = -nostdlib -lgcc -lc -lamiga -nostartfiles -mcrt=clib2
+LDFLAGS_NETDRV = -nostdlib -lgcc -lamiga -lc -nostartfiles -mcrt=clib2
 
-LDFLAGS_FSROM = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
-LDFLAGS_SWITCH = -nostdlib -lgcc -lc -lamiga -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
+LDFLAGS_FSROM = -nostdlib -lgcc -lamiga -lc -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
+LDFLAGS_SWITCH = -nostdlib -lgcc -lamiga -lc -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
 
 VERSION := $(shell awk '/Version/{print $$2}' ../fw/version.c)
 CFLAGS += -DVERSION=\"$(VERSION)\"

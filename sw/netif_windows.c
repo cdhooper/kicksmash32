@@ -1176,9 +1176,10 @@ windows_ensure_privilege(int argc, char *argv[])
      * Check for Npcap before ever popping a UAC prompt -- there's no
      * point asking the user to elevate for a driver that isn't even
      * installed. ensure_wpcap_loaded() shows show_npcap_missing_dialog()
-     * itself on failure.
+     * itself on failure. Npcap is only needed in pcap mode; TAP mode
+     * must not be refused just because Npcap isn't installed.
      */
-    if (ensure_wpcap_loaded() < 0)
+    if ((g_netif_cfg.mode == NETIF_MODE_PCAP) && (ensure_wpcap_loaded() < 0))
         exit(1);
 
     if (is_elevated())
@@ -1237,25 +1238,6 @@ windows_ensure_privilege(int argc, char *argv[])
     exit(0);
 }
 
-static int
-windows_parse_args(int argc, char *argv[])
-{
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--use-pcap") == 0) {
-            g_netif_cfg.mode = NETIF_MODE_PCAP;
-        }
-        if (strcmp(argv[i], "--use-tap") == 0) {
-            g_netif_cfg.mode = NETIF_MODE_TAP;
-        }
-    }
-    if (g_netif_cfg.mode == NETIF_MODE_TAP) {
-        fprintf(stderr, "[NETIF] Using Windows TAP Adapter path\n");
-    } else {
-        fprintf(stderr, "[NETIF] Using Npcap packet path\n");
-    }
-    return (0);
-}
-
 static const struct netif_backend windows_backend_tap = {
     .open             = windows_open_tap,
     .close            = windows_close_tap,
@@ -1265,7 +1247,6 @@ static const struct netif_backend windows_backend_tap = {
     .set_mac          = windows_set_mac,
     .get_mac          = windows_get_mac,
     .ensure_privilege = windows_ensure_privilege,
-    .parse_args       = windows_parse_args,
 };
 
 static const struct netif_backend windows_backend_pcap = {
@@ -1277,17 +1258,29 @@ static const struct netif_backend windows_backend_pcap = {
     .set_mac          = windows_set_mac,
     .get_mac          = windows_get_mac,
     .ensure_privilege = windows_ensure_privilege,
-    .parse_args       = windows_parse_args,
 };
+
+/*
+ * Modes supported on Windows; the first entry is the default, used
+ * when hostsmash_netif is given no -m/--mode argument (or "default").
+ * Swap the pcap and tap rows to change the default.
+ */
+static const netif_mode_desc_t windows_modes[] = {
+    { "pcap", NETIF_MODE_PCAP, "Npcap capture on the physical adapter" },
+    { "tap",  NETIF_MODE_TAP,  "TAP-Windows6 virtual adapter" },
+    { NULL,   NETIF_MODE_PCAP, NULL },
+};
+
+const netif_mode_desc_t *
+netif_backend_modes(void)
+{
+    return (windows_modes);
+}
 
 const struct netif_backend *
 netif_backend_get(void)
 {
-    g_netif_cfg.mode = NETIF_MODE_PCAP;
-
-    if (g_netif_cfg.mode == NETIF_MODE_PCAP) {
-        return (&windows_backend_pcap);
-    } else {
+    if (g_netif_cfg.mode == NETIF_MODE_TAP)
         return (&windows_backend_tap);
-    }
+    return (&windows_backend_pcap);
 }

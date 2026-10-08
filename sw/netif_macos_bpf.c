@@ -29,6 +29,9 @@
  * No special entitlement is required. Root (or membership in the
  * `access_bpf` group with the right ACL on /dev/bpf*, which is not
  * the default on a stock Mac) is required to open /dev/bpfN at all.
+ * Which of those applies is found by simply trying the open: see
+ * macos_ensure_privilege(), which only asks for administrator rights
+ * if /dev/bpf* actually turns this process away.
  */
 
 #include <stdio.h>
@@ -70,11 +73,18 @@ static int      g_have_virtual_mac = 0;
  * node -- you have to probe individual device nodes and take
  * whichever isn't already claimed by another process (tcpdump,
  * Wireshark, etc.).
+ *
+ * If no device could be opened, *denied tells the caller why: it is
+ * set to 1 if any node refused us for lack of permission (so more
+ * privilege would help), and to 0 if they were simply all in use or
+ * absent (so it would not).
  */
 static int
-open_bpf_device(void)
+open_bpf_device(int *denied)
 {
     char path[32];
+
+    *denied = 0;
     for (int i = 0; i < 256; i++) {
         snprintf(path, sizeof (path), "/dev/bpf%d", i);
         int fd = open(path, O_RDWR);
@@ -82,6 +92,8 @@ open_bpf_device(void)
             return (fd);
         if (errno == ENOENT)
             break;      /* no more device nodes to try */
+        if (errno == EACCES || errno == EPERM)
+            *denied = 1;
         /* EBUSY (already claimed) or EACCES -- try the next one */
     }
     return (-1);
@@ -121,12 +133,20 @@ get_physical_mac(const char *ifname, uint8_t mac[6])
 static int
 bpf_open(const char *lower_dev, char *name_out, size_t name_out_sz)
 {
-    g_bpf_fd = open_bpf_device();
+    /*
+     * macos_ensure_privilege() normally has the device open already:
+     * opening it is how it finds out whether privilege is needed.
+     */
     if (g_bpf_fd < 0) {
-        fprintf(stderr,
-            "netif_macos_bpf: could not open any /dev/bpfN (all busy, or "
-            "insufficient permission -- run as root)\n");
-        return (-1);
+        int denied;
+
+        g_bpf_fd = open_bpf_device(&denied);
+        if (g_bpf_fd < 0) {
+            fprintf(stderr, "netif_macos_bpf: could not open any /dev/bpfN "
+                    "(%s)\n", denied ? "permission denied -- run as root" :
+                    "all are in use");
+            return (-1);
+        }
     }
 
     struct ifreq ifr;
@@ -365,16 +385,44 @@ bpf_get_mac(uint8_t mac[6])
  * which pops the native graphical auth dialog with no extra
  * signing/entitlement requirements.
  *
+ * That dialog can only be shown in a desktop login session, so it is
+ * the last resort rather than the first. Root is not what this
+ * program needs; an open /dev/bpfN is. So when not root, the device
+ * is opened here first, and administrator rights are only asked for
+ * if that was refused for lack of permission. This is what lets the
+ * program run with no prompt at all (over ssh, for instance) on a Mac
+ * where /dev/bpf* has been made accessible to the user, such as by
+ * the access_bpf group which Wireshark's ChmodBPF sets up. The device
+ * opened here is kept in g_bpf_fd for bpf_open() to use.
+ *
  * Per the ensure_privilege contract in netif_backend.h: returns 0 if
- * already root, otherwise re-execs through osascript (which replaces
+ * no more privilege is needed (already root, or /dev/bpf* did not
+ * refuse us), otherwise re-execs through osascript (which replaces
  * this process on success) or prints an error and exits on failure.
  * ------------------------------------------------------------------
  */
 static int
 macos_ensure_privilege(int argc, char *argv[])
 {
+    int denied;
+
     if (geteuid() == 0)
         return (0);
+
+    g_bpf_fd = open_bpf_device(&denied);
+    if (g_bpf_fd >= 0) {
+        fprintf(stderr, "netif_macos_bpf: /dev/bpf is accessible to this "
+                "user, no elevation needed\n");
+        return (0);
+    }
+    if (!denied) {
+        /*
+         * Nothing was refused: the devices are all in use, which
+         * administrator rights would not change. Leave it to
+         * bpf_open() to try again and report.
+         */
+        return (0);
+    }
 
     char prog_path[1024];
     uint32_t sz = sizeof (prog_path);
@@ -393,7 +441,13 @@ macos_ensure_privilege(int argc, char *argv[])
     snprintf(osa_arg, sizeof (osa_arg),
              "do shell script \"%s\" with administrator privileges", cmd);
 
-    fprintf(stderr, "netif_macos_bpf: elevating via administrator prompt...\n");
+    fprintf(stderr,
+        "netif_macos_bpf: no permission to open /dev/bpf*, elevating via "
+        "administrator prompt...\n"
+        "netif_macos_bpf: (the prompt needs a desktop login; without one, "
+        "run as root,\n"
+        "                 make this program setuid root, or give this user "
+        "access to /dev/bpf*)\n");
     execlp("osascript", "osascript", "-e", osa_arg, (char *)NULL);
 
     /* execlp only returns on failure */
@@ -411,6 +465,22 @@ static const struct netif_backend macos_bpf_backend = {
     .get_mac          = bpf_get_mac,
     .ensure_privilege = macos_ensure_privilege,
 };
+
+/*
+ * Modes supported on macOS; the first entry is the default. Only one
+ * for now. To add another, see the comment above netif_mode_t in
+ * netif_backend.h.
+ */
+static const netif_mode_desc_t macos_modes[] = {
+    { "bpf", NETIF_MODE_BPF, "BPF capture on the physical interface" },
+    { NULL,  NETIF_MODE_BPF, NULL },
+};
+
+const netif_mode_desc_t *
+netif_backend_modes(void)
+{
+    return (macos_modes);
+}
 
 const struct netif_backend *
 netif_backend_get(void)

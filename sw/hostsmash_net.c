@@ -36,12 +36,15 @@ typedef unsigned int uint;
 #include "hostsmash_net.h"
 #include "hostsmash_netif.h"
 
+const char      *netif_arg;            // Network mode for the netif program
+                                       //   (its -m argument); NULL = default
+
 static volatile uint netif_getmac = 0; // GETMAC pending from device
 static uint      netif_up = 0;         // Network interface is up
 static int       netif_write_fd = -1;  // Pipe end to write TO the gateway
 static int       netif_read_fd = -1;   // Pipe end to read FROM the gateway
 static int       netif_capture = 0;    // Capture packets from net
-static uint8_t  netif_hw_mac[6];  // Cached MAC from lower level
+static uint8_t   netif_hw_mac[6];      // Cached MAC from lower level
 static pthread_t read_thread;
 #ifdef __MINGW32__
 static HANDLE    gateway_process = NULL;  // Handle of the gateway child process
@@ -600,13 +603,68 @@ read_thread_exit:
     return (NULL);
 }
 
+#ifdef __MINGW32__
+/*
+ * win_append_arg() appends one argument to a CreateProcess() command
+ *                  line, quoted so that the child's C runtime turns it
+ *                  back into exactly that one argv[] string, whatever
+ *                  it contains (spaces, quotes, trailing backslashes).
+ *                  Returns 0 on success, 1 if it does not fit.
+ */
+static uint
+win_append_arg(char *cmd, size_t cmdsize, const char *arg)
+{
+    size_t pos = strlen(cmd);
+    size_t bs  = 0;             // Backslashes seen but not yet written
+
+    /* Worst case: every character doubled, plus space, quotes, and NIL */
+    if (pos + 2 * strlen(arg) + 4 > cmdsize)
+        return (1);
+
+    cmd[pos++] = ' ';
+    cmd[pos++] = '"';
+    for (; *arg != '\0'; arg++) {
+        if (*arg == '\\') {
+            bs++;
+        } else if (*arg == '"') {
+            /* Backslashes ahead of a quote are doubled; the quote is escaped */
+            for (; bs > 0; bs--) {
+                cmd[pos++] = '\\';
+                cmd[pos++] = '\\';
+            }
+            cmd[pos++] = '\\';
+            cmd[pos++] = '"';
+        } else {
+            for (; bs > 0; bs--)
+                cmd[pos++] = '\\';
+            cmd[pos++] = *arg;
+        }
+    }
+    /* Trailing backslashes sit ahead of the closing quote, so double them */
+    for (; bs > 0; bs--) {
+        cmd[pos++] = '\\';
+        cmd[pos++] = '\\';
+    }
+    cmd[pos++] = '"';
+    cmd[pos]   = '\0';
+    return (0);
+}
+#endif
+
 /*
  * netif_start() opens the pipe to the virtual network interface and
  *               starts the frame reader thread.
+ *
+ * If a network mode was given (hostsmash -n <mode>), it is handed to
+ * hostsmash_netif as its -m argument, which is where it is checked
+ * against the modes that platform supports. No -m is passed if
+ * netif_arg is NULL or empty, leaving hostsmash_netif at its default.
  */
 uint
 netif_start(void)
 {
+    uint have_mode = (netif_arg != NULL) && (netif_arg[0] != '\0');
+
     if (netif_up)
         return (0);
 
@@ -625,7 +683,24 @@ netif_start(void)
     SECURITY_ATTRIBUTES sa;
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
-    wchar_t cmdline[] = L"hostsmash_netif.exe";
+    char    cmd[600] = "hostsmash_netif.exe";
+    wchar_t cmdline[600];
+
+    /*
+     * Build the helper's command line. main()'s argv (and so netif_arg)
+     * is in the ANSI code page, which is also what the helper's C
+     * runtime converts its command line back into for its own argv.
+     */
+    if (have_mode && (win_append_arg(cmd, sizeof (cmd), "-m") ||
+                      win_append_arg(cmd, sizeof (cmd), netif_arg))) {
+        fprintf(stderr, "Network mode \"%s\" is too long\n", netif_arg);
+        return (1);
+    }
+    if (MultiByteToWideChar(CP_ACP, 0, cmd, -1, cmdline,
+                            sizeof (cmdline) / sizeof (cmdline[0])) == 0) {
+        fprintf(stderr, "Error converting hostsmash_netif command line\n");
+        return (1);
+    }
 
     memset(&sa, 0, sizeof (sa));
     sa.nLength = sizeof (sa);
@@ -733,7 +808,12 @@ netif_start(void)
         close(child_to_parent[0]);
         close(child_to_parent[1]);
 
-        execlp("hostsmash_netif", "hostsmash_netif", (char *)NULL);
+        if (have_mode) {
+            execlp("hostsmash_netif", "hostsmash_netif", "-m", netif_arg,
+                   (char *)NULL);
+        } else {
+            execlp("hostsmash_netif", "hostsmash_netif", (char *)NULL);
+        }
 
         perror("Failed launching hostsmash_netif");
         exit(1);

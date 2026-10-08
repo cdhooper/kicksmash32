@@ -622,7 +622,7 @@ VECTOR_WRAP(Except);
  *  ...
  *  255    3fc               User Defined Vector #191
  */
-__attribute__ ((section (".text"), aligned(0x20)))
+__attribute__ ((section (".text"), aligned(8)))
 const void *vectors[] =
 {
     VECTOR(Default), VECTOR(Default), VECTOR(Except),  VECTOR(Except),  // 0
