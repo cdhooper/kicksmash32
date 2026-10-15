@@ -419,7 +419,8 @@ DrawBevelBox(RastPort *rp, long left, long top, long width, long height,
             draw_line(bot_pen, x1, y2, x2, y2);
             draw_line(bot_pen, x2, y1, x2, y2);
             draw_line(top_pen, x1, y1, x2, y1);
-            draw_line(top_pen, x1, y1, x1, y2);
+            /* Raised boxes join the left edge to the dark bottom edge. */
+            draw_line(top_pen, x1, y1, x1, y2 - (top_pen == 2));
             boxtype = 0;
             break;
         }
@@ -433,13 +434,13 @@ DrawBevelBox(RastPort *rp, long left, long top, long width, long height,
             if ((width < 4) || (height < 2))
                 break;
 
-            /* Split the two-pixel corner joins between light and dark. */
-            draw_line(top_pen, x1, y1, x2 - 1, y1);
+            /* Keep the top and left edges intact at the corner joins. */
+            draw_line(top_pen, x1, y1, x2, y1);
             draw_line(top_pen, x1, y1, x1, y2);
-            draw_line(top_pen, x1 + 1, y1, x1 + 1, y2 - 1);
-            draw_line(bot_pen, x1 + 1, y2, x2, y2);
+            draw_line(top_pen, x1 + 1, y1, x1 + 1, y2);
+            draw_line(bot_pen, x1 + 2, y2, x2, y2);
             draw_line(bot_pen, x2 - 1, y1 + 1, x2 - 1, y2);
-            draw_line(bot_pen, x2, y1, x2, y2);
+            draw_line(bot_pen, x2, y1 + 1, x2, y2);
             break;
         }
     }
