@@ -16,6 +16,7 @@
 #include "board.h"
 #include "main.h"
 #include "clock.h"
+#include "persist.h"
 
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/stm32/rcc.h>
@@ -54,9 +55,6 @@ static void SystemInit_post(void) { }
 #define COMPILE_CPU "unknown"
 #endif
 
-/* Force a variable into the custom "persist" section */
-#define SRAM_PERSIST __attribute__((section(".persist,\"aw\",%nobits@")))
-
 /*
  * The System memory base appears at different addresses on different
  * STM32 processors.
@@ -68,11 +66,6 @@ static void SystemInit_post(void) { }
 #else
 #define SYSTEM_MEMORY_BASE 0x1fff0000  // STM32F4xx
 #endif
-
-#define RESET_TO_DFU_ROM_MAGIC 0xd0df00ba  // STM32 ROM DFU programmer
-#define RESET_TO_DFU_MAGIC     0xd0df0bee  // Stand-alone DFU (in firmware)
-
-SRAM_PERSIST static uint32_t system_reset_to_dfu_magic;
 
 extern uint _binary_objs_usbdfu_bin_start;
 extern uint _binary_objs_usbdfu_bin_end;
@@ -87,8 +80,8 @@ static void dmb(void)
 void
 reset_check(void)
 {
-    if (system_reset_to_dfu_magic == RESET_TO_DFU_ROM_MAGIC) {
-        system_reset_to_dfu_magic = 1;
+    if (persist.sp_reset_magic == RESET_TO_DFU_ROM_MAGIC) {
+        persist.sp_reset_magic = 1;
 
         uint32_t  addr = SYSTEM_MEMORY_BASE;
         uint32_t *base = (uint32_t *)(uintptr_t) addr;
@@ -101,8 +94,8 @@ reset_check(void)
         __asm__("MSR msp, %0" : : "r" (ADDR32(base)[0]));   // SP = base[0]
         /* Set the program counter (jump) */
         __asm__("BX %0\n\t" : : "r" (ADDR32(base)[1]));     // PC = base[1]
-    } else if (system_reset_to_dfu_magic == RESET_TO_DFU_MAGIC) {
-        system_reset_to_dfu_magic = 3;
+    } else if (persist.sp_reset_magic == RESET_TO_DFU_MAGIC) {
+        persist.sp_reset_magic = 3;
 
         uint len = ADDR8(&_binary_objs_usbdfu_bin_end) -
                    ADDR8(&_binary_objs_usbdfu_bin_start);
@@ -121,7 +114,7 @@ reset_check(void)
         /* Set the program counter (jump) */
         __asm__("BX %0\n\t" : : "r" (ADDR32(base)[1]));     // PC = base[1]
     } else {
-        system_reset_to_dfu_magic = 2;
+        persist.sp_reset_magic = 2;
 
         /*
          * STM32F107/STM32F407 ROM DFU does not correctly re-initialize
@@ -145,9 +138,9 @@ void
 reset_dfu(int in_rom)
 {
     if (in_rom)
-        system_reset_to_dfu_magic = RESET_TO_DFU_ROM_MAGIC;
+        persist.sp_reset_magic = RESET_TO_DFU_ROM_MAGIC;
     else
-        system_reset_to_dfu_magic = RESET_TO_DFU_MAGIC;
+        persist.sp_reset_magic = RESET_TO_DFU_MAGIC;
     scb_reset_system();
 }
 

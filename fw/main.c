@@ -28,6 +28,7 @@
 #include "utils.h"
 #include "kbrst.h"
 #include "pin_tests.h"
+#include "persist.h"
 #include "config.h"
 #include "msg.h"
 #include "version.h"
@@ -61,6 +62,7 @@ int
 main(void)
 {
     reset_periphs();
+    persist_init();
     reset_check();
     clock_init();
     timer_init();

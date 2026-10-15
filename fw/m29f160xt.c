@@ -1433,7 +1433,7 @@ ee_test(void)
             continue;  // Not checking this bit
         ee_read(check_base + BIT(pos), &data, sizeof (data));
         if (data == zerodata) {
-            printf("FAIL: CFI wrap at A%d (%08x)\n", pos, data);
+            printf("FAIL: CFI wrap at A%d (%016llx)\n", pos, data);
             rc++;
         }
     }

@@ -507,8 +507,18 @@ pin_test_oewe(uint verbose)
     gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 1);
     gpio_setmode(FLASH_OE_PORT, FLASH_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
 
-    gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
-    gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    if (config.flags & CF_OE_GATE) {
+        /* Active component driving SOCKET_OE -- need to affect its inputs */
+        gpio_setv(KBRST_PORT, KBRST_PIN, 1);  // Pull up KBRST
+        gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
+
+        gpio_setv(GPIOB, GPIO15, 1);  // Pull up CE
+        gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_INPUT_PULLUPDOWN);
+    } else {
+        gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
+        gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN,
+                     GPIO_SETMODE_INPUT_PULLUPDOWN);
+    }
 
     gpio_setv(FLASH_OEWE_PORT, FLASH_OEWE_PIN, 1);
     gpio_setmode(FLASH_OEWE_PORT, FLASH_OEWE_PIN,
