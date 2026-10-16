@@ -51,6 +51,7 @@ config_write(void)
     /* Locate and invalidate previous config areas */
     config_t *ptr;
     uint32_t  addr;
+    uint16_t  size;
     uint      crcpos;
     uint      crclen;
 
@@ -79,8 +80,9 @@ config_write(void)
     /* Locate space for new config area */
     for (addr = CONFIG_AREA_BASE; addr < CONFIG_AREA_END; addr += 4) {
         ptr = (config_t *) addr;
-        if (ptr->magic == CONFIG_MAGIC)
-            addr += ptr->size - 4;  // quickly skip to next area
+        size = ptr->size;
+        if ((ptr->magic == CONFIG_MAGIC) && (size >= 4) && (size < 0x2000))
+            addr += size - 4;  // quickly skip to next area
         else if (ptr->magic == 0xffffffff)
             break;
     }

@@ -91,7 +91,7 @@
  * which includes a 64-bit Magic sequence, Length, Command code, additional
  * data (optional), and final CRC.
  *     Magic (64 bits)
- *        0x0204, 0x1017, 0x0119, 0x1117
+ *        0x0204, 0x1017, 0x0119, 0x0117
  *     Length (16 bits)
  *        The length specifies the number of payload bytes (not including
  *        magic, length, command, or CRC bytes at end). This number may be
@@ -221,8 +221,9 @@
  *                        specifies the number of bytes to store. Following
  *                        that, the remaining bytes of the packet are the
  *                        data to store (there are 32 NV cells).
- *                        NV[0] is the default bank for the switcher to choose
- *                        NV[1] is the timeout (0=infinite)
+ *                        NV[0] is the ROM switcher timeout (0=infinite);
+ *                              seconds, or minutes if bit 7 is set
+ *                        NV[1] is the default bank for the switcher to choose
  *   KS_CMD_BANK_INFO
  *        ROM bank information, having structure bank_info_t, will be
  *        returned to the requester. This information includes the current

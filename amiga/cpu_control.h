@@ -270,7 +270,7 @@ cpu_get_tt0(void)
      */
     __asm__ __volatile__("subq.l #4,sp \n\t"
                          ".long 0xf0170a00 \n\t"  // pmove.l tt0,(sp)
-                         "move.l (sp)+,d0 \n\t"
+                         "move.l (sp)+,%0 \n\t"
                          : "=d" (value));
     return (value);
 }
@@ -280,8 +280,8 @@ cpu_set_tt0(uint32_t value)
 {
     __asm__ __volatile__("move.l %0,-(sp) \n\t"
                          ".long 0xf0170800 \n\t"  // pmove.l (sp),tt0
-                         "adda.l #4,sp \n\t"
-                         : "=d" (value));
+                         "addq.l #4,sp \n\t"
+                         :: "d" (value));
 }
 
 OK_UNUSED static inline uint32_t
@@ -295,8 +295,8 @@ cpu_get_tt1(void)
      * ext 9     is 0 for mem to reg, 1 for reg to mem
      */
     __asm__ __volatile__("subq.l #4,sp \n\t"
-                         ".long 0xf0170e00 \n\t"  // pmove.l rt1,(sp)
-                         "move.l (sp)+,d0 \n\t"
+                         ".long 0xf0170e00 \n\t"  // pmove.l tt1,(sp)
+                         "move.l (sp)+,%0 \n\t"
                          : "=d" (value));
     return (value);
 }
@@ -305,9 +305,9 @@ OK_UNUSED static inline void
 cpu_set_tt1(uint32_t value)
 {
     __asm__ __volatile__("move.l %0,-(sp) \n\t"
-                         ".long 0xf0170c00 \n\t"  // pmove.l (sp),rt1
-                         "adda.l #4,sp \n\t"
-                         : "=d" (value));
+                         ".long 0xf0170c00 \n\t"  // pmove.l (sp),tt1
+                         "addq.l #4,sp \n\t"
+                         :: "d" (value));
 }
 
 OK_UNUSED static inline uint32_t

@@ -209,7 +209,7 @@ cia_spin(unsigned int ticks)
  */
 TEXT_TO_RAM
 static void
-rom_wait_recover(void)
+rom_wait_recover(uint32_t romval)
 {
     uint     pos;
     uint32_t last = 0;
@@ -222,7 +222,7 @@ rom_wait_recover(void)
     /* Wait until Kickstart ROM data is consistent for 5 ms */
     for (pos = 0; pos < 100; pos++) {
         cur = *VADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        if ((last != cur) || (*VADDR32(ROM_BASE) != 0x11144ef9)) {
+        if ((last != cur) || (*VADDR32(ROM_BASE) != romval)) {
             if (timeout++ > 200000)
                 break;  // Give up after 2 seconds
             pos = 0;
@@ -362,8 +362,10 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
 
         if (magic < ARRAY_SIZE(sm_magic)) {
             if (val != sm_magic[magic]) {
-                magic = 0;
-                cia_spin(word);
+                /* This word might begin a new magic sequence */
+                magic = (val == sm_magic[0]) ? 1 : 0;
+                if (magic == 0)
+                    cia_spin(word);
                 continue;
             }
         } else if (magic < ARRAY_SIZE(sm_magic) + 1) {
@@ -386,7 +388,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             if (*replyalen > replymax)
                 *replyalen = replymax;
         }
-        rom_wait_recover();  // Wait until ROM is accessible again
+        rom_wait_recover(rombase_value);  // Wait until ROM is accessible again
         goto scc_cleanup;
     }
 
@@ -402,7 +404,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
 #endif
     replyround = (replylen + 3) & ~3;  // Round up reply length to long
 
-    if (replyround > replymax) {
+    if ((replybuf != NULL) && (replyround > replymax)) {
         replystatus = MSG_STATUS_BAD_LENGTH;
         if (replyalen != NULL) {
             *replyalen = replylen;
@@ -446,7 +448,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
 
 scc_cleanup:
     if ((replystatus & 0xffffff00) != 0) {
-        rom_wait_recover();  // Wait until ROM is accessible again
+        rom_wait_recover(rombase_value);  // Wait until ROM is accessible again
     }
 
     if (((replystatus & 0xffff0000) == 0) && (replystatus != KS_STATUS_CRC)) {

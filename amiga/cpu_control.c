@@ -186,10 +186,10 @@ get_cpu(void)
 __attribute__ ((noinline)) uint32_t
 mmu_get_tc_030(void)
 {
-    register uint32_t result;
+    uint32_t result;
     __asm__ __volatile__("subq.l #4,sp \n\t"
                          ".long 0xf0174200 \n\t"  // pmove tc,(sp)
-                         "move.l (sp)+,d0 \n\t"
+                         "move.l (sp)+,%0 \n\t"
                          : "=d" (result));
     return (result);
 }
@@ -204,8 +204,8 @@ mmu_set_tc_030(register uint32_t tc asm("%d0"))
 {
     __asm__ __volatile__("move.l %0,-(sp) \n\t"
                          ".long 0xf0174000 \n\t"  // pmove.l (sp),tc
-                         "adda.l #4,sp \n\t"
-                         : "=d" (tc));
+                         "addq.l #4,sp \n\t"
+                         :: "d" (tc));
 }
 
 /*
@@ -216,9 +216,8 @@ mmu_set_tc_030(register uint32_t tc asm("%d0"))
 __attribute__ ((noinline)) uint32_t
 mmu_get_tc_040(void)
 {
-    register uint32_t result;
+    register uint32_t result asm("%d0");
     __asm__ __volatile__(".long 0x4e7a0003 \n\t"  // movec.l tc,d0
-                         "rts \n\t"
                          : "=d" (result));
     return (result);
 }
@@ -232,8 +231,7 @@ __attribute__ ((noinline)) void
 mmu_set_tc_040(register uint32_t tc asm("%d0"))
 {
     __asm__ __volatile__(".long 0x4e7b0003 \n\t"  // movec.l d0,tc
-                         "rts \n\t"
-                         : "=d" (tc));
+                         :: "d" (tc));
 }
 #endif
 

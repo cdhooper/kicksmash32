@@ -109,7 +109,7 @@ dump_memory(void *buf, uint len, uint dump_base)
  * Sends a command to the STM32 ARM CPU running on Kicksmash.
  * All messages are protected by CRC. Message format:
  *     Magic (64 bits)
- *        0x0117, 0x0119, 0x1017, 0x0204
+ *        0x0204, 0x1017, 0x0119, 0x0117
  *     Length (16 bits)
  *        The length specifies the number of payload bytes (not including
  *        magic, length, command, or CRC bytes at end). This number may be
@@ -229,6 +229,10 @@ typedef struct {
 static msg_semaphore_t *msg_sem;
 static msg_semaphore_t  msg_sem_data;
 
+/* Standalone is single-threaded: no locking required */
+#define MSG_SEM_OBTAIN()
+#define MSG_SEM_RELEASE()
+
 static void
 host_msg_init(void)
 {
@@ -273,6 +277,9 @@ typedef struct {
 
 static msg_semaphore_t *msg_sem;
 static const char       semaphore_name[] = "smashmsg";
+
+#define MSG_SEM_OBTAIN()  ObtainSemaphore(&msg_sem->ms_sem)
+#define MSG_SEM_RELEASE() ReleaseSemaphore(&msg_sem->ms_sem)
 
 /*
  * tag_queue_add() adds a node to the end of the message queue.
@@ -330,8 +337,10 @@ tag_queue_remove(uint target_tag, uint *rxlen)
         if ((target_tag != TAG_QUEUE_ANY) &&
             ((uint16_t) (target_tag - node->mrg_tag) > 0x30)) {
             /* This node's tag is "too old" -- do garbage collection */
-            printf("Expunge tag %x (current: %x)\n", node->mrg_tag, target_tag);
+            printf("Expunge tag=%x (current: %x)\n", node->mrg_tag, target_tag);
             Remove((struct Node *)node);
+            FreeMem(node->mrg_buf, MSG_POOL_BUF_SIZE);
+            FreeMem(node, sizeof (*node));
         }
     }
 
@@ -364,10 +373,13 @@ get_msg_semaphore(void)
         /* Message semaphore already exists */
         hdr = (msg_semaphore_t *)sem;
 
-        Permit();  // Allow multitasking before possibly blocking
-        ObtainSemaphore(sem);
+        /*
+         * Take the reference while still in Forbid(). Otherwise, the
+         * last owner could free the structure before it is claimed here.
+         * release_msg_semaphore() also adjusts refcount under Forbid().
+         */
         hdr->ms_refcount++;
-        ReleaseSemaphore(sem);
+        Permit();
     } else {
         /* Not found: allocate new message semaphore */
         hdr = (msg_semaphore_t *)
@@ -382,9 +394,15 @@ get_msg_semaphore(void)
             NewList((struct List *)&hdr->ms_queue_list);
 
             /* Structure may survive this program, so can't use constant */
-            char **name = &hdr->ms_sem.ss_Link.ln_Name;
-            *name = AllocMem(sizeof (semaphore_name), MEMF_PUBLIC);
-            strcpy(*name, semaphore_name);
+            char *name = AllocMem(sizeof (semaphore_name), MEMF_PUBLIC);
+            if (name == NULL) {
+                FreeMem(hdr, sizeof (*hdr));
+                Permit();
+                msg_sem = NULL;
+                return;
+            }
+            strcpy(name, semaphore_name);
+            hdr->ms_sem.ss_Link.ln_Name = name;
 
             hdr->ms_sem.ss_Link.ln_Pri  = 0;
 
@@ -439,7 +457,7 @@ release_msg_semaphore(void)
         uint len;
         while ((data = tag_queue_remove(TAG_QUEUE_ANY, &len)) != NULL) {
             km_msg_hdr_t *hdr = data;
-            printf("Removed %x tag %x op %x len %x\n",
+            printf("Removed %x tag=%x op=%x len=%x\n",
                    data, hdr->km_tag, hdr->km_op, len);
             FreeMem(data, MSG_POOL_BUF_SIZE);
         }
@@ -465,10 +483,7 @@ host_msg_exit(void)
 {
     uint cur;
 
-    if (msg_sem == NULL)
-        return;
-
-    release_msg_semaphore();
+    release_msg_semaphore();  // Does nothing if not acquired
     for (cur = 0; cur < MSG_POOL_COUNT; cur++) {
         if (msg_pool[cur] != NULL) {
             FreeMem(msg_pool[cur], MSG_POOL_BUF_SIZE);
@@ -483,23 +498,30 @@ host_msg_exit(void)
 static void
 host_msg_init(void)
 {
+    static uint8_t atexit_registered = 0;
     uint cur;
     if (msg_sem != NULL)
         return;
 
-    for (cur = 0; cur < MSG_POOL_COUNT; cur++) {
-        msg_pool[cur] = AllocMem(MSG_POOL_BUF_SIZE, MEMF_PUBLIC);
-        if (msg_pool[cur] == NULL) {
-            while (cur > 0) {
-                cur--;
-                FreeMem(msg_pool[cur], MSG_POOL_BUF_SIZE);
-                msg_pool[cur] = NULL;
+    /* Pool may already exist if semaphore acquisition failed earlier */
+    if (msg_pool[0] == NULL) {
+        for (cur = 0; cur < MSG_POOL_COUNT; cur++) {
+            msg_pool[cur] = AllocMem(MSG_POOL_BUF_SIZE, MEMF_PUBLIC);
+            if (msg_pool[cur] == NULL) {
+                while (cur > 0) {
+                    cur--;
+                    FreeMem(msg_pool[cur], MSG_POOL_BUF_SIZE);
+                    msg_pool[cur] = NULL;
+                }
+                return;
             }
-            return;
         }
     }
 
-    atexit(host_msg_exit);
+    if (atexit_registered == 0) {
+        atexit_registered = 1;
+        atexit(host_msg_exit);
+    }
     get_msg_semaphore();
 
     if (msg_sem != NULL) {
@@ -535,6 +557,8 @@ host_tag_alloc(void)
     uint16_t newtag;
 
     host_msg_init();
+    if (msg_sem == NULL)
+        return (0);  // Message interface unavailable (no memory)
     Forbid();
     newtag = (msg_sem->ms_tag)++;
     msg_sem->ms_tag_count++;      // Should be 0 when idle
@@ -554,6 +578,8 @@ host_tag_free(uint tag)
 {
     /* Allocator just uses a circular counter, so no need to release */
     (void) tag;
+    if (msg_sem == NULL)
+        return;
     Forbid();
     msg_sem->ms_tag_count--;
     Permit();
@@ -586,6 +612,8 @@ host_send_msg(void *smsg, uint len)
     uint rc;
 
     host_msg_init();
+    if (msg_sem == NULL)
+        return (MSG_STATUS_NO_MEM);
 
     if (sendlen > SEND_MSG_MAX)
         sendlen = SEND_MSG_MAX;
@@ -672,6 +700,9 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
     uint timeout;
     uint msg_pool_pos;
 
+    if ((msg_sem == NULL) || (msg_pool[0] == NULL))
+        return (MSG_STATUS_NO_MEM);
+
     /* Acquire the next message buffer */
     Forbid();
     msg_pool_pos = msg_pool_cur;
@@ -682,7 +713,7 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
     for (timeout = 50; timeout > 0; timeout--) {
 #ifndef STANDALONE
         km_msg_hdr_t *nmsg;
-        ObtainSemaphore(&msg_sem->ms_sem);
+        MSG_SEM_OBTAIN();
         nmsg = tag_queue_remove(tag, &rxlen);
         if (nmsg != NULL) {
             /* Already received a message matching the expected tag */
@@ -703,12 +734,14 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
         {
             rc = recv_msg(msg, MSG_POOL_BUF_SIZE, &rxlen, 25);  // 25 ms timeout
             if (rc == KS_STATUS_NODATA) {
-                ReleaseSemaphore(&msg_sem->ms_sem);
+                MSG_SEM_RELEASE();
                 if (timeout > 1)
                     continue;  // Try again, letting other tasks progress
+            } else if (rc != KM_STATUS_OK) {
+                MSG_SEM_RELEASE();  // Error return below must not hold it
             }
             if (rc != KM_STATUS_OK) {
-                printf("Get message tag %x failed: (%s)\n", tag, smash_err(rc));
+                printf("Get message tag=%x failed: (%s)\n", tag, smash_err(rc));
 #ifndef ROMFS
                 if (flag_debug > 2)
                     dump_memory(msg, 0x40, DUMP_VALUE_UNASSIGNED);
@@ -718,7 +751,7 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
         }
         if (tag == msg->km_tag) {
             if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF)) {
-                ReleaseSemaphore(&msg_sem->ms_sem);
+                MSG_SEM_RELEASE();
                 return (rc);
             }
             /* Got desired message */
@@ -731,7 +764,7 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
             *rdata = msg;
             if (rc == KM_STATUS_OK)
                 rc = msg->km_status;
-            ReleaseSemaphore(&msg_sem->ms_sem);
+            MSG_SEM_RELEASE();
             return (rc);
         }
         /* Hand off this message as it's not for the current caller */
@@ -750,7 +783,7 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
             tag_queue_add(msg->km_tag, msg, rxlen);
             msg = nmsg;
         }
-        ReleaseSemaphore(&msg_sem->ms_sem);
+        MSG_SEM_RELEASE();
 #endif
     }
     printf("Message receive timeout\n");
