@@ -1674,8 +1674,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             /* Compute start of raw message */
             cons_s = rx_consumer - (raw_len - 2 + 1) / 2;
 
-            if ((!(cmd & KS_MSG_ALTBUF) && (msg_lock & BIT(2))) ||
-                 ((cmd & KS_MSG_ALTBUF) && (msg_lock & BIT(3)))) {
+            if (!(cmd & KS_MSG_OVERRIDE) &&
+                ((!(cmd & KS_MSG_ALTBUF) && (msg_lock & BIT(2))) ||
+                  ((cmd & KS_MSG_ALTBUF) && (msg_lock & BIT(3))))) {
                 ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
                 break;
             }
@@ -1757,8 +1758,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint8_t *buf1;
             uint8_t *buf2;
 
-            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(3))) ||
-                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(2)))) {
+            if (!(cmd & KS_MSG_OVERRIDE) &&
+                ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(3))) ||
+                 (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(2))))) {
                 ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
                 break;
             }
@@ -1821,8 +1823,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             if (cmd & KS_MSG_UNLOCK) {
                 msg_lock &= ~lockbits;
             } else {
-                if (((lockbits & BIT(0)) && (msg_lock & BIT(2))) ||
-                    ((lockbits & BIT(1)) && (msg_lock & BIT(3)))) {
+                if (!(cmd & KS_MSG_OVERRIDE) &&
+                    (((lockbits & BIT(0)) && (msg_lock & BIT(2))) ||
+                     ((lockbits & BIT(1)) && (msg_lock & BIT(3))))) {
                     /* Attempted to lock resource owned by the other side */
                     ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
                     break;
@@ -1833,6 +1836,12 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             break;
         }
         case KS_CMD_MSG_FLUSH:
+            if (!(cmd & KS_MSG_OVERRIDE) &&
+                ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(3))) ||
+                 (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(2))))) {
+                ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+                break;
+            }
             if (cmd & KS_MSG_ALTBUF)
                 cons_atou = prod_atou;
             else
@@ -2174,9 +2183,10 @@ address_log_replay(uint max)
                "KS CMD       Amiga=%-8u  USB=%u\n"
                "KS CRC Fail  Amiga=%-8u  USB=%u\n"
                "KS Unk CMD   Amiga=%-8u  USB=%u\n"
-               "Buf Messages  AtoU=%-8u UtoA=%u\n"
+               "Message count AtoU=%-8u UtoA=%u\n"
                "Message Prod  AtoU=%-8u UtoA=%u\n"
-               "Message Cons  AtoU=%-8u UtoA=%u\n",
+               "Message Cons  AtoU=%-8u UtoA=%u\n"
+               "Message Buf   AtoU=%08x UtoA=%08x\n",
                (uint) DMA_CNDTR(DMA1, DMA_CHANNEL5),
                DMA_CPAR(DMA1, DMA_CHANNEL5), DMA_CMAR(DMA1, DMA_CHANNEL5),
                (uintptr_t)buffer_rxd,
@@ -2186,7 +2196,7 @@ address_log_replay(uint max)
                consumer_wrap, consumer_spin, messages_amiga, messages_usb,
                fail_crc_a, fail_crc_u, fail_cmd_a, fail_cmd_u,
                messages_atou, messages_utoa, prod_atou, prod_utoa,
-               cons_atou, cons_utoa);
+               cons_atou, cons_utoa, (uintptr_t)msg_atou, (uintptr_t)msg_utoa);
         consumer_wrap = 0;
         consumer_spin = 0;
         messages_amiga = 0;
@@ -2609,8 +2619,9 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             uint raw_len = cmd_len + KS_HDR_AND_CRC_LEN;  // Magic+len+cmd+CRC
             raw_len = (raw_len + 3) & ~3;                 // round up
 
-            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(1))) ||
-                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(0)))) {
+            if (!(cmd & KS_MSG_OVERRIDE) &&
+                ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(1))) ||
+                 (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(0))))) {
                 usb_msg_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
                 break;
             }
@@ -2643,8 +2654,9 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             uint8_t *buf1;
             uint8_t *buf2;
 
-            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(0))) ||
-                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(1)))) {
+            if (!(cmd & KS_MSG_OVERRIDE) &&
+                ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(0))) ||
+                 (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(1))))) {
                 usb_msg_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
                 break;
             }
@@ -2706,8 +2718,9 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             if (cmd & KS_MSG_UNLOCK) {
                 msg_lock &= ~lockbits;
             } else {
-                if (((lockbits & BIT(2)) && (msg_lock & BIT(0))) ||
-                    ((lockbits & BIT(3)) && (msg_lock & BIT(1)))) {
+                if (!(cmd & KS_MSG_OVERRIDE) &&
+                    (((lockbits & BIT(2)) && (msg_lock & BIT(0))) ||
+                     ((lockbits & BIT(3)) && (msg_lock & BIT(1))))) {
                     /* Attempted to lock resource owned by the other side */
                     usb_msg_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
                     break;
@@ -2718,8 +2731,9 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             break;
         }
         case KS_CMD_MSG_FLUSH:
-            if ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(0))) ||
-                (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(1)))) {
+            if (!(cmd & KS_MSG_OVERRIDE) &&
+                ((((cmd & KS_MSG_ALTBUF) == 0) && (msg_lock & BIT(0))) ||
+                 (((cmd & KS_MSG_ALTBUF) != 0) && (msg_lock & BIT(1))))) {
                 usb_msg_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
                 break;
             }

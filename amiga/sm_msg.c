@@ -374,6 +374,21 @@ get_msg_semaphore(void)
         hdr = (msg_semaphore_t *)sem;
 
         /*
+         * Another program built with a different msg_semaphore_t layout
+         * would corrupt this structure (or this program would corrupt
+         * theirs). Refuse to share it. Change ms_version whenever the
+         * structure layout changes.
+         */
+        if ((hdr->ms_version != 1) || (hdr->ms_allocsize != sizeof (*hdr))) {
+            Permit();
+            printf("smashmsg version %u size %u incompatible with %u size %u; "
+                   "rebuild all smash programs\n",
+                   hdr->ms_version, hdr->ms_allocsize, 1, (uint) sizeof (*hdr));
+            msg_sem = NULL;
+            return;
+        }
+
+        /*
          * Take the reference while still in Forbid(). Otherwise, the
          * last owner could free the structure before it is claimed here.
          * release_msg_semaphore() also adjusts refcount under Forbid().
@@ -733,24 +748,37 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
 #endif
         {
             rc = recv_msg(msg, MSG_POOL_BUF_SIZE, &rxlen, 25);  // 25 ms timeout
-            if (rc == KS_STATUS_NODATA) {
+            if ((rc == KS_STATUS_NODATA) || (rc == KS_STATUS_CRC)) {
+                /*
+                 * Release here and always skip the code below: it also
+                 * releases the semaphore, and the buffer holds no new
+                 * message. Falling through on the final pass released
+                 * the semaphore twice (Guru 81000008 AN_SemCorrupt).
+                 */
                 MSG_SEM_RELEASE();
-                if (timeout > 1)
-                    continue;  // Try again, letting other tasks progress
-            } else if (rc != KM_STATUS_OK) {
-                MSG_SEM_RELEASE();  // Error return below must not hold it
+                continue;  // Try again, letting other tasks progress
             }
-            if (rc != KM_STATUS_OK) {
+            if (((rc & 0x0000ff00) != KM_STATUS_OK) &&
+                ((rc & 0xffff0000) == MSG_STATUS_SUCCESS)) {
+                /*
+                 * One of the following was received:
+                 * KS_STATUS_FAIL, KS_STATUS_UNKCMD, KS_STATUS_BADARG,
+                 * KS_STATUS_BADLEN, KS_STATUS_LOCKED.
+                 * These are all fatal, except maybe KS_STATUS_LOCKED.
+                 * Don't match its tag or queue it for another task.
+                 */
+                MSG_SEM_RELEASE();
                 printf("Get message tag=%x failed: (%s)\n", tag, smash_err(rc));
-#ifndef ROMFS
-                if (flag_debug > 2)
-                    dump_memory(msg, 0x40, DUMP_VALUE_UNASSIGNED);
-#endif
                 return (rc);
             }
         }
         if (tag == msg->km_tag) {
             if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF)) {
+                printf("Get message tag=%x failed: (%s)\n", tag, smash_err(rc));
+#ifndef ROMFS
+                if (flag_debug > 2)
+                    dump_memory(msg, 0x40, DUMP_VALUE_UNASSIGNED);
+#endif
                 MSG_SEM_RELEASE();
                 return (rc);
             }

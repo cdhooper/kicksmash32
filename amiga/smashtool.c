@@ -3627,8 +3627,8 @@ static void
 show_about(void)
 {
     (void) ask("OK",
-               "SmashTool %s\n"
-               "Built %s %s\n"
+               "SmashTool "VERSION"\n"
+               "Built "BUILD_DATE" "BUILD_TIME"\n"
                "\n"
                "Workbench utility for KickSmash ROM bank settings,\n"
                "ROM image programming, and Clock setting.\n"
@@ -3638,7 +3638,6 @@ show_about(void)
                "\n"
                "\xA9 Chris Hooper\n"
                "https://github.com/cdhooper/kicksmash32",
-               VERSION, BUILD_DATE, BUILD_TIME,
                ((id.si_mode != 1) && (id.si_mode != 2)) ? 32 : 16,
                id.si_ks_version[0], id.si_ks_version[1],
                id.si_ks_date[0], id.si_ks_date[1],

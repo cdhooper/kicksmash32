@@ -234,9 +234,11 @@ main(void)
     }
 
     receive_priority = context->owner_task->tc_Node.ln_Pri;
+#if 0
     if (receive_priority > -128) {
         --receive_priority;
     }
+#endif
     if (!smashnet_rx_start(context, receive_priority)) {
         printf("Unable to start receive task (memory or timer.device).\n");
         goto cleanup;

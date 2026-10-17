@@ -70,6 +70,7 @@
 #define KS_BANK_UNMERGE    0x0100  // Unmerge bank range (KS_BANK_MERGE)
 
 #define KS_MSG_ALTBUF      0x0100  // Perform operations on alternate buffer
+#define KS_MSG_OVERRIDE    0x0200  // Override buffer lock
 
 #define KS_MSG_UNLOCK      0x0100  // Unlock instead of lock
 

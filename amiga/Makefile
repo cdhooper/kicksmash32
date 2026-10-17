@@ -21,9 +21,10 @@ ROM_OBJDIR   := objs.rom
 ROM_OBJDIR_D := objs.rom_d
 NETDRV_OBJDIR := objs.netdrv
 CRC32_C      := ../fw/crc32.c
-SMASH_SRCS   := smash.c sm_msg.c sm_msg_core.c cpu_control.c $(CRC32_C)
-SMASH_HDRS   := cpu_control.h sm_msg.h sm_file.h host_cmd.h \
-                ../fw/smash_cmd.h ../fw/crc32.h
+SMASH_SRCS   := smash.c smash_flash.c sm_msg.c sm_msg_core.c cpu_control.c \
+		$(CRC32_C)
+SMASH_HDRS   := cpu_control.h sm_msg.h sm_file.h host_cmd.h smash.h \
+		smash_flash.h ../fw/smash_cmd.h ../fw/crc32.h
 STOOL_SRCS   := smashtool.c sm_msg.c sm_msg_core.c cpu_control.c $(CRC32_C)
 STOOL_HDRS   := cpu_control.h sm_msg.h host_cmd.h \
                 ../fw/smash_cmd.h ../fw/crc32.h

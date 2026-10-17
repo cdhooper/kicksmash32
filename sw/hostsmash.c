@@ -130,9 +130,7 @@ static const char usage_text[] =
 #ifdef FILE_DEBUG
 "       --debugfs            debug filesystem operations\n"
 #endif
-#ifdef FILE_DEBUG
 "       --debugmsg           debug Amiga messages\n"
-#endif
 "       --debugnet           debug network operations\n"
 "    -e --erase              erase EEPROM (use -a <addr> for sector erase)\n"
 "    -f --fill               fill EEPROM with duplicates of the same image\n"
@@ -3677,11 +3675,11 @@ show_ks_inquiry(void)
     uint16_t rev;
     rc = send_ks_cmd(KS_CMD_ID, NULL, 0, &id, sizeof (id), &status, NULL, 0);
     if (rc != 0) {
-        printf("KS send message failed: %d (%s)\n", rc, smash_err(rc));
+        printf("HS send message failed: %d (%s)\n", rc, smash_err(rc));
         return;
     }
     if (status != 0) {
-        printf("KS message failure: %d (%s)\n", status, smash_err(status));
+        printf("HS message failure: %d (%s)\n", status, smash_err(status));
         return;
     }
 
@@ -4118,7 +4116,7 @@ keep_app_state(void)
     rc = send_ks_cmd(KS_CMD_MSG_STATE | KS_MSG_STATE_SET, app_state_send,
                      sizeof (app_state_send), NULL, 0, &status, NULL, 0);
     if (rc != 0) {
-        printf("KS send message failed: %d (%s)\n", rc, smash_err(rc));
+        printf("HS send message failed: %d (%s)\n", rc, smash_err(rc));
         return (rc);
     }
     return (MSG_STATUS_SUCCESS);
@@ -4165,7 +4163,7 @@ get_utctime(time_t rawtime)
 static uint
 sm_unknown(km_msg_hdr_t *km, uint *status)
 {
-    printf("KS unexpected op %x\n", km->km_op);
+    printf("HS unexpected op %x\n", km->km_op);
     km->km_status = KM_STATUS_UNKCMD;
     km->km_op |= KM_OP_REPLY;
     return (send_msg(km, sizeof (*km), status));
@@ -4415,17 +4413,17 @@ handle_atou_messages(void)
     while (1) {
         rc = recv_msg(TAG_QUEUE_ANY, rxdata, sizeof (rxdata), &status, &rxlen);
         if (rc != 0) {
-            printf("KS recv_msg failure: %d (%s)\n", rc, smash_err(rc));
+            printf("HS recv_msg failure: %d (%s)\n", rc, smash_err(rc));
             return (rc);
         }
-        if (status == KS_CMD_MSG_SEND) {
+        if ((status & ~KS_MSG_OVERRIDE) == KS_CMD_MSG_SEND) {
             process_msg(status, rxdata, rxlen);
             handled++;
         } else if ((status == KS_STATUS_NODATA) ||
                    (status == KS_STATUS_LOCKED)) {
             break;
         } else if (status != 0) {
-            printf("recv_msg rc=%x status=%04x len=%x", rc, status, rxlen);
+            printf("HS recv_msg rc=%x status=%04x len=%x", rc, status, rxlen);
             if (rxlen > 0) {
                 uint pos;
                 printf(" data=");
@@ -4480,7 +4478,7 @@ run_message_mode(void)
     if (rc == 0)
         rc = status;
     if (rc != 0) {
-        printf("KS Set App State failed: %d (%s)\n", rc, smash_err(rc));
+        printf("HS Set App State failed: %d (%s)\n", rc, smash_err(rc));
         return;
     }
 
@@ -4488,7 +4486,7 @@ run_message_mode(void)
     if (rc == 0)
         rc = status;
     if (rc != 0) {
-        printf("KS Msg Flush failed: %d (%s)\n", rc, smash_err(rc));
+        printf("HS Msg Flush failed: %d (%s)\n", rc, smash_err(rc));
         return;
     }
 
@@ -4514,7 +4512,7 @@ run_message_mode(void)
             if (ks_message_terminated)
                 break;
             if (rc != 0) {
-                printf("KS message failure: %d (%s)\n", rc, smash_err(rc));
+                printf("HS message failure: %d (%s)\n", rc, smash_err(rc));
                 continue;
             }
             if ((mi.smi_atou_inuse != 0) || (mi.smi_utoa_inuse != 0)) {
@@ -4565,7 +4563,7 @@ clock_ks_set(int enter)
     rc = send_ks_cmd(KS_CMD_CLOCK | KS_CLOCK_SET, amtime, sizeof (amtime),
                      NULL, 0, &status, &rxlen, 0);
     if (rc != 0) {
-        printf("KS clock set failed: %d (%s)\n", rc, smash_err(rc));
+        printf("HS clock set failed: %d (%s)\n", rc, smash_err(rc));
         return (rc);
     }
     return (rc);
@@ -4588,7 +4586,7 @@ clock_ks_show(int enter)
     rc = send_ks_cmd(KS_CMD_CLOCK, NULL, 0, amtime, sizeof (amtime), &status,
                      &rxlen, 0);
     if (rc != 0) {
-        printf("KS clock request failed: %d (%s)\n", rc, smash_err(rc));
+        printf("HS clock request failed: %d (%s)\n", rc, smash_err(rc));
         return (rc);
     }
 
