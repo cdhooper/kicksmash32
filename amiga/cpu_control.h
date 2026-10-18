@@ -141,10 +141,68 @@ void cia_spin(unsigned int ticks);
 #define NO_INLINE __attribute__ ((noinline))
 #define OK_UNUSED __attribute__ ((unused))
 
-NO_INLINE uint32_t mmu_get_tc_030(void);
-NO_INLINE uint32_t mmu_get_tc_040(void);
-NO_INLINE void mmu_set_tc_030(register uint32_t tc asm("%d0"));
-NO_INLINE void mmu_set_tc_040(register uint32_t tc asm("%d0"));
+/*
+ * mmu_get_tc_030
+ * --------------
+ * This function only works on the 68030.
+ * 68040 and 68060 have different MMU instructions.
+ */
+OK_UNUSED static inline uint32_t
+mmu_get_tc_030(void)
+{
+    uint32_t tc;
+    __asm__ __volatile__("move.l %0,%%a0 \n\t"
+                         ".long 0xf0104200 \n\t"  // pmove.l tc,(a0)
+                         :: "a" (&tc)
+                         : "a0", "memory");
+    return (tc);
+}
+
+/*
+ * mmu_set_tc_030
+ * --------------
+ * This function only works on the 68030.
+ */
+OK_UNUSED static inline void
+mmu_set_tc_030(uint32_t tc)
+{
+    __asm__ __volatile__("move.l %0,%%a0 \n\t"
+                         ".long 0xf0104000 \n\t"  // pmove.l (a0),tc
+                         :: "a" (&tc)
+                         : "a0", "memory");
+}
+
+/*
+ * mmu_get_tc_040
+ * --------------
+ * This function only works on 68040 and 68060.
+ */
+OK_UNUSED static inline uint32_t
+mmu_get_tc_040(void)
+{
+    uint32_t tc;
+    __asm__ __volatile__(".long 0x4e7a0003 \n\t"  // movec.l tc,d0
+                         "move.l %%d0,%0 \n\t"
+                         : "=d" (tc)
+                         :
+                         : "d0", "memory");
+    return (tc);
+}
+
+/*
+ * mmu_set_tc_040
+ * --------------
+ * This function only works on 68040 and 68060.
+ */
+OK_UNUSED static inline void
+mmu_set_tc_040(uint32_t tc)
+{
+    __asm__ __volatile__("move.l %0,%%d0 \n\t"
+                         ".long 0x4e7b0003 \n\t"  // movec.l d0,tc
+                         :
+                         : "d" (tc)
+                         : "d0", "memory");
+}
 
 OK_UNUSED static inline uint32_t
 cpu_get_cacr(void)

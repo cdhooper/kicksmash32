@@ -34,6 +34,7 @@ void msg_init(void);
 #ifdef ROMFS
 extern const uint32_t lcrc32_table[];
 #endif
+extern void (*ecia_spin)(unsigned int ticks);
 extern uint (*esend_cmd_core)(uint16_t cmd, void *arg, uint16_t arglen,
                               void *reply, uint replymax, uint *replyalen);
 uint send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,

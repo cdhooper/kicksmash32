@@ -2242,6 +2242,16 @@ cleanup_screen(void)
     FreeRaster(tmpras.RasPtr, SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
+#ifndef STANDALONE
+int flash_id_data(uint32_t *data, uint data_count)
+{
+    (void) data;
+    (void) data_count;
+    return (0);
+}
+int (*eflash_id_data)(uint32_t *data, uint data_count) = flash_id_data;
+#endif
+
 /*
  * sm_msg_copy_to_ram
  * ------------------
@@ -2267,6 +2277,15 @@ sm_msg_copy_to_ram(void)
     memcpy(copy_to_ram_ptr, (void *) copy_to_ram_start, len);
     esend_cmd_core = (void *) (copy_to_ram_ptr +
                                (uintptr_t) send_cmd_core - copy_to_ram_start);
+
+    extern int (*eflash_id_data)(uint32_t *data, uint data_count);
+    extern int flash_id_data(uint32_t *data, uint data_count);
+    eflash_id_data = (void *) (copy_to_ram_ptr +
+                               (uintptr_t) flash_id_data - copy_to_ram_start);
+
+    void lcia_spin(unsigned int ticks);
+    ecia_spin      = (void *) (copy_to_ram_ptr +
+                               (uintptr_t) lcia_spin - copy_to_ram_start);
 }
 
 /*

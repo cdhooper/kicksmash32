@@ -21,8 +21,6 @@ const char *version = "\0$VER: smash "VERSION" ("BUILD_DATE") \xA9 Chris Hooper"
 #include <ctype.h>
 #include <string.h>
 #include <clib/dos_protos.h>
-#include <dos/dos.h>
-#include <fcntl.h>
 #include <time.h>
 #include <exec/execbase.h>
 #include <exec/memory.h>
@@ -84,7 +82,7 @@ static const char cmd_options[] =
     "   write <opt>   write to flash (-w ?, bank, file, ...)\n"
     "   loop <num>    repeat the command a specified number of times (-l)\n"
     "   quiet         minimize test output\n"
-    "   set <n> <v>   set KickSmash value <n>=\"name\" and <v> is string (-s)\n"
+    "   set <n> <v>   set KickSmash value <n>=\"name\" and string <v> (-s)\n"
     "   sr <addr>     spin loop reading address (-X)\n"
     "   srr <addr>    spin loop reading address with ROM OVL set (-Y)\n"
     "   term          open Kicksmash firmware terminal [-T]\n"
@@ -2656,7 +2654,7 @@ cmd_term(int argc, char *argv[])
         tick_count += (uint16_t) (tick_last - tick_now);
         tick_last = tick_now;
         if ((count++ & 0x7) != 0)
-            continue;  // Poll infrequently for BEC output
+            continue;  // Poll infrequently for Kicksmash output
 
         if (poll_count < poll_delay) {
             poll_count++;

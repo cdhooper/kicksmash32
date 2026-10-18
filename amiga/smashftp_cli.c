@@ -1060,9 +1060,8 @@ cmdline(void)
         HIST_ENTRY *hist_cur;
         char *sline;
 
-        clear_user_abort();     // Clear Control-C abort
-
         line = readline("\rsmashftp> ");
+        clear_user_abort();     // Clear Control-C abort
         if (line == NULL)
             continue;
         sline = no_whitespace(line);

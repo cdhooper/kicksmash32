@@ -96,7 +96,7 @@ static const cmd_t cmd_list[] = {
 #ifdef EMBEDDED_CMD
     { cmd_set,     "set",     0, cmd_set_help, "", "[bank|led|mode|name|?]" },
 #endif
-    { cmd_smash,   "smash",   2, cmd_power_help, " [id|test]",
+    { cmd_smash,   "smash",   2, cmd_smash_help, " [id|test]",
                         "smash utility commands" },
 #ifdef HAVE_SPACE_PROM
     { cmd_snoop,   "snoop",   0, cmd_snoop_help, "", "snoop ROM" },

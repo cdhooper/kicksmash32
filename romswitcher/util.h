@@ -62,6 +62,7 @@ typedef unsigned int uint;
 
 void *AllocVec(uint byteSize, uint requirements);
 void *AllocMem(uint byteSize, uint requirements);
+void FreeMem(void *ptr, uint len);
 
 void *malloc(size_t size);
 void *calloc(size_t nmemb, size_t size);

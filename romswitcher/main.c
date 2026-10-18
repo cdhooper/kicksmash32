@@ -160,13 +160,19 @@ reset_hi(void)
     __asm("jmp _setup");  // setup()
 }
 
+void
+main_poll_no_cmdline(void)
+{
+    mouse_poll();     // handle mouse buttons
+    keyboard_poll();  // handle key repeats
+}
+
 int
 main_poll(void)
 {
     if (cmdline())
         return (1);
-    mouse_poll();     // handle mouse buttons
-    keyboard_poll();  // handle key repeats
+    main_poll_no_cmdline();
     return (0);
 }
 

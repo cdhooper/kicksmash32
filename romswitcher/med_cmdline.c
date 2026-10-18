@@ -20,6 +20,7 @@
 #include "med_readline.h"
 #include "pcmds.h"
 #include "util.h"
+#include "smash.h"
 
 typedef struct {
     rc_t      (*cl_func)(int argc, char * const *argv);
@@ -65,6 +66,8 @@ static const cmd_t cmd_list[] = {
     { cmd_time,    "time",    2, cmd_time_help, " cmd <cmd>",
                         "measure command execution time" },
     { cmd_reset,   "reset",   0, cmd_reset_help, "", "reset Amiga" },
+    { cmd_smash,   "smash",   2, cmd_smash_help, " [id|test]",
+                        "smash utility commands" },
 #ifndef EMBEDDED_CMD
     { cmd_what,    "what",    0, NULL, "", "show recent output" },
 #endif

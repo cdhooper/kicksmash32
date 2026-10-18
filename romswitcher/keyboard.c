@@ -266,8 +266,24 @@ shift_state_flag(uint8_t scancode)
 static uint64_t key_repeat_timer;
 static uint16_t key_held;
 
-void
-keyboard_irq(void)
+/*
+ * Minimum time the KDAT handshake must be held low. The keyboard will
+ * detect a pulse as short as 1 usec, but 85 usec is what the Hardware
+ * Reference Manual specifies for compatibility with all keyboard models.
+ */
+#define KBD_HANDSHAKE_USEC 85
+
+/*
+ * keyboard_handle_sp() reads one byte from the CIA-A serial port (which
+ *                      has already been flagged as full), converts it,
+ *                      queues the result in the input ring buffer, and
+ *                      performs the handshake with the keyboard.
+ *
+ * This is shared by the interrupt handler and the polled path. The caller
+ * is responsible for guaranteeing that this function is not re-entered.
+ */
+static void
+keyboard_handle_sp(void)
 {
     // Set SPMOD
     //    cb bfee01 48
@@ -280,24 +296,11 @@ keyboard_irq(void)
 
     uint8_t scan_orig;
     uint8_t scan_conv;
+    uint64_t handshake_end;
     static uint8_t scan_last = 0;
-    static volatile uint8_t running = 0;
 
-    if (keyboard_init_done == 0)
-        return;
-
-    uint32_t sr = irq_disable();
-
-    if (running) {
-        DEBUG_COLOR(0xf00);  // Red (background)
-        irq_restore(sr);
-        return;
-    }
-    running = 1;
-    DEBUG_COLOR(0x0c4);   // Aqua-Green (background)
-    irq_restore(sr);
-
-    *CIAA_CRA = CIA_CRA_SPMOD;  // Set handshake bit
+    *CIAA_CRA = CIA_CRA_SPMOD;  // Set handshake bit (KDAT driven low)
+    handshake_end = timer_tick_plus_usec(KBD_HANDSHAKE_USEC);
 
     /* Read keyboard */
     timer_delay_usec(75);
@@ -340,16 +343,121 @@ keyboard_irq(void)
 //  printf("key down %02x %02x\n", scan_orig, scan_conv);
 
 finish:
-//  timer_delay_usec(75);
+    /* Ensure the handshake pulse is long enough for any keyboard */
+    while (timer_tick_has_elapsed(handshake_end) == 0)
+        ;
     *CIAA_CRA = 0;        // Clear handshake bit
+    key_repeat_timer = 0;
+}
+
+void
+keyboard_irq(void)
+{
+    static volatile uint8_t running = 0;
+
+    if (keyboard_init_done == 0)
+        return;
+
+    uint32_t sr = irq_disable();
+
+    if (running) {
+        DEBUG_COLOR(0xf00);  // Red (background)
+        irq_restore(sr);
+        return;
+    }
+    running = 1;
+    DEBUG_COLOR(0x0c4);   // Aqua-Green (background)
+    irq_restore(sr);
+
+    keyboard_handle_sp();
+
     DEBUG_COLOR(0x77c);   // Blue (background)
     running = 0;
-    key_repeat_timer = 0;
+}
+
+/*
+ * keyboard_irq_blocked() returns true if the CIA-A (PORTS, level 2)
+ *                        interrupt is currently unable to reach the CPU.
+ *                        This is the case when code is running in the
+ *                        context of an interrupt at level 2 or higher
+ *                        (for example, the debugger entered from the
+ *                        VBlank handler), or when PORTS / master interrupt
+ *                        enable is off in Paula.
+ */
+static uint
+keyboard_irq_blocked(void)
+{
+    const uint16_t need = INTENA_INTEN | INTENA_PORTS;
+
+    if ((*INTENAR & need) != need)
+        return (1);
+    if (((get_sr() >> 8) & 7) >= 2)
+        return (1);
+    return (0);
+}
+
+/*
+ * keyboard_poll_hw() manually polls the CIA-A for keyboard input. It does
+ *                    nothing unless the keyboard interrupt is currently
+ *                    unable to run, so it is safe to call from anywhere.
+ *                    Because the CPU interrupt priority mask is at level 2
+ *                    or above whenever this does any work, the Ports()
+ *                    interrupt handler cannot race with it.
+ */
+void
+keyboard_poll_hw(void)
+{
+    static volatile uint8_t polling = 0;
+    uint32_t sr;
+    uint8_t  st;
+
+    if (keyboard_init_done == 0)
+        return;
+
+    if (keyboard_irq_blocked() == 0)
+        return;  // Ports() interrupt will handle the keyboard
+
+    /*
+     * Prevent nested entry, such as could happen if this is called at
+     * IPL 2 and a VBlank interrupt then enters the debugger, which polls.
+     */
+    sr = irq_disable();
+    if (polling) {
+        irq_restore(sr);
+        return;
+    }
+    polling = 1;
+
+    /*
+     * Same sequence as the Ports() handler: acknowledge Paula, then read
+     * (and thereby clear) the CIA-A ICR. Reading ICR is destructive, so
+     * other event bits must be handled here as Ports() would.
+     */
+    *INTREQ = INTREQ_PORTS;
+    st = *CIAA_ICR;
+    irq_restore(sr);
+
+    if (st & CIA_ICR_TA)
+        *CIAA_ICR = CIA_ICR_TA;  // Disable Timer interrupt (as Ports() does)
+
+    if (st & CIA_ICR_SP) {
+        /*
+         * Keyboard serial input. Note that if the interrupted context was
+         * in the middle of keyboard_irq(), it cannot make progress until
+         * this context returns, so it is safe to process the byte here.
+         */
+        keyboard_handle_sp();
+    }
+
+    polling = 0;
 }
 
 void
 keyboard_poll(void)
 {
+    /* Manually take keyboard input if the keyboard IRQ can't run */
+    keyboard_poll_hw();
+
     /* Handle key repeats */
     if (key_held != 0) {
         if (key_repeat_timer == 0) {

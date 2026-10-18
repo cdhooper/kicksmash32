@@ -231,6 +231,13 @@ AllocMem(uint byteSize, uint requirements)
         return (malloc(byteSize));
 }
 
+void
+FreeMem(void *ptr, uint len)
+{
+    (void) len;
+    free(ptr);
+}
+
 char *
 strdup(const char *s)
 {
@@ -295,38 +302,6 @@ exit(int ec)
     __builtin_unreachable();
 }
 
-#endif
-
-#if 0
-// XXX: stub for now
-uint
-send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
-              void *reply, uint replymax, uint *replyalen)
-{
-    (void) cmd;
-    (void) arg;
-    (void) arglen;
-    (void) reply;
-    (void) replymax;
-    (void) replyalen;
-    return (1);
-}
-uint (*esend_cmd_core)(uint16_t cmd, void *arg, uint16_t arglen,
-                       void *reply, uint replymax, uint *replyalen) =
-                      &send_cmd_core;
-
-uint
-send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
-         void *reply, uint replymax, uint *replyalen)
-{
-    (void) cmd;
-    (void) arg;
-    (void) arglen;
-    (void) reply;
-    (void) replymax;
-    (void) replyalen;
-    return (-1);
-}
 #endif
 
 #if 0

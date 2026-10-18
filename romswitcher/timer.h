@@ -16,6 +16,9 @@
 #ifndef _TIMER_H
 #define _TIMER_H
 
+typedef uint time_t;
+typedef uint useconds_t;
+
 extern uint64_t (*timer_tick_get)(void);
 void     timer_delay_msec(uint msec);
 void     timer_delay_usec(uint usec);
@@ -26,6 +29,7 @@ uint64_t timer_tick_plus_usec(uint usec);
 uint64_t timer_tick_to_usec(uint64_t value);
 void     timer_init(void);
 uint     eclk_ticks(void);      // 16-bit ECLK tick value
+time_t   time(time_t *timep);
 
 #define VID_NTSC 0
 #define VID_PAL  1

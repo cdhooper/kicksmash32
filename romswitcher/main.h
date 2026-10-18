@@ -17,6 +17,7 @@
 #define _MAIN_H
 
 int main_poll(void);
+void main_poll_no_cmdline(void);
 void debug_cmdline(void);
 
 #endif /* _MAIN_H */

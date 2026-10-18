@@ -289,6 +289,8 @@ get_new_input_line(const char *prompt, char **line)
     if (input_need_prompt) {
         input_need_prompt = 0;
         input_show_prompt(prompt);
+        if (input_break_pending())
+            ch = getchar();  // Discard ^C
     }
     ch = getchar();
 

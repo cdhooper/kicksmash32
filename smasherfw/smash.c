@@ -78,23 +78,22 @@ static int flash_read_mode(uint expect_rom_signature);
 #define ROM_WINDOW_SIZE   (512 << 10)  // 512 KB
 #define MAX_CHUNK         (8 << 10)    // 8 KB
 
-static const char cmd_options[] =
+const char cmd_smash_help[] =
     "usage: smash <options>\n"
-    "   bank <opt>    ROM bank operations (-b ?, show, ...)\n"
-    "   clock <opt>   save / restore Amiga clock with KS (-c)\n"
-    "   debug         show debug output (-d)\n"
-    "   erase <opt>   erase flash (-e ?, bank, ...)\n"
-    "   identify      identify Kicksmash and Flash parts (-i[ii])\n"
-    "   read <opt>    read from flash (-r ?, bank, file, ...)\n"
-    "   verify <opt>  verify flash matches file (-v ?, bank, file, ...)\n"
-    "   write <opt>   write to flash (-w ?, bank, file, ...)\n"
-    "   loop <num>    repeat the command a specified number of times (-l)\n"
-    "   quiet         minimize test output\n"
-    "   set <n> <v>   set KickSmash value <n>=\"name\" and <v> is string (-s)\n"
-    "   sr <addr>     spin loop reading address (-x)\n"
-    "   srr <addr>    spin loop reading address with ROM OVL set (-Y)\n"
-    "   term          open Kicksmash firmware terminal [-T]\n"
-    "   test[0123456] do interface test (-t)\n";
+    "smash bank <opt>    ROM bank operations (-b ?, show, ...)\n"
+    "smash debug         show debug output (-d)\n"
+    "smash erase <opt>   erase flash (-e ?, bank, ...)\n"
+    "smash identify      identify Kicksmash and Flash parts (-i[ii])\n"
+    "smash read <opt>    read from flash (-r ?, bank, file, ...)\n"
+    "smash verify <opt>  verify flash matches file (-v ?, bank, file, ...)\n"
+    "smash write <opt>   write to flash (-w ?, bank, file, ...)\n"
+    "smash loop <num>    repeat the command a specified number of times (-l)\n"
+    "smash quiet         minimize test output\n"
+    "smash set <n> <v>   set KickSmash value <n>=\"name\" and string <v> (-s)\n"
+    "smash sr <addr>     spin loop reading address (-x)\n"
+    "smash srr <addr>    spin loop reading address with ROM OVL set (-Y)\n"
+    "smash term          open Kicksmash firmware terminal [-T]\n"
+    "smash test[0123456] do interface test (-t)";
 
 static const char cmd_bank_options[] =
     "  show                       Display all ROM bank information (-s)\n"
@@ -105,13 +104,6 @@ static const char cmd_bank_options[] =
     "  poweron <bank> [reboot]    Default bank at poweron (-p)\n"
     "  current <bank> [reboot]    Force new bank immediately (-c)\n"
     "  nextreset <bank> [reboot]  Force new bank at next reset (-N)\n";
-
-static const char cmd_clock_options[] =
-    "   load         load Amiga time from KS clock (-l)\n"
-    "   loadifset    load Amiga time from KS clock if it is known (-k)\n"
-    "   save         save Amiga time to KS clock (-s)\n"
-    "   saveifnotset save Amiga time to KS clock if not already saved (-n)\n"
-    "   show         show current KS clock (-S)\n";
 
 static const char cmd_read_options[] =
     "smash read options\n"
@@ -157,7 +149,6 @@ typedef struct {
 } long_to_short_t;
 long_to_short_t long_to_short_main[] = {
     { "-b", "bank" },
-    { "-c", "clock" },
     { "-C", "cons" },
     { "-C", "conservative" },
     { "-d", "debug" },
@@ -191,16 +182,6 @@ long_to_short_t long_to_short_bank[] = {
     { "-u", "unmerge" },
 };
 
-long_to_short_t long_to_short_clock[] = {
-    { "-h", "?" },
-    { "-h", "help" },
-    { "-k", "loadifset" },
-    { "-l", "load" },
-    { "-s", "save" },
-    { "-n", "saveifnotset" },
-    { "-S", "show" },
-};
-
 long_to_short_t long_to_short_erase[] = {
     { "-a", "addr" },
     { "-b", "bank" },
@@ -231,7 +212,6 @@ long_to_short_t long_to_short_readwrite[] = {
     { "-w", "write" },
 };
 
-BOOL __check_abort_enabled = 0;       // Disable gcc clib2 ^C break handling
 uint flag_debug = 0;
 static uint8_t flag_conservative_mode = 0;
 static uint8_t flag_flash_write_bug = 0;
@@ -284,12 +264,6 @@ is_user_abort(void)
         return (1);
     }
     return (0);
-}
-
-static void
-usage(void)
-{
-    printf("%s", cmd_options);
 }
 
 static char *
@@ -3692,7 +3666,7 @@ cmd_term(int argc, char * const *argv)
         }
 
         if ((count++ & 0x7) != 0)
-            continue;  // Poll infrequently for BEC output
+            continue;  // Poll infrequently for Kicksmash output
 
         if (poll_count < poll_delay) {
             poll_count++;
@@ -3838,191 +3812,6 @@ usage:
     return (erase_flash(bank, addr, len, flag_yes));
 }
 
-static void
-setsystime(uint sec, uint usec)
-{
-    printf("Implement setsystime()\n");
-#if 0
-    TimeRequest.tr_node.io_Command = TR_SETSYSTIME;
-    TimeRequest.tr_time.tv_secs = sec;
-    TimeRequest.tr_time.tv_micro = usec;
-    DoIO((struct IORequest *) &TimeRequest);
-#endif
-}
-
-static uint
-getsystime(uint *usec)
-{
-    printf("Implement getsystime()\n");
-#if 0
-    TimeRequest.tr_node.io_Command = TR_GETSYSTIME;
-    DoIO((struct IORequest *) &TimeRequest);
-    *usec = TimeRequest.tr_time.tv_micro;
-    return (TimeRequest.tr_time.tv_secs);
-#else
-    return (0);
-#endif
-}
-
-#if 0
-static void
-showdatestamp(struct DateStamp *ds, uint usec)
-{
-    struct DateTime  dtime;
-    char             datebuf[32];
-    char             timebuf[32];
-
-    dtime.dat_Stamp.ds_Days   = ds->ds_Days;
-    dtime.dat_Stamp.ds_Minute = ds->ds_Minute;
-    dtime.dat_Stamp.ds_Tick   = ds->ds_Tick;
-    dtime.dat_Format          = FORMAT_DOS;
-    dtime.dat_Flags           = 0x0;
-    dtime.dat_StrDay          = NULL;
-    dtime.dat_StrDate         = datebuf;
-    dtime.dat_StrTime         = timebuf;
-    DateToStr(&dtime);
-    printf("%s %s.%06u\n", datebuf, timebuf, usec);
-}
-#endif
-
-static void
-showsystime(uint sec, uint usec)
-{
-#if 0
-    struct DateStamp ds;
-    uint min  = sec / 60;
-    uint day  = min / (24 * 60);
-
-    ds.ds_Days   = day;
-    ds.ds_Minute = min % (24 * 60);
-    ds.ds_Tick   = (sec % 60) * TICKS_PER_SECOND;
-    showdatestamp(&ds, usec);
-#else
-    printf("Implement showsystime()\n");
-#endif
-}
-
-static uint
-get_ks_clock(uint *sec, uint *usec)
-{
-    uint ks_clock[2];
-    uint rc;
-    uint rlen;
-
-    rc = send_cmd(KS_CMD_CLOCK, NULL, 0, &ks_clock, sizeof (ks_clock), &rlen);
-    if (rc != 0) {
-        printf("Get clock failed: (%s)\n", smash_err(rc));
-        if (flag_debug)
-            dump_memory(ks_clock, sizeof (ks_clock), DUMP_VALUE_UNASSIGNED);
-        *sec = 0;
-        *usec = 0;
-    } else {
-        *sec  = SWAP32(ks_clock[0]);
-        *usec = SWAP32(ks_clock[1]);
-    }
-    return (rc);
-}
-
-static uint
-set_ks_clock(uint sec, uint usec, uint flags)
-{
-    uint cmd = KS_CMD_CLOCK | (flags ? KS_CLOCK_SET_IFNOT : KS_CLOCK_SET);
-    uint ks_clock[2];
-    uint rc;
-
-    ks_clock[0] = SWAP32(sec);
-    ks_clock[1] = SWAP32(usec);
-
-    rc = send_cmd(cmd, ks_clock, sizeof (ks_clock), NULL, 0, NULL);
-    if (rc != 0)
-        printf("Set clock failed: (%s)\n", smash_err(rc));
-    return (rc);
-}
-
-static int
-cmd_clock(int argc, char * const *argv)
-{
-    int         arg;
-    uint        rc = 1;
-    uint        flag_load = 0;
-    uint        flag_load_if_set = 0;
-    uint        flag_save = 0;
-    uint        flag_save_if_not_set = 0;
-    uint        flag_show = 0;
-    uint        sec;
-    uint        usec;
-    const char *ptr;
-    for (arg = 1; arg < argc; ) {
-        ptr = long_to_short(argv[arg++], long_to_short_clock,
-                            ARRAY_SIZE(long_to_short_clock));
-        if (*ptr == '-') {
-            for (++ptr; *ptr != '\0'; ptr++) {
-                switch (*ptr) {
-                    case 'h':  // load
-                        goto usage;
-                    case 'k':  // load if set
-                        flag_load_if_set++;
-                        break;
-                    case 'l':  // load
-                        flag_load++;
-                        break;
-                    case 'n':  // save if not set
-                        flag_save_if_not_set++;
-                        break;
-                    case 's':  // save
-                        flag_save++;
-                        break;
-                    case 'S':  // show
-                        flag_show++;
-                        break;
-                    default:
-                        printf("Unknown argument %s \"-%s\"\n",
-                               argv[0], ptr);
-                        goto usage;
-                }
-            }
-        } else {
-            printf("Unknown argument %s \"%s\"\n",
-                   argv[0], ptr);
-usage:
-            printf("%s", cmd_clock_options);
-            return (rc);
-        }
-    }
-    if ((flag_load == 0) && (flag_load_if_set == 0) &&
-        (flag_save == 0) && (flag_save_if_not_set == 0))
-        flag_show++;
-
-    if (flag_load || flag_load_if_set) {
-        if ((rc = get_ks_clock(&sec, &usec)) != 0)
-            return (rc);
-        if ((sec == 0) && (usec == 0)) {
-            if (flag_load_if_set)
-                return (0);
-            printf("KS does not know the current time\n");
-            return (1);
-        }
-        showsystime(sec, usec);
-        setsystime(sec, usec);
-    }
-    if (flag_save || flag_save_if_not_set) {
-        sec = getsystime(&usec);
-        showsystime(sec, usec);
-        if ((rc = set_ks_clock(sec, usec, flag_save_if_not_set)) != 0)
-            return (rc);
-    }
-    if (flag_show) {
-        if ((rc = get_ks_clock(&sec, &usec)) != 0)
-            return (rc);
-        if ((sec == 0) && (usec == 0)) {
-            printf("KS does not know the current time\n");
-            return (1);
-        }
-        showsystime(sec, usec);
-    }
-    return (0);
-}
-
 uint
 smash_test_only(void)
 {
@@ -4074,8 +3863,6 @@ cmd_smash(int argc, char * const *argv)
                 switch (*ptr) {
                     case 'b':  // bank
                         return(cmd_bank(argc - arg, argv + arg));
-                    case 'c':  // clock
-                        return(cmd_clock(argc - arg, argv + arg));
                     case 'C':  // conservative
                         flag_conservative_mode ^= 1;
                         break;
@@ -4164,8 +3951,7 @@ cmd_smash(int argc, char * const *argv)
                         break;
                     default:
                         printf("Unknown argument %s\n", ptr);
-                        usage();
-                        return(1);
+                        return (RC_USER_HELP);
                 }
             }
         } else if ((*ptr >= '0') && (*ptr <= '6') && (ptr[1] == '\0')) {
@@ -4173,15 +3959,13 @@ cmd_smash(int argc, char * const *argv)
             flag_test++;
         } else {
             printf("Error: unknown argument %s\n", ptr);
-            usage();
-            return(1);
+            return (RC_USER_HELP);
         }
     }
 
     if ((flag_inquiry | flag_test | flag_x_spin | flag_y_spin) == 0) {
         printf("You must specify an operation to perform\n");
-        usage();
-        return(1);
+        return (RC_USER_HELP);
     }
     if (flag_test_mask == 0)
         flag_test_mask = ~0;

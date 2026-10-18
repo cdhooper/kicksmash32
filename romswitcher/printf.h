@@ -171,6 +171,7 @@ int printf(const char *fmt, ...);
 __attribute__((format(__scanf__, 1, 3)))
 int sscanf(const char *str, char const *fmt, ...);
 
+int atoi(const char *str);
 
 /**
  * errx() is a stdio compatible function which operates on a format

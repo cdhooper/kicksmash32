@@ -14,12 +14,11 @@
  * OR MISUSE OF THIS UTILITY OR INFORMATION REPORTED BY THIS UTILITY.
  */
 #include <stdint.h>
-#include <time.h>
 #include <stdbool.h>
 #include "amiga_chipset.h"
 #include "printf.h"
-#include "timer.h"
 #include "util.h"
+#include "timer.h"
 
 uint eclk_ticks_per_sec;   // 715909 (NTSC) or 709379 (PAL),
 uint vblank_hz;            // 60 (NTSC typical) or 50 (PAL typical)

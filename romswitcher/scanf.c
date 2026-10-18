@@ -1351,3 +1351,11 @@ sscanf(const char *str, char const *fmt, ...)
     va_end(ap);
     return (ret);
 }
+
+int
+atoi(const char *str)
+{
+    int ret = 0;
+    (void) sscanf(str, "%d", &ret);
+    return (ret);
+}

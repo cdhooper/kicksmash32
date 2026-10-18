@@ -14,7 +14,6 @@
 #include <stdbool.h>
 #include <string.h>
 #include <ctype.h>
-#include <time.h>
 #include "med_cmdline.h"
 #include "med_main.h"
 #include "pcmds.h"

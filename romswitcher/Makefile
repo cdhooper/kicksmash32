@@ -21,7 +21,7 @@ SRCS     := main.c autoconfig.c cache.c keyboard.c pcmds.c \
 	    vectors.c mouse.c draw.c intuition.c gadget.c \
 	    testdraw.c testgadget.c audio.c $(MED_SRCS) \
 	    $(AM)/romswitch.c $(AM)/cpu_control.c $(AM)/sm_msg.c \
-	    $(AM)/sm_msg_core.c
+	    $(AM)/sm_msg_core.c smash.c smash_flash.c
 ADDOBJS  :=
 #ADDOBJS  := $(OBJDIR)/audio0.o
 
@@ -38,7 +38,7 @@ CFLAGS  := -Wall -Wextra -Wno-pointer-sign -Wno-format -Wno-strict-aliasing
 CFLAGS  += -Wno-sign-compare -fomit-frame-pointer
 CFLAGS  += -fno-delete-null-pointer-checks
 CFLAGS  += -fbaserel -resident -mcpu=68060 -msoft-float
-CFLAGS  += -DROMFS -DSTANDALONE -DEMBEDDED_CMD
+CFLAGS  += -DROMFS -DSTANDALONE -DEMBEDDED_CMD -DAMIGA
 CFLAGS  += -DHAVE_SPACE_PHYS
 CFLAGS  += -DRAM_BASE=0x00000000
 CFLAGS  += -I. -I$(FW) -I$(AM)
@@ -134,7 +134,8 @@ $(OBJDIR)/draw.o: draw.h intuition.h
 $(OBJDIR)/intuition.o: draw.h intuition.h
 $(OBJDIR)/cache.o $(OBJDIR)/main.o $(OBJDIR)/med_cpu.o: $(AM)/cpu_control.h
 $(OBJDIR)/med_cpu.o: cpu_fault.h
-$(OBJDIR)/sm_msg.o $(OBJDIR)/sm_msg_core.o: $(AM)/cpu_control.h $(AM)/sm_msg.h $(FW)/smash_cmd.h $(AM)/host_cmd.h
+$(OBJDIR)/smash.o $(OBJDIR)/smash_flash.o: smash.h smash_flash.h
+$(OBJDIR)/sm_msg.o $(OBJDIR)/sm_msg_core.o $(OBJDIR)/smash_flash.o: $(AM)/cpu_control.h $(AM)/sm_msg.h $(FW)/smash_cmd.h $(AM)/host_cmd.h
 
 $(MED_OBJS): med_cmdline.h med_cmds.h med_main.h med_readline.h pcmds.h
 $(MED_OBJS):: CFLAGS += -Wno-unused-parameter

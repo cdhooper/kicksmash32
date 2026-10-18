@@ -279,12 +279,12 @@ getchar(void)
     int ch = input_rb_get();  // Pull from serial input ring buffer
 
     if (ch == -1) {
-        /* Attempt to pull directly from keyboard */
-#undef KEYBOARD_POLL
-#ifdef KEYBOARD_POLL
-        // XXX: Seems broken on real hardware -- maybe delays not long enough
-        keyboard_poll();
-#endif
+        /*
+         * Attempt to pull directly from keyboard. This only does work
+         * when the keyboard interrupt is blocked, such as when the
+         * debugger has been entered from interrupt context.
+         */
+        keyboard_poll_hw();
         serial_poll();
         ch = input_rb_get();
     }
@@ -348,15 +348,17 @@ input_break_pending(void)
 
     for (cur = ser_in_rb_consumer; cur != ser_in_rb_producer; cur = next) {
         next = (cur + 1) % ARRAY_SIZE(ser_in_rb);
-        if (ser_in_rb[cur] == 0x03) {  /* ^C is abort key */
-            ser_in_rb_consumer = next;
+        /*
+         * Entries carry the scancode in the upper byte (keyboard and
+         * serial ^C are both stored as 0x3303), so compare only ASCII.
+         */
+        if ((ser_in_rb[cur] & 0xff) == 0x03) {  // ^C is abort key
+            ser_in_rb_consumer = cur;
             return (1);
         }
     }
     serial_poll();
-#ifdef KEYBOARD_POLL
-    keyboard_poll();
-#endif
+    keyboard_poll_hw();  // Allow ^C from keyboard when IRQ is blocked
 
     return (0);
 }

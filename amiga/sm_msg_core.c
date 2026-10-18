@@ -201,6 +201,7 @@ cia_spin(unsigned int ticks)
     }
 }
 #endif
+void (*ecia_spin)(unsigned int ticks) = cia_spin;
 
 /*
  * rom_wait_recover

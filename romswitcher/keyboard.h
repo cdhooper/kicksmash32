@@ -49,6 +49,7 @@
 void keyboard_init(void);
 void keyboard_irq(void);
 void keyboard_poll(void);
+void keyboard_poll_hw(void);
 unsigned int scan_convert_from_ascii(uint8_t ascii);
 
 #endif /* _KBD_H */

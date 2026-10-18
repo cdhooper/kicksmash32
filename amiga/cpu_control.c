@@ -176,65 +176,6 @@ get_cpu(void)
 }
 #endif
 
-#ifndef _DCC
-/*
- * mmu_get_tc_030
- * --------------
- * This function only works on the 68030.
- * 68040 and 68060 have different MMU instructions.
- */
-__attribute__ ((noinline)) uint32_t
-mmu_get_tc_030(void)
-{
-    uint32_t result;
-    __asm__ __volatile__("subq.l #4,sp \n\t"
-                         ".long 0xf0174200 \n\t"  // pmove tc,(sp)
-                         "move.l (sp)+,%0 \n\t"
-                         : "=d" (result));
-    return (result);
-}
-
-/*
- * mmu_set_tc_030
- * --------------
- * This function only works on the 68030.
- */
-__attribute__ ((noinline)) void
-mmu_set_tc_030(register uint32_t tc asm("%d0"))
-{
-    __asm__ __volatile__("move.l %0,-(sp) \n\t"
-                         ".long 0xf0174000 \n\t"  // pmove.l (sp),tc
-                         "addq.l #4,sp \n\t"
-                         :: "d" (tc));
-}
-
-/*
- * mmu_get_tc_040
- * --------------
- * This function only works on 68040 and 68060.
- */
-__attribute__ ((noinline)) uint32_t
-mmu_get_tc_040(void)
-{
-    register uint32_t result asm("%d0");
-    __asm__ __volatile__(".long 0x4e7a0003 \n\t"  // movec.l tc,d0
-                         : "=d" (result));
-    return (result);
-}
-
-/*
- * mmu_set_tc_040
- * --------------
- * This function only works on 68040 and 68060.
- */
-__attribute__ ((noinline)) void
-mmu_set_tc_040(register uint32_t tc asm("%d0"))
-{
-    __asm__ __volatile__(".long 0x4e7b0003 \n\t"  // movec.l d0,tc
-                         :: "d" (tc));
-}
-#endif
-
 void
 cpu_control_init(void)
 {

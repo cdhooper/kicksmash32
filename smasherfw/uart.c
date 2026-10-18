@@ -239,7 +239,7 @@ input_break_pending(void)
     for (cur = cons_in_rb_consumer; cur != cons_in_rb_producer; cur = next) {
         next = (cur + 1) % sizeof (cons_in_rb);
         if (cons_in_rb[cur] == 0x03) {  /* ^C is abort key */
-            cons_in_rb_consumer = next;
+            cons_in_rb_consumer = cur;
             return (1);
         }
     }

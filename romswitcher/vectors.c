@@ -388,6 +388,7 @@ VBlank(void)
 
     static uint16_t mouse_quad_last = 0xffff;
     uint16_t mouse_quad_cur;
+    uint entered_on_time = (*VHPOSR >> 8) < 4;
     static uint8_t cop_miss;
 
     /*
@@ -422,9 +423,11 @@ VBlank(void)
     }
 
     /* Bitplane pointers are normally updated by the Copper */
-    *BPL1PT = BITPLANE_0_BASE;  // Bitplane 0 base address
-    *BPL2PT = BITPLANE_1_BASE;  // Bitplane 1 base address
-    *BPL3PT = BITPLANE_2_BASE;  // Bitplane 2 base address
+    if (entered_on_time) {
+        *BPL1PT = BITPLANE_0_BASE;  // Bitplane 0 base address
+        *BPL2PT = BITPLANE_1_BASE;  // Bitplane 1 base address
+        *BPL3PT = BITPLANE_2_BASE;  // Bitplane 2 base address
+    }
 
     *INTREQ = INTREQ_VERTB;
     INT_COUNTER(3)++;  // 0x100c
@@ -492,14 +495,16 @@ VBlank(void)
         }
 
         /* Sprite pointers are normally updated by the Copper */
-        *SPR0PTH = (uintptr_t) sprite0_data;
-        *SPR1PTH = (uintptr_t) spritex_data;
-        *SPR2PTH = (uintptr_t) sprite1_data;
-        *SPR3PTH = (uintptr_t) spritex_data;
-        *SPR4PTH = (uintptr_t) spritex_data;
-        *SPR5PTH = (uintptr_t) spritex_data;
-        *SPR6PTH = (uintptr_t) spritex_data;
-        *SPR7PTH = (uintptr_t) spritex_data;
+        if (entered_on_time) {
+            *SPR0PTH = (uintptr_t) sprite0_data;
+            *SPR1PTH = (uintptr_t) spritex_data;
+            *SPR2PTH = (uintptr_t) sprite1_data;
+            *SPR3PTH = (uintptr_t) spritex_data;
+            *SPR4PTH = (uintptr_t) spritex_data;
+            *SPR5PTH = (uintptr_t) spritex_data;
+            *SPR6PTH = (uintptr_t) spritex_data;
+            *SPR7PTH = (uintptr_t) spritex_data;
+        }
     }
 
     if (vblank_ints++ > 180) {  // 3 seconds

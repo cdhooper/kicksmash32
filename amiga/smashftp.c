@@ -106,7 +106,7 @@ STATIC_ASSERT(ARRAY_SIZE(hmd_types) == HM_TYPE_LAST_ENTRY);
  * -------------
  * Check for user break input (^C)
  */
-static BOOL
+int
 is_user_abort(void)
 {
     if (SetSignal(0, 0) & SIGBREAKF_CTRL_C)
