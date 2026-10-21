@@ -89,6 +89,9 @@ netif_config_t g_netif_cfg;
 /* Mode table entry which g_netif_cfg.mode was taken from */
 static const netif_mode_desc_t *g_netif_mode;
 
+/* Non-zero (-d / --debug) to report each frame sent and received */
+static int g_debug = 0;
+
 #ifdef __MINGW32__
 /*
  * Handle of the thread blocked reading stdin, so the console control
@@ -288,12 +291,13 @@ static void
 usage(const char *prog)
 {
     fprintf(stderr,
-            "Usage: %s [options] [interface]\n"
+            "Usage: %s [options] [mode] [interface]\n"
             "\n"
             "  Bridge the host's network onto the emulated Amiga and relay\n"
             "  raw Ethernet frames over stdin/stdout.\n"
             "\n"
             "Options:\n"
+            "  -d, --debug      Report each frame sent and received.\n"
 #ifdef LINUX
             "  -e, --external   (Linux only) Use external 'ip' commands for\n"
             "                   link setup, instead of netlink.\n"
@@ -305,8 +309,11 @@ usage(const char *prog)
     print_modes("                     ");
     fprintf(stderr,
             "\n"
-            "If interface is omitted the host's current default-route\n"
-            "interface is used.\n");
+            "The mode may also be given on its own, without -m (for example\n"
+            "\"%s %s\"), or as \"default\". Any other argument is taken as\n"
+            "the interface. If interface is omitted the host's current\n"
+            "default-route interface is used.\n",
+            prog, netif_backend_modes()[0].name);
 }
 
 /*
@@ -373,6 +380,70 @@ parse_mode_opt(int argc, char *argv[], int *argi)
         return (-1);
     }
     return (1);
+}
+
+/*
+ * parse_args() handles the command line, which is shared by all
+ *              platforms. Options and positional arguments may be given
+ *              in any order:
+ *                  -d, --debug          Enable frame debug output
+ *                  -e, --external       (Linux) Use external ip commands
+ *                  -h, --help           Show usage and exit
+ *                  -m, --mode <mode>    Select network mode
+ *                  <mode>               A mode name (or "default") alone
+ *                  <interface>          Any other positional argument
+ *              A bare mode name is accepted so that "hostsmash -n macvtap"
+ *              (which runs "hostsmash_netif macvtap") selects that mode.
+ *
+ * On return, *iface points to the interface argument, or is NULL if none
+ * was given. Returns 0 to continue, 1 on error, or 2 if usage was shown
+ * at the user's request (the caller should exit successfully).
+ */
+static int
+parse_args(int argc, char *argv[], const char **iface)
+{
+    int argi = 1;
+
+    *iface = NULL;
+    while (argi < argc) {
+        const char *arg = argv[argi];
+        int rc = parse_mode_opt(argc, argv, &argi);
+        if (rc < 0)
+            return (1);
+        if (rc > 0)
+            continue;
+
+        if ((strcmp(arg, "-d") == 0) || (strcmp(arg, "--debug") == 0)) {
+            g_debug = 1;
+        } else if ((strcmp(arg, "-e") == 0) ||
+                   (strcmp(arg, "--external") == 0)) {
+#ifdef LINUX
+            extern void netif_linux_set_use_external_ip(int);
+            netif_linux_set_use_external_ip(1);
+#else
+            fprintf(stderr,
+                    "Warning: --external is a Linux-only option, ignoring\n");
+#endif
+        } else if ((strcmp(arg, "-h") == 0) || (strcmp(arg, "--help") == 0)) {
+            usage(argv[0]);
+            return (2);
+        } else if (arg[0] == '-') {
+            fprintf(stderr, "Unknown option: %s\n", arg);
+            usage(argv[0]);
+            return (1);
+        } else if (select_mode(arg) == 0) {
+            /* Bare mode name, e.g. "macvtap" -- already selected */
+        } else if (*iface == NULL) {
+            *iface = arg;
+        } else {
+            fprintf(stderr, "Unexpected argument: %s (interface is %s)\n",
+                    arg, *iface);
+            usage(argv[0]);
+            return (1);
+        }
+        argi++;
+    }
+    return (0);
 }
 
 static void
@@ -503,7 +574,7 @@ get_timestamp_ns(void)
     uint64_t unix_intervals = windows_intervals - 116444736000000000ULL;
 
     // 3. Convert 100-nanosecond intervals to pure nanoseconds
-    return unix_intervals * 100ULL;
+    return (unix_intervals * 100ULL);
 }
 #else  /* Linux and MacOS */
 static uint64_t
@@ -513,7 +584,7 @@ get_timestamp_ns(void)
     // CLOCK_REALTIME gets the actual calendar time since the Unix Epoch
     clock_gettime(CLOCK_REALTIME, &ts);
 
-    return ((uint64_t)ts.tv_sec * 1000000000ULL) + (uint64_t)ts.tv_nsec;
+    return (((uint64_t)ts.tv_sec * 1000000000ULL) + (uint64_t)ts.tv_nsec);
 }
 #endif
 
@@ -564,8 +635,9 @@ win_capture_thread(LPVOID arg)
             uint16_t frame_len = (uint16_t) frame_bytes;
             consecutive_errors = 0;
             if (packet_filter(buffer, frame_len)) {
-                fprintf(stderr, ">> %s recv %u\n",
-                        get_timestamp_str(), frame_len);
+                if (g_debug)
+                    fprintf(stderr, ">> %s recv %u\n",
+                            get_timestamp_str(), frame_len);
 #ifdef DUMP_FULL_PACKET
                 dump_packet(buffer, frame_len);
 #endif
@@ -608,7 +680,9 @@ win_stdin_thread(LPVOID arg)
             break;   /* EOF, broken pipe, or CancelSynchronousIo() */
 
         if (frame_len <= sizeof (buffer)) {
-            fprintf(stderr, ">> %s send %u\n", get_timestamp_str(), frame_len);
+            if (g_debug)
+                fprintf(stderr, ">> %s send %u\n",
+                        get_timestamp_str(), frame_len);
             size_t nread = fread(buffer, 1, frame_len, stdin);
 #ifdef DUMP_FULL_PACKET
             dump_packet(buffer, frame_len);
@@ -618,8 +692,9 @@ win_stdin_thread(LPVOID arg)
         } else if ((frame_len >> 8) == 0xff) {
             /* Special case: command */
             uint   read_len = frame_len & 0xff;
-            fprintf(stderr, ">> %s send CMD l=%u\n",
-                    get_timestamp_str(), read_len);
+            if (g_debug)
+                fprintf(stderr, ">> %s send CMD l=%u\n",
+                        get_timestamp_str(), read_len);
             size_t nread    = fread(buffer, 1, read_len, stdin);
             if (nread == read_len)
                 handle_cmd(buffer, read_len);
@@ -636,7 +711,8 @@ main(int argc, char *argv[])
 #ifdef __MINGW32__
     char iface_name[IFNAMSIZ + 32];
     char lower_dev[IFNAMSIZ];
-    int argi = 1;
+    const char *iface_arg;
+    int rc;
     HANDLE cap_thread;
     HANDLE handles[2];
     WSADATA wsadata;
@@ -653,25 +729,9 @@ main(int argc, char *argv[])
 
     select_mode("default");
 
-    while (argi < argc) {
-        int rc = parse_mode_opt(argc, argv, &argi);
-        if (rc < 0)
-            return (1);
-        if (rc > 0)
-            continue;
-
-        if (strcmp(argv[argi], "-h") == 0 ||
-            strcmp(argv[argi], "--help") == 0) {
-            usage(argv[0]);
-            return (0);
-        } else if (argv[argi][0] == '-') {
-            fprintf(stderr, "Unknown option: %s\n", argv[argi]);
-            usage(argv[0]);
-            return (1);
-        } else {
-            break; /* positional interface name */
-        }
-    }
+    rc = parse_args(argc, argv, &iface_arg);
+    if (rc != 0)
+        return ((rc == 2) ? 0 : 1);
 
     /* The mode decides which backend this returns, so it comes first */
     fprintf(stderr, "Network mode: %s\n", g_netif_mode->name);
@@ -687,8 +747,8 @@ main(int argc, char *argv[])
 
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 
-    if (argi < argc) {
-        strncpy(lower_dev, argv[argi], sizeof (lower_dev) - 1);
+    if (iface_arg != NULL) {
+        strncpy(lower_dev, iface_arg, sizeof (lower_dev) - 1);
         lower_dev[sizeof (lower_dev) - 1] = '\0';
     } else if (get_default_iface(lower_dev, sizeof (lower_dev)) < 0) {
         return (1);
@@ -734,42 +794,15 @@ main(int argc, char *argv[])
     char iface_name[IFNAMSIZ + 32];
     char lower_dev[IFNAMSIZ];
     unsigned char buffer[2000]; // Fits standard 1500-byte MTU frames + headers
-    int argi = 1;
-    int use_external_ip = 0;
-    (void) use_external_ip;
+    const char *iface_arg;
+    int rc;
 
     select_mode("default");
 
     /* Simple option parsing (keep it dependency-free) */
-    while (argi < argc) {
-        int rc = parse_mode_opt(argc, argv, &argi);
-        if (rc < 0)
-            return (1);
-        if (rc > 0)
-            continue;
-
-        if (strcmp(argv[argi], "-e") == 0 ||
-            strcmp(argv[argi], "--external") == 0) {
-#ifdef LINUX
-            extern void netif_linux_set_use_external_ip(int);
-            netif_linux_set_use_external_ip(1);
-#else
-            fprintf(stderr,
-                    "Warning: --external is a Linux-only option, ignoring\n");
-#endif
-            argi++;
-        } else if (strcmp(argv[argi], "-h") == 0 ||
-                   strcmp(argv[argi], "--help") == 0) {
-            usage(argv[0]);
-            return (0);
-        } else if (argv[argi][0] == '-') {
-            fprintf(stderr, "Unknown option: %s\n", argv[argi]);
-            usage(argv[0]);
-            return (1);
-        } else {
-            break; /* positional interface name */
-        }
-    }
+    rc = parse_args(argc, argv, &iface_arg);
+    if (rc != 0)
+        return ((rc == 2) ? 0 : 1);
 
     /* The mode decides which backend this returns, so it comes first */
     fprintf(stderr, "Network mode: %s\n", g_netif_mode->name);
@@ -800,8 +833,8 @@ main(int argc, char *argv[])
      *    "eth0"); otherwise it's auto-detected from the host's
      *    current default route.
      */
-    if (argi < argc) {
-        strncpy(lower_dev, argv[argi], IFNAMSIZ - 1);
+    if (iface_arg != NULL) {
+        strncpy(lower_dev, iface_arg, IFNAMSIZ - 1);
         lower_dev[IFNAMSIZ - 1] = '\0';
     } else if (get_default_iface(lower_dev, sizeof (lower_dev)) < 0) {
         exit(1);
@@ -859,8 +892,9 @@ main(int argc, char *argv[])
             if (frame_bytes > 0) {
                 frame_len = (uint16_t)frame_bytes;
                 if (packet_filter(buffer, frame_len)) {
-                    fprintf(stderr, ">> %s recv %u\n",
-                            get_timestamp_str(), frame_len);
+                    if (g_debug)
+                        fprintf(stderr, ">> %s recv %u\n",
+                                get_timestamp_str(), frame_len);
 #ifdef DUMP_FULL_PACKET
                     dump_packet(buffer, frame_len);
 #endif
@@ -877,8 +911,9 @@ main(int argc, char *argv[])
             /* Read the length prefix first */
             if (fread(&frame_len, sizeof (frame_len), 1, stdin) == 1) {
                 if (frame_len <= sizeof (buffer)) {
-                    fprintf(stderr, ">> %s send %u\n",
-                            get_timestamp_str(), frame_len);
+                    if (g_debug)
+                        fprintf(stderr, ">> %s send %u\n",
+                                get_timestamp_str(), frame_len);
                     size_t nread = fread(buffer, 1, frame_len, stdin);
 #ifdef DUMP_FULL_PACKET
                     dump_packet(buffer, frame_len);
@@ -891,8 +926,9 @@ main(int argc, char *argv[])
                 } else if ((frame_len >> 8) == 0xff) {
                     /* Special case: command */
                     uint   read_len = frame_len & 0xff;
-                    fprintf(stderr, ">> %s send CMD l=%u\n",
-                            get_timestamp_str(), read_len);
+                    if (g_debug)
+                        fprintf(stderr, ">> %s send CMD l=%u\n",
+                                get_timestamp_str(), read_len);
                     size_t nread    = fread(buffer, 1, read_len, stdin);
                     if (nread == read_len) {
                         handle_cmd(buffer, read_len);

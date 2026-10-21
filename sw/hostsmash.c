@@ -107,7 +107,7 @@ static char short_opts[] = {
     'l', ':',    // --len <num>
     'm', ':',    // --mount <vol> <dir>
     'M', ':',    // --Mount <vol> <dir>
-    'n', ':',    // --net <mode>
+    'n', ':',    // --net <args>
     'r',         // --read <filename>
     's', ':',    // --swap <mode>
     't',         // --term
@@ -138,8 +138,10 @@ static const char usage_text[] =
 "    -i --identify           identify installed EEPROM\n"
 "    -l --len <num>          length in bytes\n"
 "    -m --mount <vol:> <dir> file serve directory path to Amiga volume\n"
-"    -n --net <mode>         network service for Amiga; mode is \"default\"\n"
-"                            or a mode shown by hostsmash_netif -h\n"
+"    -n --net <args>         network service for Amiga; <args> are passed\n"
+"                            to hostsmash_netif, split at spaces, such as\n"
+"                            -n macvtap or -n \"-d macvtap eth0\"\n"
+"                            (see hostsmash_netif -h)\n"
 "    -r --read <filename>    read EEPROM and write to file\n"
 "    -s --swap <mode>        byte swap mode (2301, 3210, 1032, noswap=0123)\n"
 "    -v --verify <filename>  verify file matches EEPROM contents\n"

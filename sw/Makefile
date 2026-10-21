@@ -59,6 +59,8 @@ ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
     NPCAP_SDK_DIR ?= npcap-sdk
     CFLAGS  += -I$(NPCAP_SDK_DIR)/Include
     LDFLAGS += -liphlpapi -lshell32 -ladvapi32 -luser32
+    NPCAP_SDK_ZIP := npcap-sdk-1.16.zip
+    NPCAP_HDR     := $(NPCAP_SDK_DIR)/Include/pcap.h
 endif
 ifneq (,$(filter $(TARGET_OS),win32))
     # Windows 32-bit
@@ -142,7 +144,7 @@ $(foreach SRCFILE,$(CRCIT_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),CR
 $(OBJDIR)/netif_windows.o: | $(NPCAP_HDR)
 
 $(HOSTSMASH_OBJS) $(HSNET_OBJS) $(CRCIT_OBJS): Makefile ../fw/version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h hostsmash.h hostsmash_net.h hostsmash_netif.h
-$(OBJDIR)/hostsmash.o: | $(USB_HDR)
+$(OBJDIR)/hostsmash.o: | $(USB_HDR) $(NPCAP_HDR)
 $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(HOSTSMASH_OBJS) $(HSNET_OBJS)) Makefile
 
 $(HOSTSMASH_OPROG): $(HOSTSMASH_OBJS)
@@ -177,7 +179,6 @@ $(USB_HDR):
 	@echo "On Raspbian: apt-get install libusb-dev"
 	exit 1
 
-NPCAP_SDK_ZIP := npcap-sdk-1.16.zip
 $(NPCAP_HDR):
 	@echo Getting the Windows Npcap SDK
 	wget https://npcap.com/dist/$(NPCAP_SDK_ZIP)

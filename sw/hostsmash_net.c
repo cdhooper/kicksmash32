@@ -38,8 +38,9 @@ typedef unsigned int uint;
 #include "hostsmash_net.h"
 #include "hostsmash_netif.h"
 
-const char      *netif_arg;            // Network mode for the netif program
-                                       //   (its -m argument); NULL = default
+const char      *netif_arg;            // Arguments for the netif program
+                                       //   (hostsmash -n), split at spaces;
+                                       //   NULL = none
 
 static volatile uint netif_getmac = 0; // GETMAC pending from device
 static volatile uint netif_up = 0;     // Network interface is up
@@ -913,22 +914,72 @@ win_append_arg(char *cmd, size_t cmdsize, const char *arg)
 }
 #endif
 
+#define NETIF_MAX_ARGS 32  // Maximum arguments passed to hostsmash_netif
+
+/*
+ * netif_split_args() splits the hostsmash -n string into separate
+ *                    arguments at spaces and tabs. The string is copied
+ *                    into argbuf, which the returned argv[] entries point
+ *                    into. Returns the number of arguments, or -1 if the
+ *                    string is too long or has too many arguments.
+ */
+static int
+netif_split_args(char *argbuf, size_t argbufsize, char *av[], int avmax)
+{
+    int   ac = 0;
+    char *p  = argbuf;
+
+    argbuf[0] = '\0';
+    if (netif_arg == NULL)
+        return (0);
+    if (strlen(netif_arg) >= argbufsize)
+        return (-1);
+    strcpy(argbuf, netif_arg);
+
+    while (1) {
+        while ((*p == ' ') || (*p == '\t'))
+            p++;
+        if (*p == '\0')
+            break;
+        if (ac >= avmax)
+            return (-1);
+        av[ac++] = p;
+        while ((*p != '\0') && (*p != ' ') && (*p != '\t'))
+            p++;
+        if (*p != '\0')
+            *(p++) = '\0';
+    }
+    return (ac);
+}
+
 /*
  * netif_start() opens the pipe to the virtual network interface and
  *               starts the frame reader thread.
  *
- * If a network mode was given (hostsmash -n <mode>), it is handed to
- * hostsmash_netif as its -m argument, which is where it is checked
- * against the modes that platform supports. No -m is passed if
- * netif_arg is NULL or empty, leaving hostsmash_netif at its default.
+ * The string given to hostsmash -n is split at spaces, and each piece is
+ * handed to hostsmash_netif as a separate argument. For example,
+ * "hostsmash -n macvtap" runs "hostsmash_netif macvtap", and
+ * hostsmash -n "-d macvtap eth0" runs "hostsmash_netif -d macvtap eth0".
+ * The arguments are checked by hostsmash_netif, not here.
  */
 uint
 netif_start(void)
 {
-    uint have_mode = (netif_arg != NULL) && (netif_arg[0] != '\0');
+    char  argbuf[512];
+    char *nargv[NETIF_MAX_ARGS + 2];
+    int   nargc;
 
     if (netif_up)
         return (0);
+
+    nargc = netif_split_args(argbuf, sizeof (argbuf), nargv + 1,
+                             NETIF_MAX_ARGS);
+    if (nargc < 0) {
+        fprintf(stderr, "Network arguments \"%s\" are too long\n", netif_arg);
+        return (1);
+    }
+    nargv[0] = "hostsmash_netif";
+    nargv[nargc + 1] = NULL;
 
     /*
      * If a previous instance went down on its own (helper exited), its
@@ -961,10 +1012,12 @@ netif_start(void)
      * is in the ANSI code page, which is also what the helper's C
      * runtime converts its command line back into for its own argv.
      */
-    if (have_mode && (win_append_arg(cmd, sizeof (cmd), "-m") ||
-                      win_append_arg(cmd, sizeof (cmd), netif_arg))) {
-        fprintf(stderr, "Network mode \"%s\" is too long\n", netif_arg);
-        return (1);
+    for (int i = 1; i <= nargc; i++) {
+        if (win_append_arg(cmd, sizeof (cmd), nargv[i])) {
+            fprintf(stderr, "Network arguments \"%s\" are too long\n",
+                    netif_arg);
+            return (1);
+        }
     }
     if (MultiByteToWideChar(CP_ACP, 0, cmd, -1, cmdline,
                             sizeof (cmdline) / sizeof (cmdline[0])) == 0) {
@@ -1078,12 +1131,7 @@ netif_start(void)
         close(child_to_parent[0]);
         close(child_to_parent[1]);
 
-        if (have_mode) {
-            execlp("hostsmash_netif", "hostsmash_netif", "-m", netif_arg,
-                   (char *)NULL);
-        } else {
-            execlp("hostsmash_netif", "hostsmash_netif", (char *)NULL);
-        }
+        execvp("hostsmash_netif", nargv);
 
         perror("Failed launching hostsmash_netif");
         exit(1);
