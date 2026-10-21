@@ -12,6 +12,8 @@
 #ifndef _FS_TIMER_H
 #define _FS_TIMER_H
 
+typedef unsigned int uint;
+
 void timer_open(void);
 void timer_close(void);
 void timer_restart(uint msec);

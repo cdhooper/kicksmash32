@@ -108,7 +108,7 @@ typedef struct {
     uint8_t  cb_map;      // Boot block sector erase map
 } chip_blocks_t;
 
-uint flag_debug = 0;
+extern uint flag_debug;
 static uint8_t flag_quiet = 0;
 static uint8_t *test_loopback_buf = NULL;
 static uint8_t break_printed = 0;

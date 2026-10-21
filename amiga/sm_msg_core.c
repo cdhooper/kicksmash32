@@ -16,6 +16,7 @@
  */
 
 #include <stdio.h>
+#include <stdint.h>
 #ifndef STANDALONE
 #include <exec/execbase.h>
 #endif

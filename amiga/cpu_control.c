@@ -15,6 +15,7 @@
  */
 
 #include <stdio.h>
+#include <stdint.h>
 #ifndef STANDALONE
 #include <exec/execbase.h>
 #endif
@@ -28,6 +29,8 @@
 #else
 #define ASM_NOP __asm volatile("nop");
 #endif
+
+typedef unsigned int uint;
 
 unsigned int irq_disabled = 0;
 unsigned int cpu_type = 0;
