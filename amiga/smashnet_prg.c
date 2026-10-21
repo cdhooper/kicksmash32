@@ -297,6 +297,8 @@ cleanup:
     if (sm_net_open) {
         sm_nclose();
     }
+    /* Release KM_OP_NREAD tags (receive task has stopped) */
+    sm_nreadtag_free();
     if (context != NULL) {
         if (context->device != NULL) {
             if (smashnet_current_open_count(context) != 0) {
@@ -327,6 +329,18 @@ cleanup:
         free_signals(context);
         smashnet_context_free(context);
     }
+
+    /*
+     * Release this program's reference to the shared "smashmsg" message
+     * semaphore (ms_refcount) and the message pool. This is done here
+     * rather than relying on the atexit() handler registered by sm_msg.c,
+     * which is not run on this program's exit path. The receive task has
+     * stopped and the device has been removed, so nothing else in this
+     * program can send a host message now. host_msg_exit() does nothing
+     * if the message interface was never initialized, and is safe to call
+     * again (the atexit() handler then finds nothing to release).
+     */
+    host_msg_exit();
 
     if (IntuitionBase != NULL) {
         CloseLibrary((struct Library *)IntuitionBase);

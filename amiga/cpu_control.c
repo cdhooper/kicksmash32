@@ -108,7 +108,15 @@ get_cpu(void)
      */
     __asm__ volatile(
         "move.l #68000, %0\n"      // Default to 68000
-        "move.l #0x80000100, d1\n" // Enable 68020, 68030 and 68040+ D cache
+        /*
+         * Probe with a bit that every 68020+ implements:
+         *   bit 0  = E  (68020) / EI (68030) instruction cache enable
+         *   bit 8  = ED (68030) data cache enable
+         *   bit 31 = DE (68040 and 68060) data cache enable
+         * The 68020 CACR only has bits 3:0, so without bit 0 the
+         * readback would be 0 and a 68020 would be taken for a 68010.
+         */
+        "move.l #0x80000101, d1\n" // Enable 68020/68030 I cache, 68030/040+ D cache
         "movec.l cacr, d0\n"       // Save current CACR
         "movec.l d1, cacr\n"       // Check if CACR bit can be written
         "movec.l cacr, d1\n"
@@ -148,7 +156,7 @@ get_cpu(void)
         "movec.l d0, cacr\n"       // Restore CACR
         "cmp.l #0, d1\n"
         "bne 3f\n"                 // Has CACR.FD (Freeze Data); 68030 detected
-        "move.l #68020, %0\n"      // 68020
+        "move.l #68020, %0\n"      // No CACR.FD; 68020 detected
         "3: nop\n"
         : "=r" (cpu_type)          // CPU type as integer
         :                          // No input operands

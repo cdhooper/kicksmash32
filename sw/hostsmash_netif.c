@@ -5,6 +5,7 @@
 #include <strings.h>    /* strcasecmp */
 #include <unistd.h>
 #include <signal.h>
+#include <time.h>
 #include <errno.h>
 #ifdef __MINGW32__
 #include <winsock2.h>
@@ -23,6 +24,9 @@ typedef unsigned int uint;
 #endif
 #include "netif_backend.h"
 #include "hostsmash_netif.h"
+
+/* Define to show entire contents of packets as they are sent or received */
+#undef DUMP_FULL_PACKET
 
 /*
  * After compiling, it's helpful to setuid root this program on Linux.
@@ -475,8 +479,57 @@ packet_filter(uint8_t *frame, uint frame_len)
     if (is_multicast(frame) || is_broadcast(frame))
         return (1);
 
-fprintf(stderr, "[nm %x]", frame_len);
+//  fprintf(stderr, "[nfilt %x]", frame_len);
     return (0);
+}
+
+#ifdef __MINGW32__
+static uint64_t
+get_timestamp_ns(void)
+{
+    FILETIME ft;
+    ULARGE_INTEGER uli;
+
+    // 1. Get current system time (100-nanosecond intervals since Jan 1, 1601)
+    GetSystemTimeAsFileTime(&ft);
+
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+
+    // 2. Convert Windows Epoch (1601) to Unix Epoch (1970)
+    // There are 11,644,473,600 seconds between 1601 and 1970.
+    // In 100-nanosecond intervals, that is 116,444,736,000,000,000.
+    uint64_t windows_intervals = uli.QuadPart;
+    uint64_t unix_intervals = windows_intervals - 116444736000000000ULL;
+
+    // 3. Convert 100-nanosecond intervals to pure nanoseconds
+    return unix_intervals * 100ULL;
+}
+#else  /* Linux and MacOS */
+static uint64_t
+get_timestamp_ns(void)
+{
+    struct timespec ts;
+    // CLOCK_REALTIME gets the actual calendar time since the Unix Epoch
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    return ((uint64_t)ts.tv_sec * 1000000000ULL) + (uint64_t)ts.tv_nsec;
+}
+#endif
+
+static char *
+get_timestamp_str(void)
+{
+    static char     buf[32];
+    static uint64_t first = 0;
+    uint64_t        ts = get_timestamp_ns();
+    uint            us;
+    if (first == 0)
+        first = ts;
+    ts -= first;
+    us = ts / 1000ULL;
+    sprintf(buf, "%4lu.%06lu", us / 1000000UL, us % 1000000UL);
+    return (buf);
 }
 
 #ifdef __MINGW32__
@@ -511,8 +564,11 @@ win_capture_thread(LPVOID arg)
             uint16_t frame_len = (uint16_t) frame_bytes;
             consecutive_errors = 0;
             if (packet_filter(buffer, frame_len)) {
-                fprintf(stderr, ">> recv %u\n", frame_len);
+                fprintf(stderr, ">> %s recv %u\n",
+                        get_timestamp_str(), frame_len);
+#ifdef DUMP_FULL_PACKET
                 dump_packet(buffer, frame_len);
+#endif
                 if (send_pkt(frame_len, frame_len, buffer))
                     break;
             }
@@ -552,15 +608,18 @@ win_stdin_thread(LPVOID arg)
             break;   /* EOF, broken pipe, or CancelSynchronousIo() */
 
         if (frame_len <= sizeof (buffer)) {
-            fprintf(stderr, ">> send %u\n", frame_len);
+            fprintf(stderr, ">> %s send %u\n", get_timestamp_str(), frame_len);
             size_t nread = fread(buffer, 1, frame_len, stdin);
+#ifdef DUMP_FULL_PACKET
             dump_packet(buffer, frame_len);
+#endif
             if (nread == frame_len)
                 g_be->write_frame(buffer, nread);
         } else if ((frame_len >> 8) == 0xff) {
             /* Special case: command */
             uint   read_len = frame_len & 0xff;
-            fprintf(stderr, ">> send CMD l=%u\n", read_len);
+            fprintf(stderr, ">> %s send CMD l=%u\n",
+                    get_timestamp_str(), read_len);
             size_t nread    = fread(buffer, 1, read_len, stdin);
             if (nread == read_len)
                 handle_cmd(buffer, read_len);
@@ -800,8 +859,11 @@ main(int argc, char *argv[])
             if (frame_bytes > 0) {
                 frame_len = (uint16_t)frame_bytes;
                 if (packet_filter(buffer, frame_len)) {
-                    fprintf(stderr, ">> recv %u\n", frame_len);
+                    fprintf(stderr, ">> %s recv %u\n",
+                            get_timestamp_str(), frame_len);
+#ifdef DUMP_FULL_PACKET
                     dump_packet(buffer, frame_len);
+#endif
                     if (send_pkt(frame_len, frame_len, buffer))
                         break;
                 }
@@ -815,9 +877,12 @@ main(int argc, char *argv[])
             /* Read the length prefix first */
             if (fread(&frame_len, sizeof (frame_len), 1, stdin) == 1) {
                 if (frame_len <= sizeof (buffer)) {
-                    fprintf(stderr, ">> send %u\n", frame_len);
+                    fprintf(stderr, ">> %s send %u\n",
+                            get_timestamp_str(), frame_len);
                     size_t nread = fread(buffer, 1, frame_len, stdin);
+#ifdef DUMP_FULL_PACKET
                     dump_packet(buffer, frame_len);
+#endif
                     if (nread == frame_len) {
                         if (g_be->write_frame(buffer, nread) < 0) {
                             /* error already logged by the backend */
@@ -826,7 +891,8 @@ main(int argc, char *argv[])
                 } else if ((frame_len >> 8) == 0xff) {
                     /* Special case: command */
                     uint   read_len = frame_len & 0xff;
-                    fprintf(stderr, ">> send CMD l=%u\n", read_len);
+                    fprintf(stderr, ">> %s send CMD l=%u\n",
+                            get_timestamp_str(), read_len);
                     size_t nread    = fread(buffer, 1, read_len, stdin);
                     if (nread == read_len) {
                         handle_cmd(buffer, read_len);

@@ -51,13 +51,79 @@ uint host_msg(void *smsg, uint slen, void **rdata, uint *rlen);
 uint host_msg_tag(void *smsg, uint slen, void **rdata, uint *rlen);
 uint host_send_msg(void *smsg, uint slen);
 uint host_recv_msg(uint tag, void **rdata, uint *rlen);
+uint host_recv_msg_noblock(uint tag, void **rdata, uint *rlen);
 uint host_recv_msg_cont(uint tag, void *buf, uint buf_len);
 
 uint host_tag_alloc(void);
 void host_tag_free(uint tag);
 void host_msg_exit(void);
+uint host_msg_tag_queued(uint tag);
+void host_msg_set_nread_tags(uint cur, uint cur_valid,
+                             uint prev, uint prev_valid);
 
 void dump_memory(void *buf, uint len, uint dump_base);
+
+#define MSG_BUF_SIZE 4200  // Maximum received message size (multiple of 4)
+
+#ifndef STANDALONE
+#include <exec/nodes.h>
+#include <exec/lists.h>
+#include <exec/semaphores.h>
+
+/*
+ * Shared "smashmsg" message semaphore structure (created by sm_msg.c).
+ * Visible here so that debug tools (smash debugq) can display it.
+ * Change MSG_SEM_VERSION whenever the msg_semaphore_t or msg_buf_t
+ * layout changes.
+ */
+#define MSG_SEM_VERSION 3
+typedef struct SignalSemaphore SignalSemaphore_t;
+typedef struct MinNode         MinNode_t;
+typedef struct MinList         MinList_t;
+
+/*
+ * Message buffer. Every buffer is on exactly one of the shared lists
+ * (ms_free_list, ms_queue_list, or ms_held_list), except while a task is
+ * actively receiving into it. The list node is part of the buffer, so a
+ * buffer can never be referenced from two places at once.
+ */
+typedef struct {
+    MinNode_t    mb_node;     // Free, reply queue, or held list linkage
+    struct Task *mb_owner;    // Holding task (ms_held_list only)
+    void        *mb_prog;     // Holding program (ms_held_list only)
+    uint16_t     mb_len;      // Length of message (NOT buffer size)
+    uint16_t     mb_tag;      // Message tag (ms_queue_list only)
+    uint32_t     mb_data[MSG_BUF_SIZE / 4];  // Message (km_msg_hdr_t first)
+} msg_buf_t;
+
+typedef struct {
+    SignalSemaphore_t ms_sem;         // Semaphore MUST be the first member
+    uint16_t          ms_version;     // Struct version
+    uint16_t          ms_tag;         // Next available tag
+    uint16_t          ms_tag_count;   // Outstanding tags
+    uint16_t          ms_refcount;    // Number of tasks using this struct
+    uint16_t          ms_busy;        // Reader busy
+    uint16_t          ms_allocsize;   // Size of struct
+    /*
+     * ms_queue_lock protects all three buffer lists, ms_free_count, and
+     * the network receive tags below.
+     */
+    SignalSemaphore_t ms_queue_lock;  // Buffer list lock
+    MinList_t         ms_queue_list;  // Received messages awaiting their tag
+    MinList_t         ms_free_list;   // Spare message buffers
+    MinList_t         ms_held_list;   // Buffers delivered to tasks (in use)
+    uint16_t          ms_free_count;  // Number of buffers on ms_free_list
+    /*
+     * Network receive (KM_OP_NREAD) tags, used by every task's
+     * tag_queue_remove() so that queued packets for these tags are not
+     * expunged. Protected by ms_queue_lock; see host_msg_set_nread_tags().
+     */
+    uint16_t          ms_nread_tag_cur;        // Current network rx tag
+    uint16_t          ms_nread_tag_prev;       // Previous network rx tag
+    uint8_t           ms_nread_tag_cur_valid;  // ms_nread_tag_cur is in use
+    uint8_t           ms_nread_tag_prev_valid; // ms_nread_tag_prev is in use
+} msg_semaphore_t;
+#endif /* !STANDALONE */
 
 const char *smash_err(uint status);
 

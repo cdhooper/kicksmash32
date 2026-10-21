@@ -75,6 +75,7 @@ static const char cmd_options[] =
     "   bank <opt>    ROM bank operations (-b ?, show, ...)\n"
     "   clock <opt>   save / restore Amiga clock with KS (-c)\n"
     "   debug         show debug output (-d)\n"
+    "   debugq        show smashmsg semaphore and reply queue (-Q)\n"
     "   erase <opt>   erase flash (-e ?, bank, ...)\n"
     "   identify      identify Kicksmash and Flash parts (-i[ii])\n"
     "   read <opt>    read from flash (-r ?, bank, file, ...)\n"
@@ -119,6 +120,7 @@ long_to_short_t long_to_short_main[] = {
     { "-i", "id" },
     { "-l", "loop" },
     { "-q", "quiet" },
+    { "-Q", "debugq" },
     { "-r", "read" },
     { "-s", "set" },
     { "-S", "spin" },
@@ -2955,6 +2957,211 @@ usage:
 }
 
 /*
+ * sem_owner_name() copies the name of a semaphore's owning task into the
+ *                  provided buffer. Must be called under Forbid() so that
+ *                  the owner task can't go away while its name is copied.
+ */
+static void
+sem_owner_name(const struct SignalSemaphore *sem, char *buf, uint buflen)
+{
+    const struct Task *owner = sem->ss_Owner;
+    const char        *name;
+
+    buf[0] = '\0';
+    if (owner == NULL)
+        return;
+    name = owner->tc_Node.ln_Name;
+    if (name == NULL)
+        name = "(unnamed)";
+    strncpy(buf, name, buflen - 1);
+    buf[buflen - 1] = '\0';
+}
+
+/*
+ * show_signal_semaphore() displays the fields of a SignalSemaphore snapshot.
+ */
+static void
+show_signal_semaphore(const char *label, const struct SignalSemaphore *sem,
+                      const char *owner_name)
+{
+    printf("  %s\n", label);
+    printf("    ss_NestCount   %d\n", (int) sem->ss_NestCount);
+    printf("    ss_QueueCount  %d%s\n", (int) sem->ss_QueueCount,
+           (sem->ss_QueueCount < 0) ? " (unowned)" : "");
+    printf("    ss_Owner       %08x", (uint) sem->ss_Owner);
+    if (sem->ss_Owner != NULL)
+        printf(" \"%s\"", owner_name);
+    printf("\n");
+}
+
+/*
+ * cmd_debugq() locates the shared "smashmsg" semaphore (without creating
+ *              it) and displays all fields of the message semaphore
+ *              structure, followed by every message waiting in the reply
+ *              queue. For debug purposes.
+ *
+ * The structure is kept alive while it is displayed by holding ms_sem
+ * shared: the last owner must obtain ms_sem (exclusive) before it can free
+ * the structure. Receivers in other programs will block on ms_sem until
+ * this function is done. The shared hold is taken with
+ * AttemptSemaphoreShared() inside the same Forbid() as FindSemaphore(),
+ * so the structure can't be freed between finding and locking it.
+ */
+#define SMASHMSG_SEM_NAME    "smashmsg"  // Must match sm_msg.c
+#define DEBUGQ_LOCK_TRIES    250         // Ticks to wait for ms_sem (5 sec)
+#define DEBUGQ_MAX_NODES     1000        // Guard against a looping list
+static int
+cmd_debugq(void)
+{
+    msg_semaphore_t   snap;
+    msg_semaphore_t  *hdr;
+    msg_buf_t        *node;
+    msg_buf_t        *next_node;
+    char              owner_main[32];
+    char              owner_queue[32];
+    char              sem_name[32];
+    uint              tries;
+    uint              count = 0;
+    uint              total_len = 0;
+    uint              held = 0;
+
+    for (tries = 0; ; tries++) {
+        Forbid();
+        hdr = (msg_semaphore_t *) FindSemaphore((STRPTR) SMASHMSG_SEM_NAME);
+        if (hdr == NULL) {
+            Permit();
+            printf("No \"%s\" semaphore present\n", SMASHMSG_SEM_NAME);
+            return (1);
+        }
+        if ((hdr->ms_version != MSG_SEM_VERSION) ||
+            (hdr->ms_allocsize != sizeof (*hdr))) {
+            uint ver  = hdr->ms_version;
+            uint size = hdr->ms_allocsize;
+            Permit();
+            printf("\"%s\" at %08x has version %u size %u; this program "
+                   "expects version %u size %u\n", SMASHMSG_SEM_NAME,
+                   (uint) hdr, ver, size, MSG_SEM_VERSION,
+                   (uint) sizeof (*hdr));
+            return (1);
+        }
+
+        /* Consistent snapshot of all fields, before taking any lock */
+        CopyMem(hdr, &snap, sizeof (snap));
+        sem_owner_name(&hdr->ms_sem, owner_main, sizeof (owner_main));
+        sem_owner_name(&hdr->ms_queue_lock, owner_queue,
+                       sizeof (owner_queue));
+        if (hdr->ms_sem.ss_Link.ln_Name != NULL) {
+            strncpy(sem_name, hdr->ms_sem.ss_Link.ln_Name,
+                    sizeof (sem_name) - 1);
+            sem_name[sizeof (sem_name) - 1] = '\0';
+        } else {
+            strcpy(sem_name, "(null)");
+        }
+
+        /* AttemptSemaphoreShared() never waits, so Forbid() is kept */
+        if (AttemptSemaphoreShared(&hdr->ms_sem))
+            break;
+        Permit();
+
+        if (tries >= DEBUGQ_LOCK_TRIES) {
+            printf("Timeout waiting for \"%s\" (owner \"%s\")\n",
+                   SMASHMSG_SEM_NAME, owner_main);
+            return (1);
+        }
+        Delay(1);  // A receiver holds ms_sem; let it finish its poll
+    }
+    Permit();
+
+    printf("Semaphore \"%s\" at %08x\n", sem_name, (uint) hdr);
+    printf("  ln_Pri           %d\n", (int) snap.ms_sem.ss_Link.ln_Pri);
+    show_signal_semaphore("ms_sem", &snap.ms_sem, owner_main);
+    printf("  ms_version       %u\n", (uint) snap.ms_version);
+    printf("  ms_tag           %04x\n", (uint) snap.ms_tag);
+    printf("  ms_tag_count     %u\n", (uint) snap.ms_tag_count);
+    printf("  ms_refcount      %u\n", (uint) snap.ms_refcount);
+    printf("  ms_busy          %u\n", (uint) snap.ms_busy);
+    printf("  ms_allocsize     %u\n", (uint) snap.ms_allocsize);
+    show_signal_semaphore("ms_queue_lock", &snap.ms_queue_lock, owner_queue);
+    printf("  ms_queue_list    head=%08x tail=%08x tailpred=%08x\n",
+           (uint) snap.ms_queue_list.mlh_Head,
+           (uint) snap.ms_queue_list.mlh_Tail,
+           (uint) snap.ms_queue_list.mlh_TailPred);
+    printf("  ms_free_list     head=%08x tail=%08x tailpred=%08x\n",
+           (uint) snap.ms_free_list.mlh_Head,
+           (uint) snap.ms_free_list.mlh_Tail,
+           (uint) snap.ms_free_list.mlh_TailPred);
+    printf("  ms_held_list     head=%08x tail=%08x tailpred=%08x\n",
+           (uint) snap.ms_held_list.mlh_Head,
+           (uint) snap.ms_held_list.mlh_Tail,
+           (uint) snap.ms_held_list.mlh_TailPred);
+    printf("  ms_free_count    %u\n", (uint) snap.ms_free_count);
+    printf("  ms_nread_tag_cur  %04x%s\n", (uint) snap.ms_nread_tag_cur,
+           snap.ms_nread_tag_cur_valid ? "" : " (not valid)");
+    printf("  ms_nread_tag_prev %04x%s\n", (uint) snap.ms_nread_tag_prev,
+           snap.ms_nread_tag_prev_valid ? "" : " (not valid)");
+
+    /* Walk the reply queue while holding its lock (ms_sem then queue lock) */
+    ObtainSemaphore(&hdr->ms_queue_lock);
+    printf("Reply queue\n");
+    for (node = (msg_buf_t *) hdr->ms_queue_list.mlh_Head;
+         (next_node = (msg_buf_t *) node->mb_node.mln_Succ) != NULL;
+         node = next_node) {
+        km_msg_hdr_t *km = (km_msg_hdr_t *) node->mb_data;
+
+        if (count == 0) {
+            printf("  %-4s %-8s %-6s %-5s %-6s %-6s %s\n",
+                   "Num", "Buf", "km_tag", "km_op", "status",
+                   "q_tag", "Len");
+        }
+        printf("  %-4u %08x ", count, (uint) node);
+        printf("%04x   %02x    %02x     ",
+               (uint) km->km_tag, (uint) km->km_op,
+               (uint) km->km_status);
+        printf("%04x   %u\n", (uint) node->mb_tag, (uint) node->mb_len);
+        total_len += node->mb_len;
+
+        if (++count >= DEBUGQ_MAX_NODES) {
+            printf("  Stopping after %u entries (list may be corrupt)\n",
+                   count);
+            break;
+        }
+    }
+
+    /* Buffers delivered to tasks and still considered in use */
+    printf("Held buffers\n");
+    for (node = (msg_buf_t *) hdr->ms_held_list.mlh_Head;
+         (next_node = (msg_buf_t *) node->mb_node.mln_Succ) != NULL;
+         node = next_node) {
+        km_msg_hdr_t *km = (km_msg_hdr_t *) node->mb_data;
+
+        if (held == 0) {
+            printf("  %-4s %-8s %-8s %-8s %-6s %-5s\n",
+                   "Num", "Buf", "Task", "Prog", "km_tag", "km_op");
+        }
+        printf("  %-4u %08x %08x %08x %04x   %02x\n", held, (uint) node,
+               (uint) node->mb_owner, (uint) node->mb_prog,
+               (uint) km->km_tag, (uint) km->km_op);
+        if (++held >= DEBUGQ_MAX_NODES) {
+            printf("  Stopping after %u entries (list may be corrupt)\n",
+                   held);
+            break;
+        }
+    }
+    if (held == 0)
+        printf("  (none)\n");
+    ReleaseSemaphore(&hdr->ms_queue_lock);
+    ReleaseSemaphore(&hdr->ms_sem);
+
+    printf("Reply queue:");
+    if (count == 0)
+        printf(" (empty)\n");
+    else
+        printf(" %u message%s, %u bytes\n",
+               count, (count == 1) ? "" : "s", total_len);
+    return (0);
+}
+
+/*
  * exit_status() converts a command's status to a program exit code.
  *               Kicksmash status codes such as MSG_STATUS_NO_REPLY are
  *               negative as an exit code, and a code of 1 or 2 is below
@@ -3024,6 +3231,8 @@ main(int argc, char *argv[])
                     case 'q':  // quiet
                         flag_quiet++;
                         break;
+                    case 'Q':  // debugq: show message semaphore and queue
+                        exit(exit_status(cmd_debugq()));
                     case 'r':  // read flash to file
                         exit(exit_status(cmd_readwrite(argc - arg, argv + arg)));
                         break;

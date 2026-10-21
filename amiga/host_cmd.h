@@ -34,7 +34,7 @@
 #define KM_OP_NOPEN           0x20  // Network open
 #define KM_OP_NCLOSE          0x21  // Network close
 #define KM_OP_NWRITE          0x22  // Network send
-#define KM_OP_NREAD           0x23  // Network receive
+#define KM_OP_NREAD           0x23  // Network receive tag update
 #define KM_OP_NGETMAC         0x24  // Network get MAC
 #define KM_OP_NSETMAC         0x25  // Network set MAC
 

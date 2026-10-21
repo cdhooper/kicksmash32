@@ -215,16 +215,17 @@ recv_msg(void *buf, uint len, uint *rlen, uint timeout_ms)
 }
 
 
-#define MSG_POOL_COUNT    (4)
-#define MSG_POOL_BUF_SIZE (4200)
-static void            *msg_pool[4];
-static volatile uint8_t msg_pool_cur;
-
 #ifdef STANDALONE
 typedef struct {
     uint16_t          ms_tag;         // Next available tag
     uint16_t          ms_tag_count;   // Outstanding tags
 } msg_semaphore_t;
+
+typedef struct {
+    uint16_t mb_len;                     // Length of message
+    uint16_t mb_tag;                     // Message tag
+    uint32_t mb_data[MSG_BUF_SIZE / 4];  // Message (km_msg_hdr_t first)
+} msg_buf_t;
 
 static msg_semaphore_t *msg_sem;
 static msg_semaphore_t  msg_sem_data;
@@ -233,126 +234,329 @@ static msg_semaphore_t  msg_sem_data;
 #define MSG_SEM_OBTAIN()
 #define MSG_SEM_RELEASE()
 
+/*
+ * Standalone (ROM Switcher) never uses more than one buffer, and never
+ * hands off messages for other tags.
+ */
+static msg_buf_t msg_standalone_buf;
+
+static msg_buf_t *
+msgbuf_get(void)
+{
+    return (&msg_standalone_buf);
+}
+
+static void
+msgbuf_put(msg_buf_t *mb)
+{
+    (void) mb;
+}
+
+static void
+msgbuf_hold(msg_buf_t *mb)
+{
+    (void) mb;
+}
+
 static void
 host_msg_init(void)
 {
-    /* Standalone (ROM Switcher) never uses more than one buffer */
-    static uint8_t buf[4200];
-    uint cur;
-
     if (msg_sem != NULL)
         return;
     msg_sem = &msg_sem_data;
+}
 
-    for (cur = 0; cur < MSG_POOL_COUNT; cur++)
-        msg_pool[cur] = buf;
+/* Standalone has no tag queue and no network receive tags */
+uint
+host_msg_tag_queued(uint tag)
+{
+    (void) tag;
+    return (0);
+}
+
+void
+host_msg_set_nread_tags(uint cur, uint cur_valid, uint prev, uint prev_valid)
+{
+    (void) cur;
+    (void) cur_valid;
+    (void) prev;
+    (void) prev_valid;
 }
 
 #else  /* !STANDALONE */
 
-#define TAG_QUEUE_ANY ((uint)-1)  // Give any queued message
+#define TAG_QUEUE_ANY   ((uint)-1)  // Give any queued message
+#define TAG_EXPUNGE_AGE 0x30        // Queued tags older than this are stale
 
-typedef struct SignalSemaphore SignalSemaphore_t;
-typedef struct MinNode         MinNode_t;
-typedef struct MinList         MinList_t;
-typedef struct {
-    MinNode_t  mrq_Node;    // Embedded node for list management
-    void      *mrg_buf;     // Buffer (might be exchanged)
-    uint16_t   mrg_len;     // Length of message (NOT buffer size)
-    uint16_t   mrg_tag;     // Desired reply tag
-} msg_read_queue_t;
+/*
+ * Each task may hold this many delivered message buffers. A message
+ * returned by host_recv_msg() remains valid until the same task has
+ * received this many more messages.
+ */
+#define MSG_HOLD_PER_TASK 4
 
-typedef struct {
-    SignalSemaphore_t ms_sem;         // Semaphore MUST be the first member
-    uint16_t          ms_version;     // Struct version
-    uint16_t          ms_tag;         // Next available tag
-    uint16_t          ms_tag_count;   // Outstanding tags
-    uint16_t          ms_refcount;    // Number of tasks using this struct
-    uint16_t          ms_busy;        // Reader busy
-    uint16_t          ms_allocsize;   // Size of struct
-    SignalSemaphore_t ms_queue_lock;  // Pending reply queue lock
-    MinList_t         ms_queue_list;  // Pending reply queue head
-    void             *ms_free_msgbuf; // Spare message buffer for exchange
-} msg_semaphore_t;
+/* Spare buffers kept on the shared free list (excess are freed) */
+#define MSG_FREE_MAX      8
+
+/* msg_buf_t and msg_semaphore_t are defined in sm_msg.h */
 
 static msg_semaphore_t *msg_sem;
 static const char       semaphore_name[] = "smashmsg";
 
+/*
+ * The address of msg_prog_id identifies this program (or device) in
+ * mb_prog of held buffers, so that host_msg_exit() can return every
+ * buffer held by any of this program's tasks.
+ */
+static uint8_t          msg_prog_id;
+#define MSG_PROG_ID     ((void *) &msg_prog_id)
+
 #define MSG_SEM_OBTAIN()  ObtainSemaphore(&msg_sem->ms_sem)
 #define MSG_SEM_RELEASE() ReleaseSemaphore(&msg_sem->ms_sem)
 
+#define LIST(x) ((struct List *) &(x))
+
 /*
- * tag_queue_add() adds a node to the end of the message queue.
- *                 This function is thread-safe.
+ * msgbuf_put_locked() returns a message buffer to the shared free list,
+ *                     or frees it if the free list is full. Must be
+ *                     called with ms_queue_lock held.
  */
 static void
-tag_queue_add(uint16_t tag, void *buf, uint len)
+msgbuf_put_locked(msg_buf_t *mb)
 {
-    msg_read_queue_t *node = AllocMem(sizeof (*node), MEMF_PUBLIC);
-
-    if (node == NULL) {
-        /* No memoory: Discard message to avoid leaking memory */
-        printf("Out of mem\n");
-        FreeMem(buf, MSG_POOL_BUF_SIZE);
-        return;
+    if (msg_sem->ms_free_count < MSG_FREE_MAX) {
+        mb->mb_owner = NULL;
+        mb->mb_prog  = NULL;
+        AddHead(LIST(msg_sem->ms_free_list), (struct Node *) mb);
+        msg_sem->ms_free_count++;
+    } else {
+        FreeMem(mb, sizeof (*mb));
     }
-    node->mrg_tag = tag;  // Message tag
-    node->mrg_buf = buf;  // Message header
-    node->mrg_len = len;  // Message size
+}
 
+/*
+ * msgbuf_put() returns a message buffer to the shared free list.
+ *              This function is thread-safe.
+ */
+static void
+msgbuf_put(msg_buf_t *mb)
+{
     ObtainSemaphore(&msg_sem->ms_queue_lock);
-
-    /* AddTail operates on MinList/MinNode via typecasting */
-    AddTail((struct List *)&msg_sem->ms_queue_list, (struct Node *)node);
-
+    msgbuf_put_locked(mb);
     ReleaseSemaphore(&msg_sem->ms_queue_lock);
 }
 
 /*
- * tag_queue_remove() will search for and remove a node by its tag field
- *                    Old tags will be automatically expunged.
+ * msgbuf_get() takes a message buffer from the shared free list, or
+ *              allocates a new one if the free list is empty.
+ *              Returns NULL if no memory is available.
+ *              This function is thread-safe.
+ */
+static msg_buf_t *
+msgbuf_get(void)
+{
+    msg_buf_t *mb;
+
+    ObtainSemaphore(&msg_sem->ms_queue_lock);
+    mb = (msg_buf_t *) RemHead(LIST(msg_sem->ms_free_list));
+    if (mb != NULL)
+        msg_sem->ms_free_count--;
+    ReleaseSemaphore(&msg_sem->ms_queue_lock);
+
+    if (mb == NULL)
+        mb = AllocMem(sizeof (*mb), MEMF_PUBLIC);
+    return (mb);
+}
+
+/*
+ * msgbuf_hold() records a message buffer as delivered to (held by) the
+ *               current task. The task's oldest held buffers beyond
+ *               MSG_HOLD_PER_TASK are returned to the free list.
+ *               This function is thread-safe.
+ */
+static void
+msgbuf_hold(msg_buf_t *mb)
+{
+    struct Task *me = FindTask(NULL);
+    msg_buf_t   *node;
+    msg_buf_t   *next_node;
+    uint         count = 0;
+
+    mb->mb_owner = me;
+    mb->mb_prog  = MSG_PROG_ID;
+
+    ObtainSemaphore(&msg_sem->ms_queue_lock);
+    AddTail(LIST(msg_sem->ms_held_list), (struct Node *) mb);
+
+    /* Count this task's held buffers (list is oldest first) */
+    for (node = (msg_buf_t *) msg_sem->ms_held_list.mlh_Head;
+         node->mb_node.mln_Succ != NULL;
+         node = (msg_buf_t *) node->mb_node.mln_Succ) {
+        if ((node->mb_owner == me) && (node->mb_prog == MSG_PROG_ID))
+            count++;
+    }
+
+    /* Recycle the oldest ones beyond the limit */
+    for (node = (msg_buf_t *) msg_sem->ms_held_list.mlh_Head;
+         (count > MSG_HOLD_PER_TASK) &&
+         ((next_node = (msg_buf_t *) node->mb_node.mln_Succ) != NULL);
+         node = next_node) {
+        if ((node->mb_owner == me) && (node->mb_prog == MSG_PROG_ID)) {
+            Remove((struct Node *) node);
+            msgbuf_put_locked(node);
+            count--;
+        }
+    }
+    ReleaseSemaphore(&msg_sem->ms_queue_lock);
+}
+
+/*
+ * msgbuf_release_held() returns every buffer held by any task of this
+ *                       program to the free list. Called when the
+ *                       program is exiting.
+ */
+static void
+msgbuf_release_held(void)
+{
+    msg_buf_t *node;
+    msg_buf_t *next_node;
+
+    ObtainSemaphore(&msg_sem->ms_queue_lock);
+    for (node = (msg_buf_t *) msg_sem->ms_held_list.mlh_Head;
+         (next_node = (msg_buf_t *) node->mb_node.mln_Succ) != NULL;
+         node = next_node) {
+        if (node->mb_prog == MSG_PROG_ID) {
+            Remove((struct Node *) node);
+            msgbuf_put_locked(node);
+        }
+    }
+    ReleaseSemaphore(&msg_sem->ms_queue_lock);
+}
+
+/*
+ * tag_queue_add() adds a received message buffer to the end of the
+ *                 reply queue, for the task which owns the tag.
+ *                 This function is thread-safe.
+ */
+static void
+tag_queue_add(msg_buf_t *mb, uint16_t tag, uint len)
+{
+    mb->mb_tag = tag;  // Message tag
+    mb->mb_len = len;  // Message size
+
+    ObtainSemaphore(&msg_sem->ms_queue_lock);
+    AddTail(LIST(msg_sem->ms_queue_list), (struct Node *) mb);
+    ReleaseSemaphore(&msg_sem->ms_queue_lock);
+}
+
+/*
+ * tag_is_nread() reports whether the tag is one of the outstanding network
+ *                receive (KM_OP_NREAD) tags. Must be called with
+ *                ms_queue_lock held.
+ */
+static int
+tag_is_nread(uint16_t tag)
+{
+    return ((msg_sem->ms_nread_tag_cur_valid &&
+             (tag == msg_sem->ms_nread_tag_cur)) ||
+            (msg_sem->ms_nread_tag_prev_valid &&
+             (tag == msg_sem->ms_nread_tag_prev)));
+}
+
+/*
+ * tag_queue_remove() will search for and remove a message buffer by its
+ *                    tag. Old tags will be automatically expunged, except
+ *                    for the outstanding network receive tags, which live
+ *                    much longer than other tags.
  *                    This function is thread-safe.
  */
-static void *
-tag_queue_remove(uint target_tag, uint *rxlen)
+static msg_buf_t *
+tag_queue_remove(uint target_tag)
 {
-    msg_read_queue_t *node;
-    msg_read_queue_t *next_node;
-    msg_read_queue_t *found_node = NULL;
+    msg_buf_t *node;
+    msg_buf_t *next_node;
+    msg_buf_t *found_node = NULL;
 
     ObtainSemaphore(&msg_sem->ms_queue_lock);
 
-    /* Safe iteration macro using MinNode pointers */
-    for (node = (msg_read_queue_t *)msg_sem->ms_queue_list.mlh_Head;
-         (next_node = (msg_read_queue_t *)node->mrq_Node.mln_Succ);
-         node = next_node)
-    {
+    for (node = (msg_buf_t *) msg_sem->ms_queue_list.mlh_Head;
+         (next_node = (msg_buf_t *) node->mb_node.mln_Succ) != NULL;
+         node = next_node) {
         if ((target_tag == TAG_QUEUE_ANY) ||  // Remove any
-            (node->mrg_tag == target_tag)) {
+            (node->mb_tag == target_tag)) {
             /* Remove node from the list */
-            Remove((struct Node *)node);
+            Remove((struct Node *) node);
             found_node = node;
             break;
         }
+        /*
+         * Expunge only tags OLDER than the target by more than
+         * TAG_EXPUNGE_AGE. A tag newer than the target (difference wraps
+         * to 0x8000 or more) belongs to a transaction which started
+         * after this one, so it must be kept. Otherwise a task searching
+         * with a long-lived tag (such as a network receive tag) would
+         * discard every other program's pending replies.
+         */
+        uint16_t age = (uint16_t) (target_tag - node->mb_tag);
         if ((target_tag != TAG_QUEUE_ANY) &&
-            ((uint16_t) (target_tag - node->mrg_tag) > 0x30)) {
+            (age > TAG_EXPUNGE_AGE) && (age < 0x8000) &&
+            !tag_is_nread(node->mb_tag)) {
             /* This node's tag is "too old" -- do garbage collection */
-            printf("Expunge tag=%x (current: %x)\n", node->mrg_tag, target_tag);
-            Remove((struct Node *)node);
-            FreeMem(node->mrg_buf, MSG_POOL_BUF_SIZE);
-            FreeMem(node, sizeof (*node));
+            printf("Expunge tag=%x (current: %x)\n", node->mb_tag, target_tag);
+            Remove((struct Node *) node);
+            msgbuf_put_locked(node);
         }
     }
 
     ReleaseSemaphore(&msg_sem->ms_queue_lock);
-    if (found_node != NULL) {
-        void *found_buf = found_node->mrg_buf;
-        *rxlen = found_node->mrg_len;
-        FreeMem(found_node, sizeof (*found_node));
-        return (found_buf);
-    } else {
-        return (NULL);
+    return (found_node);
+}
+
+/*
+ * host_msg_tag_queued() reports whether a message with the specified tag
+ *                       is waiting in the shared reply queue (received
+ *                       by some task, but not yet claimed).
+ */
+uint
+host_msg_tag_queued(uint tag)
+{
+    msg_buf_t *node;
+    uint       found = 0;
+
+    if (msg_sem == NULL)
+        return (0);
+
+    ObtainSemaphore(&msg_sem->ms_queue_lock);
+    for (node = (msg_buf_t *) msg_sem->ms_queue_list.mlh_Head;
+         node->mb_node.mln_Succ != NULL;
+         node = (msg_buf_t *) node->mb_node.mln_Succ) {
+        if (node->mb_tag == (uint16_t) tag) {
+            found = 1;
+            break;
+        }
     }
+    ReleaseSemaphore(&msg_sem->ms_queue_lock);
+    return (found);
+}
+
+/*
+ * host_msg_set_nread_tags() publishes the network receive (KM_OP_NREAD)
+ *                           tags in the shared structure, so that every
+ *                           task's tag_queue_remove() keeps queued packets
+ *                           for those tags instead of expunging them.
+ */
+void
+host_msg_set_nread_tags(uint cur, uint cur_valid, uint prev, uint prev_valid)
+{
+    if (msg_sem == NULL)
+        return;
+
+    ObtainSemaphore(&msg_sem->ms_queue_lock);
+    msg_sem->ms_nread_tag_cur        = cur;
+    msg_sem->ms_nread_tag_cur_valid  = !!cur_valid;
+    msg_sem->ms_nread_tag_prev       = prev;
+    msg_sem->ms_nread_tag_prev_valid = !!prev_valid;
+    ReleaseSemaphore(&msg_sem->ms_queue_lock);
 }
 
 /*
@@ -379,11 +583,13 @@ get_msg_semaphore(void)
          * theirs). Refuse to share it. Change ms_version whenever the
          * structure layout changes.
          */
-        if ((hdr->ms_version != 1) || (hdr->ms_allocsize != sizeof (*hdr))) {
+        if ((hdr->ms_version != MSG_SEM_VERSION) ||
+            (hdr->ms_allocsize != sizeof (*hdr))) {
             Permit();
             printf("smashmsg version %u size %u incompatible with %u size %u; "
                    "rebuild all smash programs\n",
-                   hdr->ms_version, hdr->ms_allocsize, 1, (uint) sizeof (*hdr));
+                   hdr->ms_version, hdr->ms_allocsize, MSG_SEM_VERSION,
+                   (uint) sizeof (*hdr));
             msg_sem = NULL;
             return;
         }
@@ -404,9 +610,11 @@ get_msg_semaphore(void)
             /* Initialize main SignalSemaphore */
             InitSemaphore(&hdr->ms_sem);
 
-            /* Initialize tag queue SignalSemaphore */
+            /* Initialize buffer list SignalSemaphore and lists */
             InitSemaphore(&hdr->ms_queue_lock);
-            NewList((struct List *)&hdr->ms_queue_list);
+            NewList(LIST(hdr->ms_queue_list));
+            NewList(LIST(hdr->ms_free_list));
+            NewList(LIST(hdr->ms_held_list));
 
             /* Structure may survive this program, so can't use constant */
             char *name = AllocMem(sizeof (semaphore_name), MEMF_PUBLIC);
@@ -423,10 +631,10 @@ get_msg_semaphore(void)
 
             /* Initialize custom header fields */
             hdr->ms_allocsize   = sizeof (*hdr);
-            hdr->ms_version     = 1;
+            hdr->ms_version     = MSG_SEM_VERSION;
             hdr->ms_refcount    = 1;
             hdr->ms_tag         = 0;
-            hdr->ms_free_msgbuf = NULL;
+            hdr->ms_free_count  = 0;
 
             /* Publish semaphore globally */
             AddSemaphore(&hdr->ms_sem);
@@ -435,6 +643,19 @@ get_msg_semaphore(void)
     }
 
     msg_sem = hdr;
+}
+
+/*
+ * free_msgbuf_list() frees every message buffer on the specified list.
+ *                    Only used by the last owner of the shared structure.
+ */
+static void
+free_msgbuf_list(MinList_t *list)
+{
+    msg_buf_t *mb;
+
+    while ((mb = (msg_buf_t *) RemHead(LIST(*list))) != NULL)
+        FreeMem(mb, sizeof (*mb));
 }
 
 /*
@@ -462,22 +683,21 @@ release_msg_semaphore(void)
          * 1. Release local lock before removing from system lists.
          * 2. Remove the semaphore from Exec's public list.
          * 3. Allow multitasking to resume
-         * 4. Release any unclaimed tag data
+         * 4. Release any unclaimed tag data and all other buffers
          * 5. Free the allocated memory.
          */
         ReleaseSemaphore(&hdr->ms_sem);
         RemSemaphore(&hdr->ms_sem);
         Permit();
-        void *data;
-        uint len;
-        while ((data = tag_queue_remove(TAG_QUEUE_ANY, &len)) != NULL) {
-            km_msg_hdr_t *hdr = data;
+        msg_buf_t *mb;
+        while ((mb = tag_queue_remove(TAG_QUEUE_ANY)) != NULL) {
+            km_msg_hdr_t *km = (km_msg_hdr_t *) mb->mb_data;
             printf("Removed %x tag=%x op=%x len=%x\n",
-                   data, hdr->km_tag, hdr->km_op, len);
-            FreeMem(data, MSG_POOL_BUF_SIZE);
+                   (uint) mb, km->km_tag, km->km_op, mb->mb_len);
+            FreeMem(mb, sizeof (*mb));
         }
-        if (hdr->ms_free_msgbuf != NULL)
-            FreeMem(hdr->ms_free_msgbuf, MSG_POOL_BUF_SIZE);
+        free_msgbuf_list(&hdr->ms_free_list);
+        free_msgbuf_list(&hdr->ms_held_list);
         char *name = hdr->ms_sem.ss_Link.ln_Name;
         FreeMem(name, strlen(name) + 1);
         FreeMem(hdr, sizeof (*hdr));
@@ -491,47 +711,31 @@ release_msg_semaphore(void)
 }
 
 /*
- * host_msg_exit() releases the message pool when the program is exiting.
+ * host_msg_exit() returns this program's message buffers and releases
+ *                 the shared message structure when the program is
+ *                 exiting. Safe to call more than once.
  */
 void
 host_msg_exit(void)
 {
-    uint cur;
+    if (msg_sem == NULL)
+        return;  // Not acquired (or already released)
 
-    release_msg_semaphore();  // Does nothing if not acquired
-    for (cur = 0; cur < MSG_POOL_COUNT; cur++) {
-        if (msg_pool[cur] != NULL) {
-            FreeMem(msg_pool[cur], MSG_POOL_BUF_SIZE);
-            msg_pool[cur] = NULL;
-        }
-    }
+    msgbuf_release_held();
+    release_msg_semaphore();
 }
 
 /*
- * host_msg_init() allocates the message pool when the program starts.
+ * host_msg_init() acquires the shared message structure when the program
+ *                 starts.
  */
 static void
 host_msg_init(void)
 {
     static uint8_t atexit_registered = 0;
-    uint cur;
+
     if (msg_sem != NULL)
         return;
-
-    /* Pool may already exist if semaphore acquisition failed earlier */
-    if (msg_pool[0] == NULL) {
-        for (cur = 0; cur < MSG_POOL_COUNT; cur++) {
-            msg_pool[cur] = AllocMem(MSG_POOL_BUF_SIZE, MEMF_PUBLIC);
-            if (msg_pool[cur] == NULL) {
-                while (cur > 0) {
-                    cur--;
-                    FreeMem(msg_pool[cur], MSG_POOL_BUF_SIZE);
-                    msg_pool[cur] = NULL;
-                }
-                return;
-            }
-        }
-    }
 
     if (atexit_registered == 0) {
         atexit_registered = 1;
@@ -695,6 +899,139 @@ try_send_again:
     return (rc);
 }
 
+#define MSG_RECV_HANDOFF_MAX 50  // Messages for other tags per attempt
+
+/*
+ * host_recv_msg_try
+ * -----------------
+ * Receive attempt for host_recv_msg() and host_recv_msg_noblock(). A
+ * message already queued for the tag is taken first. Otherwise, a buffer
+ * is taken from the shared free list and a message is received from
+ * Kicksmash into it. A received message which is for a different tag is
+ * handed off (the buffer itself is moved to the reply queue), and another
+ * receive is attempted with a fresh buffer. This repeats only while
+ * messages for other tags are being received.
+ *
+ * A message for the tag is delivered in a buffer which is then held by
+ * the calling task (see msgbuf_hold()).
+ *
+ * Returns KS_STATUS_NODATA (or KS_STATUS_CRC) if no message for the tag
+ * was received.
+ */
+static uint
+host_recv_msg_try(uint tag, void **rdata, uint *rlen, uint timeout_ms)
+{
+    msg_buf_t    *mb = NULL;
+    km_msg_hdr_t *msg;
+    uint rc;
+    uint rxlen;
+    uint count;
+
+    for (count = 0; count < MSG_RECV_HANDOFF_MAX; count++) {
+        MSG_SEM_OBTAIN();
+#ifndef STANDALONE
+        msg_buf_t *qmb = tag_queue_remove(tag);
+        if (qmb != NULL) {
+            /* Already received a message matching the expected tag */
+            if (mb != NULL)
+                msgbuf_put(mb);  // Receive buffer is not needed
+            mb    = qmb;
+            rxlen = mb->mb_len;
+            msg   = (km_msg_hdr_t *) mb->mb_data;
+            rc    = msg->km_status;
+        } else
+#endif
+        {
+            if (mb == NULL) {
+                mb = msgbuf_get();
+                if (mb == NULL) {
+                    MSG_SEM_RELEASE();
+                    printf("Get message tag=%x: out of memory\n", tag);
+                    return (MSG_STATUS_NO_MEM);
+                }
+            }
+            msg = (km_msg_hdr_t *) mb->mb_data;
+            rc = recv_msg(msg, MSG_BUF_SIZE, &rxlen, timeout_ms);
+            if ((rc == KS_STATUS_NODATA) || (rc == KS_STATUS_CRC)) {
+                /*
+                 * Nothing received. Release here and never fall through
+                 * to the code below, which also releases the semaphore
+                 * (releasing twice gives Guru 81000008 AN_SemCorrupt).
+                 */
+                MSG_SEM_RELEASE();
+                msgbuf_put(mb);
+                return (rc);
+            }
+            if (((rc & 0x0000ff00) != KS_STATUS_OK) &&
+                ((rc & 0xffff0000) == MSG_STATUS_SUCCESS)) {
+                /*
+                 * One of the following was received from Kicksmash (not host):
+                 * KS_STATUS_FAIL, KS_STATUS_UNKCMD, KS_STATUS_BADARG,
+                 * KS_STATUS_BADLEN, KS_STATUS_LOCKED.
+                 * These are all fatal, except maybe KS_STATUS_LOCKED.
+                 * Don't match its tag or queue it for another task.
+                 */
+                MSG_SEM_RELEASE();
+                msgbuf_put(mb);
+                printf("Get message tag=%x failed: (%s)\n", tag, smash_err(rc));
+                return (rc);
+            }
+        }
+        if (tag == msg->km_tag) {
+            MSG_SEM_RELEASE();
+            if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF)) {
+                printf("Get message tag=%x failed: (%s)\n", tag, smash_err(rc));
+#ifndef ROMFS
+                if (flag_debug > 2)
+                    dump_memory(msg, 0x40, DUMP_VALUE_UNASSIGNED);
+#endif
+                msgbuf_put(mb);
+                return (rc);
+            }
+            /* Got desired message */
+            if (rxlen > MSG_BUF_SIZE) {
+                printf("BUG: Rx message op=%x stat=%x too large (%u > %u)\n",
+                       msg->km_op, msg->km_status, rxlen, MSG_BUF_SIZE);
+                rxlen = MSG_BUF_SIZE;
+            }
+            *rlen = rxlen;
+            *rdata = msg;
+            if (rc == KM_STATUS_OK)
+                rc = msg->km_status;
+            msgbuf_hold(mb);  // Valid until this task receives more messages
+            return (rc);
+        }
+        /* Hand off this message as it's not for the current caller */
+
+#ifndef STANDALONE
+        /* The buffer now belongs to the reply queue; get a new one next pass */
+        tag_queue_add(mb, msg->km_tag, rxlen);
+        mb = NULL;
+#endif
+        MSG_SEM_RELEASE();
+    }
+    if (mb != NULL)
+        msgbuf_put(mb);
+    return (KS_STATUS_NODATA);  // Only messages for other tags arrived
+}
+
+/*
+ * host_recv_msg_noblock
+ * ---------------------
+ * Receive a single message for the specified tag without waiting for one
+ * to arrive. Messages received for other tags are queued for their owners.
+ * Returns KS_STATUS_NODATA (or KS_STATUS_CRC) if no message for the tag
+ * is available; otherwise the same as host_recv_msg().
+ */
+uint
+host_recv_msg_noblock(uint tag, void **rdata, uint *rlen)
+{
+    if (msg_sem == NULL)
+        return (MSG_STATUS_NO_MEM);
+
+    return (host_recv_msg_try(tag, rdata, rlen, 0));
+}
+
 /*
  * host_recv_msg
  * -------------
@@ -703,116 +1040,25 @@ try_send_again:
  *
  * tag is the unique message tag for this transaction; see host_tag_alloc().
  * rdata is a pointer which will be assigned the address where the received
- *     message will be returned.
+ *     message will be returned. The caller does not free it. It remains
+ *     valid until the calling task has received MSG_HOLD_PER_TASK more
+ *     messages (or the program exits).
  * rlen is a pointer to the received data length which will be returned.
  */
 uint
 host_recv_msg(uint tag, void **rdata, uint *rlen)
 {
-    km_msg_hdr_t *msg;
     uint rc;
-    uint rxlen;
     uint timeout;
-    uint msg_pool_pos;
 
-    if ((msg_sem == NULL) || (msg_pool[0] == NULL))
+    if (msg_sem == NULL)
         return (MSG_STATUS_NO_MEM);
 
-    /* Acquire the next message buffer */
-    Forbid();
-    msg_pool_pos = msg_pool_cur;
-    msg = (km_msg_hdr_t *) msg_pool[msg_pool_pos];
-    msg_pool_cur = (msg_pool_cur + 1) & (MSG_POOL_COUNT - 1);
-    Permit();
-
     for (timeout = 50; timeout > 0; timeout--) {
-#ifndef STANDALONE
-        km_msg_hdr_t *nmsg;
-        MSG_SEM_OBTAIN();
-        nmsg = tag_queue_remove(tag, &rxlen);
-        if (nmsg != NULL) {
-            /* Already received a message matching the expected tag */
-
-            /* Release the local buffer */
-            if (msg_sem->ms_free_msgbuf == NULL) {
-                msg_sem->ms_free_msgbuf = msg;
-            } else {
-                FreeMem(msg, MSG_POOL_BUF_SIZE);
-            }
-
-            /* Store the retrieved message buffer in the local pool */
-            msg_pool[msg_pool_pos] = nmsg;
-            msg = nmsg;
-            rc = msg->km_status;
-        } else
-#endif
-        {
-            rc = recv_msg(msg, MSG_POOL_BUF_SIZE, &rxlen, 25);  // 25 ms timeout
-            if ((rc == KS_STATUS_NODATA) || (rc == KS_STATUS_CRC)) {
-                /*
-                 * Release here and always skip the code below: it also
-                 * releases the semaphore, and the buffer holds no new
-                 * message. Falling through on the final pass released
-                 * the semaphore twice (Guru 81000008 AN_SemCorrupt).
-                 */
-                MSG_SEM_RELEASE();
-                continue;  // Try again, letting other tasks progress
-            }
-            if (((rc & 0x0000ff00) != KM_STATUS_OK) &&
-                ((rc & 0xffff0000) == MSG_STATUS_SUCCESS)) {
-                /*
-                 * One of the following was received:
-                 * KS_STATUS_FAIL, KS_STATUS_UNKCMD, KS_STATUS_BADARG,
-                 * KS_STATUS_BADLEN, KS_STATUS_LOCKED.
-                 * These are all fatal, except maybe KS_STATUS_LOCKED.
-                 * Don't match its tag or queue it for another task.
-                 */
-                MSG_SEM_RELEASE();
-                printf("Get message tag=%x failed: (%s)\n", tag, smash_err(rc));
-                return (rc);
-            }
-        }
-        if (tag == msg->km_tag) {
-            if ((rc != KM_STATUS_OK) && (rc != KM_STATUS_EOF)) {
-                printf("Get message tag=%x failed: (%s)\n", tag, smash_err(rc));
-#ifndef ROMFS
-                if (flag_debug > 2)
-                    dump_memory(msg, 0x40, DUMP_VALUE_UNASSIGNED);
-#endif
-                MSG_SEM_RELEASE();
-                return (rc);
-            }
-            /* Got desired message */
-            if (rxlen > MSG_POOL_BUF_SIZE) {
-                printf("BUG: Rx message op=%x stat=%x too large (%u > %u)\n",
-                       msg->km_op, msg->km_status, rxlen, MSG_POOL_BUF_SIZE);
-                rxlen = MSG_POOL_BUF_SIZE;
-            }
-            *rlen = rxlen;
-            *rdata = msg;
-            if (rc == KM_STATUS_OK)
-                rc = msg->km_status;
-            MSG_SEM_RELEASE();
+        rc = host_recv_msg_try(tag, rdata, rlen, 25);
+        if ((rc != KS_STATUS_NODATA) && (rc != KS_STATUS_CRC))
             return (rc);
-        }
-        /* Hand off this message as it's not for the current caller */
-
-#ifndef STANDALONE
-        /* Allocate a new message buffer */
-        if (msg_sem->ms_free_msgbuf != NULL) {
-            nmsg = msg_sem->ms_free_msgbuf;
-            msg_sem->ms_free_msgbuf = NULL;
-        } else {
-            nmsg = AllocMem(MSG_POOL_BUF_SIZE, MEMF_PUBLIC);
-        }
-        if (nmsg != NULL) {
-            /* Hand off this message buffer */
-            msg_pool[msg_pool_pos] = nmsg;
-            tag_queue_add(msg->km_tag, msg, rxlen);
-            msg = nmsg;
-        }
-        MSG_SEM_RELEASE();
-#endif
+        /* Try again, letting other tasks progress */
     }
     printf("Message receive timeout\n");
     return (KM_STATUS_FAIL);
@@ -857,8 +1103,8 @@ host_recv_msg_cont(uint tag, void *buf, uint buf_len)
                     continue;
                 } else {
                     /* Skipped message(s) */
-                    printf("Message tag=%x sequence skipped: %x to %x\n",
-                           tag, seq, rdata->km_op);
+                    printf("Message tag=%x sequence skipped: %x to %x (%x)\n",
+                           tag, seq, rdata->km_op, (uintptr_t) rdata);
                     return (KM_STATUS_FAIL);
                 }
             }
@@ -926,41 +1172,41 @@ host_msg(void *smsg, uint slen, void **rdata, uint *rlen)
 }
 
 static const char *const ks_status_s[] = {
-    "OK",                               // KS_STATUS_OK
-    "KS Failure",                       // KS_STATUS_FAIL
-    "KS reports CRC bad",               // KS_STATUS_CRC
-    "KS detected unknown command",      // KS_STATUS_UNKCMD
-    "KS reports bad command argument",  // KS_STATUS_BADARG
-    "KS reports bad length",            // KS_STATUS_BADLEN
-    "KS reports no data available",     // KS_STATUS_NODATA
-    "KS reports resource locked",       // KS_STATUS_LOCKED
+    "OK",                               // 0x00000000 KS_STATUS_OK
+    "KS Failure",                       // 0x00000100 KS_STATUS_FAIL
+    "KS reports CRC bad",               // 0x00000200 KS_STATUS_CRC
+    "KS detected unknown command",      // 0x00000300 KS_STATUS_UNKCMD
+    "KS reports bad command argument",  // 0x00000400 KS_STATUS_BADARG
+    "KS reports bad length",            // 0x00000500 KS_STATUS_BADLEN
+    "KS reports no data available",     // 0x00000600 KS_STATUS_NODATA
+    "KS reports resource locked",       // 0x00000700 KS_STATUS_LOCKED
 };
 STATIC_ASSERT(ARRAY_SIZE(ks_status_s) == (KS_STATUS_LAST_ENT >> 8));
 
 static const char *const km_status_s[] = {
-    "OK",                               // KM_STATUS_OK
-    "FAIL",                             // KM_STATUS_FAIL
-    "EOF",                              // KM_STATUS_EOF
-    "UNKCMD",                           // KM_STATUS_UNKCMD
-    "PERM",                             // KM_STATUS_PERM
-    "INVALID",                          // KM_STATUS_INVALID
-    "NOTEMPTY",                         // KM_STATUS_NOTEMPTY
-    "NOEXIST",                          // KM_STATUS_NOEXIST
-    "EXIST",                            // KM_STATUS_EXIST
-    "UNAVAIL"                           // KM_STATUS_UNAVAIL
+    "OK",                               // 0x00000000 KM_STATUS_OK
+    "FAIL",                             // 0x00000001 KM_STATUS_FAIL
+    "EOF",                              // 0x00000002 KM_STATUS_EOF
+    "UNKCMD",                           // 0x00000003 KM_STATUS_UNKCMD
+    "PERM",                             // 0x00000004 KM_STATUS_PERM
+    "INVALID",                          // 0x00000005 KM_STATUS_INVALID
+    "NOTEMPTY",                         // 0x00000006 KM_STATUS_NOTEMPTY
+    "NOEXIST",                          // 0x00000007 KM_STATUS_NOEXIST
+    "EXIST",                            // 0x00000008 KM_STATUS_EXIST
+    "UNAVAIL"                           // 0x00000009 KM_STATUS_UNAVAIL
 };
 STATIC_ASSERT(ARRAY_SIZE(km_status_s) == KM_STATUS_LAST_ENTRY);
 
 static const char *const msg_status_s[] = {
-    "Msg Failure",                      // MSG_STATUS_FAIL
-    "Msg No Reply",                     // MSG_STATUS_NO_REPLY
-    "Msg detected bad length",          // MSG_STATUS_BAD_LENGTH
-    "Msg detected bad CRC",             // MSG_STATUS_BAD_CRC
-    "Msg Invalid data",                 // MSG_STATUS_BAD_DATA
-    "Msg Program/erase timeout",        // MSG_STATUS_PRG_TMOUT
-    "Msg Program/erase failure",        // MSG_STATUS_PRG_FAIL
-    "Msg Insufficient memory",          // MSG_STATUS_NO_MEM
-    "Msg Data mismatch",                // MSG_STATUS_MISMATCH
+    "Msg Failure",                      // 0xfffffffa MSG_STATUS_FAIL
+    "Msg No Reply",                     // 0xfffffff9 MSG_STATUS_NO_REPLY
+    "Msg detected bad length",          // 0xfffffff8 MSG_STATUS_BAD_LENGTH
+    "Msg detected bad CRC",             // 0xfffffff7 MSG_STATUS_BAD_CRC
+    "Msg Invalid data",                 // 0xfffffff6 MSG_STATUS_BAD_DATA
+    "Msg Program/erase timeout",        // 0xfffffff5 MSG_STATUS_PRG_TMOUT
+    "Msg Program/erase failure",        // 0xfffffff4 MSG_STATUS_PRG_FAIL
+    "Msg Insufficient memory",          // 0xfffffff3 MSG_STATUS_NO_MEM
+    "Msg Data mismatch",                // 0xfffffff2 MSG_STATUS_MISMATCH
 };
 STATIC_ASSERT(ARRAY_SIZE(msg_status_s) ==
               (MSG_STATUS_FAIL - MSG_STATUS_LAST_ENTRY));

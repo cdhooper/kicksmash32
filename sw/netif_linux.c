@@ -32,6 +32,7 @@
 #include <sys/uio.h>
 #include <sys/capability.h>
 #include <linux/virtio_net.h>
+#include <linux/if_tun.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <net/if_arp.h>
@@ -600,6 +601,18 @@ linux_open(const char *lower_dev, char *name_out, size_t name_out_sz)
     if (fd < 0)
         return (-1);
 
+    /*
+     * A new macvtap starts with every offload enabled (the kernel's
+     * macvtap_newlink() sets tap_features = TUN_OFFLOADS), so it hands
+     * userspace GRO/GSO "super-packets" -- several TCP segments merged
+     * behind one header, larger than the MTU -- plus packets whose
+     * checksum has been left for the reader to fill in. The Amiga can
+     * accept neither. Turning all offloads off makes the kernel segment
+     * those packets and complete their checksums before we read them.
+     */
+    if (ioctl(fd, TUNSETOFFLOAD, 0) < 0)
+        perror("Warning: TUNSETOFFLOAD(0) failed; oversized frames will be dropped");
+
     g_tap_fd = fd;
     strncpy(name_out, tap_name, name_out_sz - 1);
     name_out[name_out_sz - 1] = '\0';
@@ -638,6 +651,7 @@ static int
 linux_read_frame(uint8_t *buf, size_t buflen)
 {
     unsigned char raw[2000];
+    struct virtio_net_hdr *vh = (struct virtio_net_hdr *) raw;
     ssize_t nread = read(g_tap_fd, raw, sizeof (raw));
     if (nread < 0) {
         if (errno == EAGAIN || errno == EINTR)
@@ -647,6 +661,20 @@ linux_read_frame(uint8_t *buf, size_t buflen)
     }
     if (nread <= (ssize_t)sizeof (struct virtio_net_hdr))
         return (0);
+
+    /*
+     * With offloads disabled (see linux_open()) these should not occur.
+     * If they do, the frame is a multi-segment GSO packet (which may
+     * also have been truncated to fit raw[]) or carries an unfinished
+     * checksum, and is unusable as-is, so discard it rather than pass
+     * garbage along.
+     */
+    if ((vh->gso_type != VIRTIO_NET_HDR_GSO_NONE) ||
+        (vh->flags & VIRTIO_NET_HDR_F_NEEDS_CSUM)) {
+        fprintf(stderr, "[gso drop t=%x f=%x l=%zd]\n",
+                vh->gso_type, vh->flags, nread);
+        return (0);
+    }
 
     size_t frame_len = nread - sizeof (struct virtio_net_hdr);
     if (frame_len > buflen)

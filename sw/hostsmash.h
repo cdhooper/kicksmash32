@@ -21,8 +21,24 @@ typedef enum {
 
 typedef unsigned int uint;
 
+#define SEND_MSG_MAX 2000  // Largest single message sent to Kicksmash
+
+/*
+ * Kicksmash send lock priorities. Main thread replies and commands always
+ * win over the network forwarding thread. The main thread's idle polling
+ * for Amiga messages does not, but is let in after a short burst of
+ * forwarded packets.
+ */
+#define KS_SEND_PRIO_MAIN 0  // Main thread replies and commands (highest)
+#define KS_SEND_PRIO_NET  1  // Network forwarding thread
+#define KS_SEND_PRIO_POLL 2  // Main thread idle poll (shares with NET)
+
+void ks_send_lock(uint prio);
+void ks_send_unlock(void);
+
 uint recv_msg(uint tag, void *buf, uint bufsize, uint *rx_status, uint *rxlen);
 uint send_msg(void *buf, uint len, uint *status);
+uint send_msg_nowait(void *buf, uint len, uint *status);
 void time_delay_msec(int msec);
 int netprintf(const char *fmt, ...);
 extern uint debug_net;

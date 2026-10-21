@@ -29,6 +29,43 @@ uint8_t         sm_net_active = 0;
 static uint8_t  sm_net_packet_send_buf[NET_SEND_MAX];
 
 /*
+ * Received packets are sent by hostsmash asynchronously, using the tag of
+ * the most recent KM_OP_NREAD request (see sm_nreadtag()). Up to two tags
+ * are outstanding: the current one, and the previous one until packets
+ * are seen with the current tag.
+ */
+uint16_t        sm_nread_tag_cur;
+uint16_t        sm_nread_tag_prev;
+uint8_t         sm_nread_tag_cur_valid  = 0;
+uint8_t         sm_nread_tag_prev_valid = 0;
+
+/*
+ * sm_nread_tags_publish() copies the tag state to the shared message
+ * structure, where every task's tag_queue_remove() uses it to avoid
+ * expunging queued packets for these tags.
+ */
+static void
+sm_nread_tags_publish(void)
+{
+    host_msg_set_nread_tags(sm_nread_tag_cur, sm_nread_tag_cur_valid,
+                            sm_nread_tag_prev, sm_nread_tag_prev_valid);
+}
+
+/*
+ * sm_nread_retire_prev() retires the previous tag, which hostsmash no
+ * longer uses.
+ */
+static void
+sm_nread_retire_prev(void)
+{
+    if (sm_nread_tag_prev_valid) {
+        sm_nread_tag_prev_valid = 0;
+        sm_nread_tags_publish();
+        host_tag_free(sm_nread_tag_prev);
+    }
+}
+
+/*
  * sm_nservice
  * -----------
  * Returns non-zero if the host is connected and providing network service.
@@ -109,16 +146,25 @@ sm_nclose(void)
     return (rc);
 }
 
+static uint
+host_send_msg_autotag(void *smsg, uint slen)
+{
+    uint rc;
+    uint16_t tag = host_tag_alloc();
+    ((km_msg_hdr_t *) smsg)->km_tag = tag;
+    rc = host_send_msg(smsg, slen);
+    host_tag_free(tag);
+    return (rc);
+}
+
 uint
 sm_nwrite(ethhdr_t *ehdr, void *buf, uint writelen, uint padded_header)
 {
     uint msglen;
-    uint rlen;
     uint rc;
     uint ehdr_len = (ehdr != NULL) ? sizeof (*ehdr) : 0;
     uint8_t *dptr;
     hm_nreadwrite_t *msg;
-    hm_nreadwrite_t *rdata;
 
     if ((sm_net_active == 0) && (sm_nservice() == 0))
         return (KM_STATUS_UNAVAIL);
@@ -138,11 +184,11 @@ sm_nwrite(ethhdr_t *ehdr, void *buf, uint writelen, uint padded_header)
     if (padded_header) {
         /* Send entire message in one shot */
         msglen = sizeof (*msg) + ehdr_len + writelen;
-        rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+        rc = host_send_msg_autotag(msg, msglen);
     } else {
         memcpy(dptr + ehdr_len, buf, writelen);
         msglen = sizeof (*msg) + ehdr_len + writelen;
-        rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+        rc = host_send_msg_autotag(msg, msglen);
     }
 
     if (rc == KS_STATUS_NODATA)
@@ -150,41 +196,164 @@ sm_nwrite(ethhdr_t *ehdr, void *buf, uint writelen, uint padded_header)
     return (rc);
 }
 
+#if 0
+void queue_debug_simple(const char *msg);
+#endif
+
+/*
+ * sm_nreadtag
+ * -----------
+ * Allocate a new tag and send it to hostsmash with KM_OP_NREAD. Hostsmash
+ * sends all received packets with the tag of the most recent KM_OP_NREAD,
+ * and expects a new one every 10 seconds.
+ *
+ * At most two tags are kept outstanding. If two are already outstanding,
+ * the oldest is retired before the new tag is allocated. If sending fails,
+ * the new tag is freed and the existing tags are kept, so a valid tag
+ * remains outstanding.
+ */
 uint
-sm_nread(void **data, uint *readlen)
+sm_nreadtag(void)
 {
-    uint rc;
-    uint rlen;
     hm_nreadwrite_t msg;
-    hm_nreadwrite_t *rdata;
+    uint            tag;
 
     if ((sm_net_active == 0) && (sm_nservice() == 0))
         return (KM_STATUS_UNAVAIL);
 
-    msg.hm_hdr.km_op     = KM_OP_NREAD;
-    msg.hm_hdr.km_status = 0;
-    msg.hm_length        = 0;
-
-    rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
-    if (rc != KM_STATUS_OK) {
-        rlen = 0;
-        goto sm_recv_fail;
-    } else if (rlen > sizeof (msg)) {
-        rlen -= sizeof (msg);
-    } else {
-        rlen = 0;
+    if (sm_nread_tag_prev_valid && sm_nread_tag_cur_valid) {
+        /* Two tags already outstanding: retire the oldest now */
+        sm_nread_retire_prev();
     }
 
-    *data = (void *) (rdata + 1);
+    tag = host_tag_alloc();
 
-sm_recv_fail:
+    /*
+     * Publish the new tag before sending it, so packets which another
+     * task receives for it are never expunged.
+     */
+    if (sm_nread_tag_cur_valid) {
+        sm_nread_tag_prev       = sm_nread_tag_cur;
+        sm_nread_tag_prev_valid = 1;
+    }
+    sm_nread_tag_cur       = tag;
+    sm_nread_tag_cur_valid = 1;
+    sm_nread_tags_publish();
+
+    msg.hm_hdr.km_op     = KM_OP_NREAD;
+    msg.hm_hdr.km_status = 0;
+    msg.hm_hdr.km_tag    = tag;
+    msg.hm_length        = 0;
+#if 0
+    static char buf[32];
+    sprintf(buf, "[new rx tag %x]", tag);
+    queue_debug_simple(buf);
+#endif
+
+    /* This message (KM_OP_NREAD) does not expect a reply */
+    return (host_send_msg(&msg, sizeof (msg)));
+}
+
+/*
+ * sm_nreadtag_free
+ * ----------------
+ * Retire all outstanding KM_OP_NREAD tags. Call this before
+ * host_msg_exit() when the network service is shut down.
+ */
+void
+sm_nreadtag_free(void)
+{
+    uint8_t cur_valid  = sm_nread_tag_cur_valid;
+    uint8_t prev_valid = sm_nread_tag_prev_valid;
+
+    sm_nread_tag_cur_valid  = 0;
+    sm_nread_tag_prev_valid = 0;
+    sm_nread_tags_publish();
+    if (prev_valid)
+        host_tag_free(sm_nread_tag_prev);
+    if (cur_valid)
+        host_tag_free(sm_nread_tag_cur);
+}
+
+/*
+ * sm_nread
+ * --------
+ * Acquire the oldest received packet sent by hostsmash on a KM_OP_NREAD
+ * tag, without waiting. Returns KS_STATUS_NODATA if no packet is
+ * available.
+ */
+uint
+sm_nread(void **data, uint *readlen)
+{
+    uint rc;
+    uint rlen = 0;
+    hm_nreadwrite_t *rdata;
+
+    if (readlen != NULL)
+        *readlen = 0;
+
+    if ((sm_net_active == 0) && (sm_nservice() == 0))
+        return (KM_STATUS_UNAVAIL);
+
+    /* host_recv_msg_noblock() needs an outstanding tag on which to receive */
+    if (!sm_nread_tag_cur_valid) {
+        rc = sm_nreadtag();
+        if (rc != 0)
+            return (rc);
+    }
+
+    /* Packets on the current tag mean hostsmash is done with the old one */
+    if (sm_nread_tag_prev_valid && host_msg_tag_queued(sm_nread_tag_cur))
+        sm_nread_retire_prev();
+
+    if (sm_nread_tag_prev_valid) {
+        /* Until hostsmash switches tags, packets arrive on the old one */
+        rc = host_recv_msg_noblock(sm_nread_tag_prev, (void **) &rdata, &rlen);
+#if 0
+        if (rc != KS_STATUS_NODATA) {
+            static char buf[64];
+            sprintf(buf, "req ptag %04x got rc=%x cmd %02x tag %04x",
+                    sm_nread_tag_prev, rc, rdata->hm_hdr.km_op,
+                    rdata->hm_hdr.km_tag);
+            queue_debug_simple(buf);
+        }
+#endif
+        if ((rc != KM_STATUS_OK) && host_msg_tag_queued(sm_nread_tag_cur)) {
+            /*
+             * Hostsmash has switched tags. Packets received meanwhile
+             * were queued under the new tag; take one of those.
+             */
+            sm_nread_retire_prev();
+            rc = host_recv_msg_noblock(sm_nread_tag_cur, (void **) &rdata,
+                                       &rlen);
+#if 0
+        if (rc != KS_STATUS_NODATA) {
+            static char buf[64];
+            sprintf(buf, "req ctag %04x got rc=%x cmd %02x tag %04x",
+                    sm_nread_tag_cur, rc, rdata->hm_hdr.km_op,
+                    rdata->hm_hdr.km_tag);
+            queue_debug_simple(buf);
+        }
+#endif
+        }
+    } else {
+        rc = host_recv_msg_noblock(sm_nread_tag_cur, (void **) &rdata, &rlen);
+    }
+
+    if ((rc == KS_STATUS_NODATA) || (rc == KS_STATUS_CRC))
+        return (KS_STATUS_NODATA);  // Nothing waiting
+    if (rc != KM_STATUS_OK)
+        return (rc);
+
+    if (rlen > sizeof (*rdata))
+        rlen -= sizeof (*rdata);
+    else
+        rlen = 0;
+
+    *data = (void *) (rdata + 1);
     if (readlen != NULL)
         *readlen = rlen;
-
-    if (rc == KS_STATUS_NODATA)
-        sm_nservice();  // Check if file service is still active
-
-    return (rc);
+    return (KM_STATUS_OK);
 }
 
 uint

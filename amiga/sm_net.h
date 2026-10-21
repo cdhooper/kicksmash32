@@ -23,9 +23,17 @@ uint sm_nopen(void);
 uint sm_nclose(void);
 uint sm_nwrite(ethhdr_t *hdr, void *buf, uint writelen, uint padded_header);
 uint sm_nread(void **data, uint *readlen);
+uint sm_nreadtag(void);
+void sm_nreadtag_free(void);
 uint sm_ngetmac(uint8_t *mac);
 uint sm_nsetmac(uint8_t *mac);
 
 extern uint8_t sm_net_active;
+
+/* Tags on which hostsmash sends received packets (see sm_nreadtag()) */
+extern uint16_t sm_nread_tag_cur;         // Most recently sent tag
+extern uint16_t sm_nread_tag_prev;        // Previous tag (until retired)
+extern uint8_t  sm_nread_tag_cur_valid;   // sm_nread_tag_cur is outstanding
+extern uint8_t  sm_nread_tag_prev_valid;  // sm_nread_tag_prev is outstanding
 
 #endif /* _SM_NET_H */

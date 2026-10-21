@@ -184,6 +184,18 @@ queue_debug(struct SmashNetContext *context, const char *function_name,
     }
 }
 
+#if 0
+void
+queue_debug_simple(const char *msg)
+{
+    uint len = strlen(msg) + 1;
+    char *msgbuf = AllocMem(len, MEMF_PUBLIC);
+    memcpy(msgbuf, msg, len);
+    queue_debug(g_context, msgbuf, NULL, (ULONG)-1, 0, 0);
+    // XXX: This leaks, but I don't care for debug
+}
+#endif
+
 static BOOL
 pop_debug(struct SmashNetContext *context, struct SmashNetDebugRecord *record)
 {
@@ -1508,15 +1520,46 @@ rx_finish(struct SmashNetContext *context)
     /* NOTREACHED */
 }
 
+/*
+ * rx_readtag
+ * ----------
+ * Send a new KM_OP_NREAD tag to hostsmash (see sm_nreadtag()). Returns
+ * the number of seconds until the next one should be sent: 10, or 1 to
+ * retry soon if sending failed. Only called from the receive task.
+ */
+#define SMASHNET_READTAG_SECS 10  // Hostsmash expects a new tag this often
+
+static ULONG
+rx_readtag(struct SmashNetContext *context)
+{
+    uint rc = sm_nreadtag();
+    static uint8_t reported_fail;
+
+    if (rc == 0) {
+        reported_fail = 0;
+        return (SMASHNET_READTAG_SECS);
+    }
+    if (flag_output && (reported_fail == 0)) {
+        static char buf[48];
+        sprintf(buf, "nreadtag failed %d", rc);
+        queue_debug(context, buf, NULL, (ULONG)-1, 0, 0);
+        reported_fail = 1;
+    }
+    return (1);
+}
+
 static void
 rx_task_entry(void)
 {
     struct SmashNetContext *context = g_context;
     struct MsgPort *timer_port = NULL;
     struct timerequest *timer_request = NULL;
+    struct timerequest *tag_request = NULL;  /* KM_OP_NREAD tag timer */
     ULONG timer_mask;
     BOOL timer_open = FALSE;
     BOOL timer_pending = FALSE;
+    BOOL tag_pending = FALSE;
+    BOOL readtag_due = FALSE;
     ULONG signals;
 
     if (context == NULL) {
@@ -1529,13 +1572,23 @@ rx_task_entry(void)
         timer_request = (struct timerequest *)CreateIORequest(
             timer_port, sizeof (struct timerequest));
     }
-    if (timer_request != NULL &&
+    /* Second request on the same port: the KM_OP_NREAD tag timer */
+    if (timer_port != NULL) {
+        tag_request = (struct timerequest *)CreateIORequest(
+            timer_port, sizeof (struct timerequest));
+    }
+    if (timer_request != NULL && tag_request != NULL &&
         OpenDevice(TIMERNAME, UNIT_MICROHZ,
                    &timer_request->tr_node, 0) == 0) {
         timer_open = TRUE;
+        tag_request->tr_node.io_Device = timer_request->tr_node.io_Device;
+        tag_request->tr_node.io_Unit   = timer_request->tr_node.io_Unit;
     }
 
     if (!timer_open) {
+        if (tag_request != NULL) {
+            DeleteIORequest(&tag_request->tr_node);
+        }
         if (timer_request != NULL) {
             DeleteIORequest(&timer_request->tr_node);
         }
@@ -1569,7 +1622,7 @@ rx_task_entry(void)
             timer_pending = TRUE;
         }
 
-        signals = Wait((timer_pending ? timer_mask : 0) |
+        signals = Wait(((timer_pending || tag_pending) ? timer_mask : 0) |
                        SMASHNET_RX_SIGNAL | SMASHNET_RX_WAKE);
         if ((signals & SMASHNET_RX_SIGNAL) != 0) {
             break;
@@ -1584,6 +1637,31 @@ rx_task_entry(void)
             }
         }
 
+        /*
+         * KM_OP_NREAD tag rotation: hostsmash expects a new tag every
+         * 10 seconds. The first tag is sent by sm_nread() when the network
+         * opens; this timer then sends each following one. If the timer
+         * expires while not polling (driver with no openers), the tag is
+         * sent as soon as polling resumes.
+         */
+        if (tag_pending && CheckIO(&tag_request->tr_node)) {
+            WaitIO(&tag_request->tr_node);
+            tag_pending = FALSE;
+            readtag_due = TRUE;
+        }
+        if (!tag_pending && (sm_net_open == 1) && rx_should_poll(context)) {
+            ULONG secs = SMASHNET_READTAG_SECS;
+            if (readtag_due || !sm_nread_tag_cur_valid) {
+                secs = rx_readtag(context);
+                readtag_due = FALSE;
+            }
+            tag_request->tr_node.io_Command = TR_ADDREQUEST;
+            tag_request->tr_time.tv_secs = secs;
+            tag_request->tr_time.tv_micro = 0;
+            SendIO(&tag_request->tr_node);
+            tag_pending = TRUE;
+        }
+
         if (context->rx_drains_debug) {
             smashnet_drain_debug(context);
         }
@@ -1593,9 +1671,14 @@ rx_task_entry(void)
         AbortIO(&timer_request->tr_node);
         WaitIO(&timer_request->tr_node);
     }
+    if (tag_pending) {
+        AbortIO(&tag_request->tr_node);
+        WaitIO(&tag_request->tr_node);
+    }
     CloseDevice(&timer_request->tr_node);
     DeleteIORequest(&timer_request->tr_node);
     DeleteMsgPort(timer_port);
+    DeleteIORequest(&tag_request->tr_node);  /* Shared the device open */
 
 #ifdef SMASHNET_DEVICE
     /* The driver has no main() to do this: release Kicksmash resources */
@@ -1603,6 +1686,7 @@ rx_task_entry(void)
         sm_nclose();
         sm_net_open = 0;
     }
+    sm_nreadtag_free();  /* Before host_msg_exit(), which drops msg_sem */
     host_msg_exit();
     smashnet_drain_debug(context);
 #endif

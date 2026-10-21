@@ -16,7 +16,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <time.h>
 #include <pthread.h>
+#include <time.h>
 
 #ifdef __MINGW32__
 #include <windows.h>
@@ -40,12 +42,14 @@ const char      *netif_arg;            // Network mode for the netif program
                                        //   (its -m argument); NULL = default
 
 static volatile uint netif_getmac = 0; // GETMAC pending from device
-static uint      netif_up = 0;         // Network interface is up
+static volatile uint netif_up = 0;     // Network interface is up
 static int       netif_write_fd = -1;  // Pipe end to write TO the gateway
 static int       netif_read_fd = -1;   // Pipe end to read FROM the gateway
 static int       netif_capture = 0;    // Capture packets from net
 static uint8_t   netif_hw_mac[6];      // Cached MAC from lower level
 static pthread_t read_thread;
+static pthread_t fwd_thread;
+static uint      netif_threads_active = 0;  // Threads created, not joined
 #ifdef __MINGW32__
 static HANDLE    gateway_process = NULL;  // Handle of the gateway child process
 #else
@@ -60,11 +64,31 @@ typedef struct pkt_node {
     uint8_t          pkt[];   /* payload in the same allocation */
 } pkt_node_t;
 
+/*
+ * Extra bytes allocated after each packet payload. send_ks_cmd_core()
+ * sends the payload rounded up to a 4-byte multiple, and mem16_swap()
+ * touches the byte following an odd length.
+ */
+#define PKT_NODE_PAD   4
+
+/*
+ * Maximum packets held for the Amiga. Packets keep arriving from the
+ * network while forwarding is suspended (no recent KM_OP_NREAD), so
+ * the oldest are discarded beyond this depth.
+ */
+#define SM_PKT_Q_MAX   32
+
+/*
+ * Forwarding is suspended if the most recent KM_OP_NREAD from the Amiga
+ * is older than this.
+ */
+#define NREAD_TAG_EXPIRE_MSEC  20000
+
 typedef struct {
     pkt_node_t     *head;      /* oldest packet (next to dequeue) */
     pkt_node_t     *tail;      /* newest packet (last queued)     */
     uint             count;
-    pthread_mutex_t  lock;     /* remove/no-op if single-threaded */
+    pthread_mutex_t  lock;     /* also protects the fwd_* state below */
 } pkt_queue_t;
 
 static pkt_queue_t sm_pkt_q = {
@@ -74,49 +98,143 @@ static pkt_queue_t sm_pkt_q = {
     .lock = PTHREAD_MUTEX_INITIALIZER,
 };
 
+/*
+ * Network forwarding state, protected by sm_pkt_q.lock.
+ *
+ * fwd_cv is signaled when net_forward_thread() might have something new
+ * to do: a packet was queued, a new KM_OP_NREAD tag was recorded, or
+ * the network interface is going down.
+ */
+static pthread_cond_t  fwd_cv = PTHREAD_COND_INITIALIZER;
+static hm_nreadwrite_t fwd_req;            // Most recent KM_OP_NREAD request
+static uint64_t        fwd_req_msec = 0;   // When fwd_req was received
+static uint            fwd_req_valid = 0;  // fwd_req has been recorded
+
+/* ---- Helpers ---------------------------------------------------------- */
+
+/*
+ * net_time_msec() returns a monotonic millisecond timestamp, unaffected
+ *                 by changes to the wall clock.
+ */
+static uint64_t
+net_time_msec(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ((uint64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
+
+#ifdef TIMESTAMP_DEBUG_OUTPUT
+#ifdef __MINGW32__
+static uint64_t
+get_timestamp_ns(void)
+{
+    FILETIME ft;
+    ULARGE_INTEGER uli;
+
+    // 1. Get current system time (100-nanosecond intervals since Jan 1, 1601)
+    GetSystemTimeAsFileTime(&ft);
+
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+
+    // 2. Convert Windows Epoch (1601) to Unix Epoch (1970)
+    // There are 11,644,473,600 seconds between 1601 and 1970.
+    // In 100-nanosecond intervals, that is 116,444,736,000,000,000.
+    uint64_t windows_intervals = uli.QuadPart;
+    uint64_t unix_intervals = windows_intervals - 116444736000000000ULL;
+
+    // 3. Convert 100-nanosecond intervals to pure nanoseconds
+    return unix_intervals * 100ULL;
+}
+#else  /* Linux and MacOS */
+static uint64_t
+get_timestamp_ns(void)
+{
+    struct timespec ts;
+    // CLOCK_REALTIME gets the actual calendar time since the Unix Epoch
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    return ((uint64_t)ts.tv_sec * 1000000000ULL) + (uint64_t)ts.tv_nsec;
+}
+#endif
+
+static char *
+get_timestamp_str(void)
+{
+    static char     buf[32];
+    static uint64_t first = 0;
+    uint64_t        ts = get_timestamp_ns();
+    uint            us;
+    if (first == 0)
+        first = ts;
+    ts -= first;
+    us = ts / 1000ULL;
+    sprintf(buf, "%4lu.%06lu", us / 1000000UL, us % 1000000UL);
+    return (buf);
+}
+#endif
+
+/*
+ * fwd_tag_fresh_locked() returns non-zero if a KM_OP_NREAD tag has been
+ *                        recorded and it is recent enough to be used.
+ *                        Caller must hold sm_pkt_q.lock.
+ */
+static uint
+fwd_tag_fresh_locked(void)
+{
+    if (!fwd_req_valid)
+        return (0);
+    return ((net_time_msec() - fwd_req_msec) <= NREAD_TAG_EXPIRE_MSEC);
+}
+
+/*
+ * fwd_wake_all() wakes net_forward_thread() so that it re-evaluates
+ *                its state (used on shutdown).
+ */
+static void
+fwd_wake_all(void)
+{
+    pthread_mutex_lock(&sm_pkt_q.lock);
+    pthread_cond_broadcast(&fwd_cv);
+    pthread_mutex_unlock(&sm_pkt_q.lock);
+}
+
 /* ---- Init / teardown ---------------------------------------------- */
 
-static void
-sm_queue_init(pkt_queue_t *q)
-{
-    q->head = NULL;
-    q->tail = NULL;
-    q->count = 0;
-    pthread_mutex_init(&q->lock, NULL);
-}
-
-static void
-sm_queue_destroy(pkt_queue_t *q)
-{
-    pkt_node_t *n;
-
-    pthread_mutex_lock(&q->lock);
-    while (q->head != NULL) {
-        n = q->head;
-        q->head = n->next;
-        free(n);           /* single free: header + payload together */
-    }
-    q->tail = NULL;
-    q->count = 0;
-    pthread_mutex_unlock(&q->lock);
-    pthread_mutex_destroy(&q->lock);
-}
-
+/*
+ * The queue lock and condition variable are statically initialized,
+ * and may already be in use by the netif threads, so there is nothing
+ * to (re)initialize here.
+ */
 void
 sm_init_queues(void)
 {
-    sm_queue_init(&sm_pkt_q);
 }
 
 void
 sm_destroy_queues(void)
 {
-    sm_queue_destroy(&sm_pkt_q);
+    pkt_node_t *n;
+
+    netif_stop();  // Stop and join the threads which use the queue
+
+    pthread_mutex_lock(&sm_pkt_q.lock);
+    while (sm_pkt_q.head != NULL) {
+        n = sm_pkt_q.head;
+        sm_pkt_q.head = n->next;
+        free(n);           /* single free: header + payload together */
+    }
+    sm_pkt_q.tail = NULL;
+    sm_pkt_q.count = 0;
+    fwd_req_valid = 0;
+    pthread_mutex_unlock(&sm_pkt_q.lock);
 }
 
 /*
- * sm_queue_packet() enqueues a single network packet to be received by
- *                   a subsequent sm_nread().
+ * sm_queue_packet() enqueues a single network packet to be forwarded to
+ *                   the Amiga by net_forward_thread(), and wakes that
+ *                   thread.
  *
  * ---- Enqueue --------------------------------------------------------
  * Single allocation: sizeof(pkt_node_t) + pktlen, with the payload
@@ -127,19 +245,30 @@ static int
 sm_queue_packet(uint8_t *pkt, uint pktlen)
 {
     pkt_node_t *node;
+    pkt_node_t *drop = NULL;
 
     if (pkt == NULL || pktlen == 0)
         return (-1);
 
-    node = malloc(sizeof (*node) + pktlen);
+    node = malloc(sizeof (*node) + pktlen + PKT_NODE_PAD);
     if (node == NULL)
         return (-1);
 
     memcpy(node->pkt, pkt, pktlen);
+    memset(node->pkt + pktlen, 0, PKT_NODE_PAD);
     node->pktlen = pktlen;
     node->next = NULL;
 
     pthread_mutex_lock(&sm_pkt_q.lock);
+
+    if (sm_pkt_q.count >= SM_PKT_Q_MAX) {
+        /* Discard oldest packet */
+        drop = sm_pkt_q.head;
+        sm_pkt_q.head = drop->next;
+        if (sm_pkt_q.head == NULL)
+            sm_pkt_q.tail = NULL;
+        sm_pkt_q.count--;
+    }
 
     if (sm_pkt_q.tail == NULL) {
         sm_pkt_q.head = node;
@@ -149,47 +278,52 @@ sm_queue_packet(uint8_t *pkt, uint pktlen)
         sm_pkt_q.tail = node;
     }
     sm_pkt_q.count++;
+    pthread_cond_signal(&fwd_cv);
 
     pthread_mutex_unlock(&sm_pkt_q.lock);
+
+    if (drop != NULL)
+        free(drop);
 
     return (0);
 }
 
 /*
- * sm_dequeue_packet() removes the oldest network packet and copies its
- *                     payload out to caller-supplied storage.
- *
- * ---- Dequeue ----------------------------------------------------------
- * `buf` must be at least *buflen bytes; on return *buflen is set to the
- * actual packet length copied. Returns 0 on success, -1 if the queue is
- * empty, -2 if buf is too small (in which case *buflen is set to the
- * required size and nothing is dequeued).
+ * sm_dequeue_packet_locked() removes and returns the oldest network
+ *                            packet, or NULL if the queue is empty.
+ *                            Caller must hold sm_pkt_q.lock.
  */
 static pkt_node_t *
-sm_dequeue_packet(void)
+sm_dequeue_packet_locked(void)
 {
-    pkt_node_t *node;
+    pkt_node_t *node = sm_pkt_q.head;
 
-    pthread_mutex_lock(&sm_pkt_q.lock);
-
-    if (sm_pkt_q.head == NULL) {
-        pthread_mutex_unlock(&sm_pkt_q.lock);
+    if (node == NULL)
         return (NULL);
-    }
-
-    node = sm_pkt_q.head;
 
     sm_pkt_q.head = node->next;
     if (sm_pkt_q.head == NULL)
         sm_pkt_q.tail = NULL;
     sm_pkt_q.count--;
-
-    pthread_mutex_unlock(&sm_pkt_q.lock);
+    node->next = NULL;
 
     return (node);
 }
 
-/* ---- Helpers ------------------------------------------------------------ */
+/*
+ * sm_requeue_packet_locked() puts a packet back at the head of the queue
+ *                            (it was dequeued but could not be sent).
+ *                            Caller must hold sm_pkt_q.lock.
+ */
+static void
+sm_requeue_packet_locked(pkt_node_t *node)
+{
+    node->next = sm_pkt_q.head;
+    sm_pkt_q.head = node;
+    if (sm_pkt_q.tail == NULL)
+        sm_pkt_q.tail = node;
+    sm_pkt_q.count++;
+}
 
 #if 0
 static uint
@@ -501,8 +635,9 @@ handle_cmd(uint8_t *data, uint len)
  *
  * This is called from *inside* netif_read_thread() itself on its way
  * out, so unlike netif_stop() it must NOT pthread_join(read_thread) --
- * that would be a self-join deadlock. Joining (if the thread is ever
- * looked at again) is left to a real netif_stop() call.
+ * that would be a self-join deadlock. Joining both netif threads is
+ * left to netif_threads_join(), called by the next netif_start() or by
+ * netif_stop().
  */
 static void
 netif_mark_down(void)
@@ -512,6 +647,7 @@ netif_mark_down(void)
 
     netif_capture = 0;
     netif_up = 0;
+    fwd_wake_all();  // net_forward_thread() exits on seeing !netif_up
 
     if (netif_write_fd >= 0) {
         close(netif_write_fd);
@@ -603,6 +739,132 @@ read_thread_exit:
     return (NULL);
 }
 
+/*
+ * net_forward_thread() is a thread function which asynchronously sends
+ *                      network packets queued by netif_read_thread() to
+ *                      the Amiga. Each packet is sent as a reply to the
+ *                      most recent KM_OP_NREAD request recorded by
+ *                      sm_nread() (using that request's tag).
+ *
+ * The thread blocks while there are no packets to send, and suspends
+ * forwarding while the most recent KM_OP_NREAD is older than
+ * NREAD_TAG_EXPIRE_MSEC (or none has been received yet). It exits under
+ * the same condition as netif_read_thread(): when netif_up goes to 0.
+ *
+ * Sends to Kicksmash are coordinated with the main thread by the
+ * Kicksmash send lock, taken at KS_SEND_PRIO_NET. If Kicksmash has no
+ * room for a packet, the lock is released before the next attempt, so
+ * the main thread can take it (and hold it until its own message is
+ * sent).
+ */
+static void *
+net_forward_thread(void *arg)
+{
+    (void) arg;
+
+    while (netif_up) {
+        pkt_node_t *node;
+        uint        sendlen;
+
+        /* Wait for a packet to send and a usable NREAD tag */
+        pthread_mutex_lock(&sm_pkt_q.lock);
+        while (netif_up &&
+               ((sm_pkt_q.head == NULL) || !fwd_tag_fresh_locked())) {
+            pthread_cond_wait(&fwd_cv, &sm_pkt_q.lock);
+        }
+        if (!netif_up) {
+            pthread_mutex_unlock(&sm_pkt_q.lock);
+            break;
+        }
+        node = sm_dequeue_packet_locked();
+        pthread_mutex_unlock(&sm_pkt_q.lock);
+
+        sendlen = sizeof (node->hdr) + node->pktlen;
+        if (sendlen > SEND_MSG_MAX) {
+            printf("NREAD: dropping %u byte packet (too large)\n",
+                   node->pktlen);
+            free(node);
+            continue;
+        }
+
+        while (node != NULL) {
+            uint status = KS_STATUS_FAIL;
+            uint rc;
+
+            if (!netif_up) {
+                free(node);
+                node = NULL;
+                break;
+            }
+
+            /* Pick up the most recent NREAD tag */
+            pthread_mutex_lock(&sm_pkt_q.lock);
+            if (!fwd_tag_fresh_locked()) {
+                /* Suspend forwarding; keep the packet for later */
+                netprintf("NREAD tag expired; forwarding suspended\n");
+                sm_requeue_packet_locked(node);
+                pthread_mutex_unlock(&sm_pkt_q.lock);
+                node = NULL;
+                break;
+            }
+            memcpy(&node->hdr, &fwd_req, sizeof (node->hdr));
+            pthread_mutex_unlock(&sm_pkt_q.lock);
+
+            node->hdr.hm_hdr.km_op    |= KM_OP_REPLY;
+            node->hdr.hm_hdr.km_status = KM_STATUS_OK;
+            node->hdr.hm_length        = node->pktlen;
+
+            ks_send_lock(KS_SEND_PRIO_NET);
+            rc = send_msg_nowait(&node->hdr, sendlen, &status);
+            ks_send_unlock();
+
+            if ((rc == 0) && (status == KS_STATUS_OK)) {
+                netprintf("NREAD(l=%u tag=%x)", node->pktlen,
+                          SWAP16(node->hdr.hm_hdr.km_tag));
+#ifdef DUMP_PACKET
+                dump_packet(node->pkt, node->pktlen);
+#else
+                netprintf("\n");
+#endif
+                free(node);
+                node = NULL;
+                break;
+            }
+            if ((rc == 0) && (status == KS_STATUS_BADLEN)) {
+                /*
+                 * No room in the Kicksmash buffer right now. The lock
+                 * has been released, so the main thread may get in
+                 * before the next attempt.
+                 */
+                time_delay_msec(1);
+                continue;
+            }
+            printf("NREAD: forward failed rc=%x status=%x; dropping packet\n",
+                   rc, status);
+            free(node);
+            node = NULL;
+        }
+    }
+    return (NULL);
+}
+
+/*
+ * netif_threads_join() waits for the netif reader and network forwarding
+ *                      threads to exit, if they were started. Must only
+ *                      be called once netif_up is 0, and never from
+ *                      either of those threads.
+ */
+static void
+netif_threads_join(void)
+{
+    if (!netif_threads_active)
+        return;
+    fwd_wake_all();
+    pthread_join(read_thread, NULL);
+    pthread_join(fwd_thread, NULL);
+    netif_threads_active = 0;
+}
+
 #ifdef __MINGW32__
 /*
  * win_append_arg() appends one argument to a CreateProcess() command
@@ -667,6 +929,14 @@ netif_start(void)
 
     if (netif_up)
         return (0);
+
+    /*
+     * If a previous instance went down on its own (helper exited), its
+     * threads are finished or finishing; reap them before starting new
+     * ones, so an old net_forward_thread() can never run alongside a
+     * new one.
+     */
+    netif_threads_join();
 
 #ifdef __MINGW32__
     /*
@@ -828,9 +1098,18 @@ netif_start(void)
 
     netif_up = 1;
 
-    /* Start the frame reader thread */
+    /* Start the network forwarding thread, then the frame reader thread */
+    if (pthread_create(&fwd_thread, NULL, net_forward_thread, NULL) != 0) {
+        perror("Error creating network forwarding thread");
+        goto netif_start_fail;
+    }
     if (pthread_create(&read_thread, NULL, netif_read_thread, NULL) != 0) {
         perror("Error creating netif reader thread");
+        netif_up = 0;
+        fwd_wake_all();
+        pthread_join(fwd_thread, NULL);
+netif_start_fail:
+        netif_up = 0;
         close(netif_write_fd);
         close(netif_read_fd);
         netif_write_fd = -1;
@@ -844,9 +1123,9 @@ netif_start(void)
         waitpid(gateway_pid, NULL, 0);
         gateway_pid = -1;
 #endif
-        netif_up = 0;
         return (1);
     }
+    netif_threads_active = 1;
     netif_request_mac();
 
     return (0);
@@ -854,17 +1133,21 @@ netif_start(void)
 
 /*
  * netif_stop() closes the pipe to the virtual network interface,
- *              stopping the reader thread.
+ *              stopping the reader and network forwarding threads.
  */
 void
 netif_stop(void)
 {
-    if (!netif_up)
+    if (!netif_up) {
+        /* May have gone down on its own; threads still need joining */
+        netif_threads_join();
         return;
+    }
 
-    /* Tell the thread to shut down */
+    /* Tell the threads to shut down */
     netif_capture = 0;
     netif_up = 0;
+    fwd_wake_all();
 
     /*
      * Close the network pipe by dropping stdin/stdout, forcing the
@@ -894,8 +1177,8 @@ netif_stop(void)
     }
 #endif
 
-    /* Wait for thread to terminate */
-    pthread_join(read_thread, NULL);
+    /* Wait for threads to terminate */
+    netif_threads_join();
 }
 
 uint
@@ -1050,47 +1333,51 @@ sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
 
     netif_write(hm_length, hm_length, ndata);
 
-    hm->hm_hdr.km_op |= KM_OP_REPLY;
-    hm->hm_hdr.km_status = KM_STATUS_OK;
-    return (send_msg(hm, sizeof (*hm), status));
+    *status = KS_STATUS_OK;  // No reply sent; not an error
+    return (0);
 }
 
+/*
+ * sm_nread() handles KM_OP_NREAD from the Amiga.
+ *
+ * The request's header (including its tag) and the time it arrived are
+ * recorded for net_forward_thread(), which asynchronously sends queued
+ * network packets to the Amiga as replies carrying the most recent
+ * recorded tag. Each KM_OP_NREAD also refreshes the expiration timer
+ * which keeps forwarding active.
+ *
+ * If packets are waiting to be sent, no reply is sent here; the
+ * forwarding thread is woken instead and its packets are the replies.
+ * If nothing is waiting, a KM_STATUS_EOF reply is sent as before.
+ */
 uint
 sm_nread(hm_nreadwrite_t *hm, uint *status)
 {
-    static pkt_node_t *node;
+    uint pending;
 
-    if (netif_start()) {
-        node->hdr.hm_hdr.km_op |= KM_OP_REPLY;
-        hm->hm_hdr.km_status    = KM_STATUS_NOEXIST;
-        return (send_msg(hm, sizeof (*hm), status));
-    }
+netprintf("sm_nread\n");
+    *status = KS_STATUS_OK;  // No reply sent; not an error
+
+    hm->hm_hdr.km_op |= KM_OP_REPLY;
+    if (netif_start())
+        return (0);
+
     netif_capture = 1;
-    node = sm_dequeue_packet();
-    if (node != NULL) {
-        uint rc;
-        netprintf("NREAD(l=%u)", node->pktlen);
-        memcpy(&node->hdr, &hm->hm_hdr, sizeof (node->hdr));
-        node->hdr.hm_hdr.km_op    |= KM_OP_REPLY;
-        node->hdr.hm_hdr.km_status = KM_STATUS_OK;
-        node->hdr.hm_length        = node->pktlen;
-#ifdef DUMP_PACKET
-        dump_packet(node->pkt, node->pktlen);
-#else
-        netprintf("\n");
-#endif
-        rc = send_msg(&node->hdr, sizeof (node->hdr) + node->pktlen, status);
-        free(node);
-        return (rc);
-    } else {
-        if (!netif_up && netif_start()) {
-            hm->hm_hdr.km_status = KM_STATUS_NOEXIST;
-            return (send_msg(hm, sizeof (*hm), status));
-        }
 
-        hm->hm_hdr.km_status = KM_STATUS_EOF;
-        return (send_msg(hm, sizeof (*hm), status));
+    pthread_mutex_lock(&sm_pkt_q.lock);
+    memcpy(&fwd_req, hm, sizeof (fwd_req));
+    fwd_req_msec  = net_time_msec();
+    fwd_req_valid = 1;
+    pending = (sm_pkt_q.head != NULL);
+    if (pending)
+        pthread_cond_signal(&fwd_cv);
+    pthread_mutex_unlock(&sm_pkt_q.lock);
+
+    if (pending) {
+        netprintf("NREAD tag=%x: %u pending, forwarding\n",
+                  SWAP16(hm->hm_hdr.km_tag), sm_pkt_q.count);
     }
+    return (0);
 }
 
 uint

@@ -281,6 +281,27 @@ static volatile uint    rx_rb_consumer    = 0;
 static volatile uint8_t  tx_rb[TX_RING_SIZE];
 static volatile uint    tx_rb_producer = 0;
 static volatile uint    tx_rb_consumer = 0;
+
+/*
+ * Serial writer wakeup. th_serial_writer() sleeps on tx_rb_cv while the
+ * Tx ring is empty, and is woken by tx_rb_kick() once a block of output
+ * has been queued, instead of polling the ring every 10 ms. A timed wait
+ * is still used so that any producer which does not kick is serviced
+ * within 10 ms, as before.
+ */
+static pthread_mutex_t  tx_rb_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t   tx_rb_cv  = PTHREAD_COND_INITIALIZER;
+
+/*
+ * Define KS_RX_WAKEUP to have recv_ks_reply_core() sleep on rx_rb_cv
+ * (woken by th_serial_reader() as data arrives) instead of polling the
+ * Rx ring with a 1 ms delay.
+ */
+#define KS_RX_WAKEUP
+#ifdef KS_RX_WAKEUP
+static pthread_mutex_t  rx_rb_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t   rx_rb_cv  = PTHREAD_COND_INITIALIZER;
+#endif
 #ifdef __MINGW32__
 static HANDLE           dev_handle        = INVALID_HANDLE_VALUE;
 #else
@@ -651,6 +672,76 @@ tx_rb_flushed(void)
         return (FALSE);  // Ring buffer has output pending
 }
 
+/*
+ * cond_wait_msec() waits on a condition variable for at most msec
+ *                  milliseconds. The caller must hold mtx.
+ */
+static void
+cond_wait_msec(pthread_cond_t *cv, pthread_mutex_t *mtx, int msec)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_nsec += (long) msec * 1000000L;
+    ts.tv_sec  += ts.tv_nsec / 1000000000L;
+    ts.tv_nsec %= 1000000000L;
+    (void) pthread_cond_timedwait(cv, mtx, &ts);
+}
+
+/*
+ * tx_rb_kick() wakes th_serial_writer() so that output just queued in the
+ *              Tx ring buffer is sent immediately.
+ */
+static void
+tx_rb_kick(void)
+{
+    pthread_mutex_lock(&tx_rb_mtx);
+    pthread_cond_signal(&tx_rb_cv);
+    pthread_mutex_unlock(&tx_rb_mtx);
+}
+
+/*
+ * tx_rb_wait() blocks the caller (th_serial_writer()) until output is
+ *              kicked or msec milliseconds have elapsed. It returns
+ *              immediately if output is already pending.
+ */
+static void
+tx_rb_wait(int msec)
+{
+    pthread_mutex_lock(&tx_rb_mtx);
+    if (tx_rb_consumer == tx_rb_producer)
+        cond_wait_msec(&tx_rb_cv, &tx_rb_mtx, msec);
+    pthread_mutex_unlock(&tx_rb_mtx);
+}
+
+#ifdef KS_RX_WAKEUP
+/*
+ * rx_rb_kick() wakes a thread waiting in rx_rb_wait(). It is called by
+ *              th_serial_reader() after received data has been stored.
+ */
+static void
+rx_rb_kick(void)
+{
+    pthread_mutex_lock(&rx_rb_mtx);
+    pthread_cond_broadcast(&rx_rb_cv);
+    pthread_mutex_unlock(&rx_rb_mtx);
+}
+
+/*
+ * rx_rb_wait() blocks until received data is available or msec
+ *              milliseconds have elapsed. It returns immediately if data
+ *              is already waiting in the Rx ring buffer.
+ */
+static void
+rx_rb_wait(int msec)
+{
+    pthread_mutex_lock(&rx_rb_mtx);
+    if (rx_rb_consumer == rx_rb_producer)
+        cond_wait_msec(&rx_rb_cv, &rx_rb_mtx, msec);
+    pthread_mutex_unlock(&rx_rb_mtx);
+}
+#endif
+
 #ifdef __MINGW32__
 #include <windows.h>
 static void
@@ -867,13 +958,17 @@ calc_timeout_msec(struct timeval *tv_timeout, int msec)
 }
 
 /*
- * send_ll_bin() sends a binary block of data to the remote programmer.
+ * send_ll_bin_nokick() queues a binary block of data to be sent to the
+ *                      remote programmer, without waking the serial writer
+ *                      thread. Use this to build up a multi-part message
+ *                      which should go out in a single write, then call
+ *                      tx_rb_kick().
  *
  * @param  [in] data  - Data to send to the programmer.
  * @param  [in] len   - Number of bytes to send.
  */
 static int
-send_ll_bin(const void *buf, size_t len)
+send_ll_bin_nokick(const void *buf, size_t len)
 {
     int timeout_count = 0;
     const uint8_t *data = (const uint8_t *)buf;
@@ -887,7 +982,10 @@ send_ll_bin(const void *buf, size_t len)
                 printf("Send timeout at 0x%zx\n", pos);
                 return (1);  // Timeout
             }
-            printf("-\n"); fflush(stdout);  // XXX: shouldn't happen
+            if (timeout_count == 0) {
+                printf("-\n"); fflush(stdout);  // XXX: shouldn't happen
+            }
+            tx_rb_kick();    // Ring is full: make sure the writer drains it
             timeout_count++;
             continue;        // Try again
         }
@@ -899,6 +997,21 @@ send_ll_bin(const void *buf, size_t len)
         pos++;
     }
     return (0);
+}
+
+/*
+ * send_ll_bin() sends a binary block of data to the remote programmer,
+ *               and wakes the serial writer thread to send it immediately.
+ *
+ * @param  [in] data  - Data to send to the programmer.
+ * @param  [in] len   - Number of bytes to send.
+ */
+static int
+send_ll_bin(const void *buf, size_t len)
+{
+    int rc = send_ll_bin_nokick(buf, len);
+    tx_rb_kick();
+    return (rc);
 }
 
 /*
@@ -1210,6 +1323,9 @@ th_serial_reader(void *arg)
                     if (running == 0)
                         break;
                 }
+#ifdef KS_RX_WAKEUP
+                rx_rb_kick();  // Wake recv_ks_reply_core()
+#endif
             }
             if (log_fp != NULL) {
                 if (log_hex) {
@@ -1256,12 +1372,62 @@ th_serial_reader(void *arg)
  * @see         serial_in_snapshot(), serial_in_count(), serial_in_advance(),
  *              serial_in_flush()
  */
+/*
+ * Size of the writer thread's local buffer. This is large enough that a
+ * full Kicksmash message (SEND_MSG_MAX plus header and CRC) goes to the
+ * device in a single write() rather than as many 64-byte writes.
+ */
+#define TX_WRITE_CHUNK 4096
+
+/*
+ * dev_write_all() writes len bytes to the serial device, retrying after
+ *                 a partial write. Returns the number of bytes written,
+ *                 or -1 if the device is not open or nothing could be
+ *                 written because of an error.
+ */
+static int
+dev_write_all(const char *buf, uint len)
+{
+    uint done  = 0;
+    uint tries = 0;
+
+    while (done < len) {
+#ifdef __MINGW32__
+        DWORD count;
+        if (dev_handle == INVALID_HANDLE_VALUE)
+            return ((done > 0) ? (int) done : -1);
+        if (WriteFile(dev_handle, buf + done, len - done, &count, NULL) == 0)
+            return ((done > 0) ? (int) done : -1);
+#else
+        ssize_t count;
+        if (dev_fd == -1)
+            return ((done > 0) ? (int) done : -1);
+        count = write(dev_fd, buf + done, len - done);
+        if (count < 0) {
+            if ((errno != EAGAIN) && (errno != EINTR))
+                return ((done > 0) ? (int) done : -1);
+            count = 0;
+        }
+#endif
+        if (count == 0) {
+            /* Device is not accepting data right now */
+            if (++tries > 500)
+                break;
+            time_delay_msec(1);
+            continue;
+        }
+        tries = 0;
+        done += count;
+    }
+    return ((int) done);
+}
+
 static void *
 th_serial_writer(void *arg)
 {
     int ch;
     uint pos = 0;
-    char lbuf[64];
+    char lbuf[TX_WRITE_CHUNK];
 
     while (1) {
         ch = tx_rb_get();
@@ -1269,37 +1435,14 @@ th_serial_writer(void *arg)
             lbuf[pos++] = ch;
         if (((ch < 0) && (pos > 0)) ||
              (pos >= sizeof (lbuf)) || (ic_delay != 0)) {
-#ifdef __MINGW32__
-            DWORD count;
-            if (dev_handle == INVALID_HANDLE_VALUE) {
+            int count = dev_write_all(lbuf, pos);
+            if (count < 0) {
+                /* Device closed or failed; wait for reader to reopen it */
                 time_delay_msec(500);
                 if (pos >= sizeof (lbuf))
                     pos--;
                 continue;
             }
-            if (WriteFile(dev_handle, lbuf, pos, &count, NULL) == 0) {
-                /* Wait for reader thread to close / reopen */
-                time_delay_msec(500);
-                if (pos >= sizeof (lbuf))
-                    pos--;
-                continue;
-            }
-#else
-            ssize_t count;
-            if (dev_fd == -1) {
-                time_delay_msec(500);
-                if (pos >= sizeof (lbuf))
-                    pos--;
-                continue;
-            }
-            if ((count = write(dev_fd, lbuf, pos)) < 0) {
-                /* Wait for reader thread to close / reopen */
-                time_delay_msec(500);
-                if (pos >= sizeof (lbuf))
-                    pos--;
-                continue;
-            }
-#endif
             if (ic_delay) {
                 /* Inter-character pacing delay was specified */
                 time_delay_msec(ic_delay);
@@ -1308,12 +1451,13 @@ th_serial_writer(void *arg)
 #ifdef DEBUG_TRANSFER
             printf(">%02x\n", lbuf[0]);
 #endif
-            if (count < pos) {
-                printf("sent only %ld of %u\n", (long) count, pos);
+            if ((uint) count < pos) {
+                printf("sent only %d of %u\n", count, pos);
             }
             pos = 0;
         } else if (ch < 0) {
-            time_delay_msec(10);
+            /* Nothing to send: sleep until output is kicked */
+            tx_rb_wait(10);
             if (!running)
                 break;
         }
@@ -1656,6 +1800,7 @@ send_ll_str(const char *cmd)
             cmd++;
         }
     }
+    tx_rb_kick();
     return (0);
 }
 
@@ -3355,6 +3500,93 @@ smash_err(uint code)
     }
 }
 
+/*
+ * Kicksmash send lock
+ * -------------------
+ * Every Kicksmash command is a transaction: the command is written to
+ * the serial port and the reply is then collected from the receive ring
+ * buffer. Only one thread may be in a transaction at a time, otherwise
+ * commands and replies from two threads get interleaved. A multi-part
+ * send_msg() must also not be interleaved with another thread's message.
+ *
+ * The lock is recursive for its owner (send_msg() -> send_ks_cmd()).
+ * There are three priorities:
+ *   KS_SEND_PRIO_MAIN - Main thread replies and commands. While one is
+ *                       waiting, no other caller is granted the lock,
+ *                       even if it happens to be free at that moment.
+ *   KS_SEND_PRIO_POLL - Main thread idle polling for Amiga messages.
+ *                       Competes equally with network forwarding, except
+ *                       that forwarding gets at most KS_SEND_NET_BURST_MAX
+ *                       grants in a row while a poll is waiting.
+ *   KS_SEND_PRIO_NET  - Network forwarding thread.
+ */
+static pthread_mutex_t ks_send_mtx          = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  ks_send_cv           = PTHREAD_COND_INITIALIZER;
+static pthread_t       ks_send_owner;
+static uint            ks_send_depth        = 0;  // 0 = lock is free
+static uint            ks_send_main_waiting = 0;  // Main thread is waiting
+static uint            ks_send_poll_waiting = 0;  // Main thread idle poll waiting
+static uint            ks_send_net_burst    = 0;  // NET grants while poll waits
+
+/*
+ * While an idle poll (KS_SEND_PRIO_POLL) is waiting, the network
+ * forwarding thread may take the lock at most this many times in a row
+ * before the poll is let in. This keeps forwarding bursts efficient
+ * without starving the main thread's checks for Amiga messages.
+ */
+#define KS_SEND_NET_BURST_MAX 4
+
+void
+ks_send_lock(uint prio)
+{
+    pthread_t self = pthread_self();
+
+    pthread_mutex_lock(&ks_send_mtx);
+    if ((ks_send_depth != 0) && pthread_equal(ks_send_owner, self)) {
+        /* Already held by this thread */
+        ks_send_depth++;
+        pthread_mutex_unlock(&ks_send_mtx);
+        return;
+    }
+    if (prio == KS_SEND_PRIO_MAIN) {
+        /* Replies and other main thread work: always first */
+        ks_send_main_waiting++;
+        while (ks_send_depth != 0)
+            pthread_cond_wait(&ks_send_cv, &ks_send_mtx);
+        ks_send_main_waiting--;
+    } else if (prio == KS_SEND_PRIO_POLL) {
+        /* Main thread idle poll: no priority over network forwarding */
+        ks_send_poll_waiting++;
+        while ((ks_send_depth != 0) || (ks_send_main_waiting != 0))
+            pthread_cond_wait(&ks_send_cv, &ks_send_mtx);
+        ks_send_poll_waiting--;
+        ks_send_net_burst = 0;
+    } else {
+        /* Network forwarding */
+        while ((ks_send_depth != 0) || (ks_send_main_waiting != 0) ||
+               ((ks_send_poll_waiting != 0) &&
+                (ks_send_net_burst >= KS_SEND_NET_BURST_MAX))) {
+            pthread_cond_wait(&ks_send_cv, &ks_send_mtx);
+        }
+        if (ks_send_poll_waiting != 0)
+            ks_send_net_burst++;
+        else
+            ks_send_net_burst = 0;
+    }
+    ks_send_owner = self;
+    ks_send_depth = 1;
+    pthread_mutex_unlock(&ks_send_mtx);
+}
+
+void
+ks_send_unlock(void)
+{
+    pthread_mutex_lock(&ks_send_mtx);
+    if ((ks_send_depth != 0) && (--ks_send_depth == 0))
+        pthread_cond_broadcast(&ks_send_cv);
+    pthread_mutex_unlock(&ks_send_mtx);
+}
+
 static const uint16_t sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };
 static const uint8_t *sm_magic_b = (uint8_t *) sm_magic;
 
@@ -3406,15 +3638,19 @@ send_ks_cmd_core(uint cmd, uint len, void *buf)
     }
     printf("  %04x %04x\n", crc >> 16, (uint16_t)crc);
 #endif
-    if (send_ll_bin(&sm_magic, sizeof (sm_magic)) ||
-        send_ll_bin(&txlen, sizeof (txlen)) ||
-        send_ll_bin(&txcmd, sizeof (txcmd))) {
+    /*
+     * Queue the whole message, then wake the writer once, so that the
+     * message normally goes to the device in a single write.
+     */
+    if (send_ll_bin_nokick(&sm_magic, sizeof (sm_magic)) ||
+        send_ll_bin_nokick(&txlen, sizeof (txlen)) ||
+        send_ll_bin_nokick(&txcmd, sizeof (txcmd)) ||
+        ((len > 0) && send_ll_bin_nokick(buf, len_roundup)) ||
+        send_ll_bin_nokick(&crc, sizeof (crc))) {
+        tx_rb_kick();
         return (MSG_STATUS_FAILURE);
     }
-    if ((len > 0) && send_ll_bin(buf, len_roundup))
-        return (MSG_STATUS_FAILURE);
-    if (send_ll_bin(&crc, sizeof (crc)))
-        return (MSG_STATUS_FAILURE);
+    tx_rb_kick();
     return (MSG_STATUS_SUCCESS);
 }
 
@@ -3497,8 +3733,12 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
 #endif
                 return (MSG_STATUS_NO_REPLY);
             }
+#ifdef KS_RX_WAKEUP
+            rx_rb_wait(1);  // Woken as soon as the reader stores data
+#else
             time_delay_msec(1);
             sched_yield();
+#endif
             continue;
         }
         if (flags & BIT(0)) {
@@ -3626,16 +3866,32 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
     }
 }
 
+static uint
+send_ks_cmd_prio(uint prio, uint cmd, void *txbuf, uint txlen, void *rxbuf,
+                 uint rxmax, uint *rxstatus, uint *rxlen, uint flags)
+{
+    uint rc;
+
+    /*
+     * The command and its reply form one transaction on the serial link.
+     * A thread which already holds the lock (send_msg() or the network
+     * forwarding thread) just nests here.
+     */
+    ks_send_lock(prio);
+    rc = send_ks_cmd_core(cmd, txlen, txbuf);
+    if (rc == 0)
+        rc = recv_ks_reply_core(rxbuf, rxmax, flags, rxstatus, rxlen);
+    ks_send_unlock();
+    return (rc);
+}
+
 __attribute__((noinline))
 static uint
 send_ks_cmd(uint cmd, void *txbuf, uint txlen, void *rxbuf, uint rxmax,
             uint *rxstatus, uint *rxlen, uint flags)
 {
-    uint rc;
-    rc = send_ks_cmd_core(cmd, txlen, txbuf);
-    if (rc != 0)
-        return (rc);
-    return (recv_ks_reply_core(rxbuf, rxmax, flags, rxstatus, rxlen));
+    return (send_ks_cmd_prio(KS_SEND_PRIO_MAIN, cmd, txbuf, txlen, rxbuf,
+                             rxmax, rxstatus, rxlen, flags));
 }
 
 static const char * const board_states[] = {
@@ -3862,7 +4118,6 @@ tag_queue_remove(uint target_tag, uint *len, uint *rx_status)
     return (found_buf);
 }
 
-#define SEND_MSG_MAX 2000
 
 static uint
 wait_for_send_space(uint sendlen, uint pos, uint len)
@@ -3953,11 +4208,18 @@ send_msg(void *buf, uint len, uint *status)
     uint pos;
     uint bodylen_rounded;
 
+#undef MSG_DEBUG
 #ifdef MSG_DEBUG
     km_msg_hdr_t *km = (km_msg_hdr_t *) buf;
     msgprintf("  send msg len=%04x op=%02x mstatus=%02x tag=%02x\n",
               len, km->km_op, km->km_status, SWAP16(km->km_tag));
 #endif
+    /*
+     * Hold the Kicksmash send lock for the whole message (including all
+     * parts of a multi-part message and any wait for buffer space), so
+     * that the network forwarding thread can't slip a packet in between.
+     */
+    ks_send_lock(KS_SEND_PRIO_MAIN);
     mem16_swap(buf, len);  // Raw messages passed 16 bits at a time to Amiga
     if (sendlen > SEND_MSG_MAX)
         sendlen = SEND_MSG_MAX;
@@ -3983,7 +4245,7 @@ send_msg(void *buf, uint len, uint *status)
         bodylen = pos - sizeof (km_msg_hdr_t);
     }
     while (pos < len) {
-        *op = ++curpkt;  // Sequence number, starting a 1
+        *op = ++curpkt;  // Sequence number, starting at 1
         if (bodylen > len - pos)
             bodylen = len - pos;
         bodylen_rounded = (bodylen + 1) & ~1;
@@ -3991,20 +4253,51 @@ send_msg(void *buf, uint len, uint *status)
                (uint8_t *)buf + pos, bodylen_rounded);
         sendlen = bodylen + sizeof (km_msg_hdr_t);
 
+#undef DEBUG_SEND_MSG
+#ifdef DEBUG_SEND_MSG
+        printf("  send %x seq=%x (body=%x) pos=%x of %x\n",
+               sendlen, *op, bodylen, pos, len);
+#endif
         rc = send_msg_wait(msgbuf, sendlen, status, pos);
         if ((rc != 0) || (*status != 0)) {
             printf("send msg failed at %x of %x\n", pos, len);
             break;
         }
         pos += bodylen;
-#undef DEBUG_SEND_MSG
-#ifdef DEBUG_SEND_MSG
-        printf("send %x (body=%x) pos=%x of %x\n",
-               sendlen, bodylen, pos, len);
-#endif
     }
 
 finish:
+    mem16_swap(buf, len);
+    ks_send_unlock();
+    return (rc);
+}
+
+/*
+ * send_msg_nowait
+ * ---------------
+ * Makes a single attempt to send a message to the remote Amiga. Unlike
+ * send_msg(), this function will not wait for buffer space and does not
+ * support multi-part messages (len must not exceed SEND_MSG_MAX).
+ * If Kicksmash does not currently have room for the message, *status is
+ * set to KS_STATUS_BADLEN, and the caller may retry later.
+ *
+ * The caller is expected to hold the Kicksmash send lock.
+ */
+uint
+send_msg_nowait(void *buf, uint len, uint *status)
+{
+    uint rc;
+
+    if (len > SEND_MSG_MAX)
+        return (MSG_STATUS_BAD_LENGTH);
+
+#ifdef MSG_DEBUG
+    km_msg_hdr_t *km = (km_msg_hdr_t *) buf;
+    msgprintf("  send msg len=%04x op=%02x mstatus=%02x tag=%02x (async)\n",
+              len, km->km_op, km->km_status, SWAP16(km->km_tag));
+#endif
+    mem16_swap(buf, len);  // Raw messages passed 16 bits at a time to Amiga
+    rc = send_ks_cmd(KS_CMD_MSG_SEND, buf, len, NULL, 0, status, NULL, 0);
     mem16_swap(buf, len);
     return (rc);
 }
@@ -4047,8 +4340,15 @@ retry:
         return (0);
     }
     for (timeout = 0; timeout < 50; timeout++) {
-        rc = send_ks_cmd(KS_CMD_MSG_RECEIVE, NULL, 0, buf, bufsize,
-                         rx_status, rxlen, 0);
+        /*
+         * An idle check for any message (from the main loop) does not
+         * get priority over network forwarding; waiting for a specific
+         * reply does.
+         */
+        uint prio = (tag == TAG_QUEUE_ANY) ? KS_SEND_PRIO_POLL :
+                                             KS_SEND_PRIO_MAIN;
+        rc = send_ks_cmd_prio(prio, KS_CMD_MSG_RECEIVE, NULL, 0, buf, bufsize,
+                              rx_status, rxlen, 0);
         if ((rc != 0) || (*rxlen == 0))
             return (rc);
         if (*rx_status == KS_STATUS_NODATA) {
@@ -4459,10 +4759,8 @@ run_message_mode(void)
     if (amiga_vol_head != NULL)
         app_state |= MSG_STATE_HAVE_FILE;
 
-    if (amiga_net_service != 0) {
+    if (amiga_net_service != 0)
         app_state |= MSG_STATE_HAVE_NET;
-        netif_start();
-    }
     msgprintf("Message mode\n");
     app_state_send[0] = SWAP16(0xffff);     // Affect all bits
     app_state_send[1] = SWAP16(app_state);  // Message service up
@@ -4491,6 +4789,9 @@ run_message_mode(void)
     }
 
     sm_init_queues();
+    if (amiga_net_service != 0)
+        netif_start();  // Starts netif reader and network forwarding threads
+
     while (1) {
         if (curtick != 0) {
             if (curtick < 1024)
@@ -4504,9 +4805,14 @@ run_message_mode(void)
             keep_app_state();  // do this once every 4 seconds
         }
 
-        if (curtick > 1000) {
-            if (ks_message_terminated)
-                break;
+        if (ks_message_terminated)
+            break;
+
+        /*
+         * The message buffer status is only reported (msgprintf), so
+         * only spend a Kicksmash transaction on it when debugging.
+         */
+        if ((curtick > 1000) && debug_msg) {
             rc = send_ks_cmd(KS_CMD_MSG_INFO, NULL, 0, &mi, sizeof (mi),
                              &status, NULL, 0);
             if (ks_message_terminated)

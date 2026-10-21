@@ -50,7 +50,13 @@
             CacheControl(oldcachestate, CACRF_EnableD | CACRF_DBE | CACRF_ClearD); \
         }
 
-/* MMU_DISABLE() and MMU_RESTORE() must be called from Supervisor state */
+/*
+ * MMU_DISABLE() and MMU_RESTORE() must be called from Supervisor state.
+ *
+ * The 68000, 68010, and 68020 have no on-chip MMU, so these do nothing
+ * on those CPUs. (An external 68851 PMMU paired with a 68020 is not
+ * handled.)
+ */
 #define MMU_DISABLE() \
         { \
             uint32_t oldmmustate = 0; \
@@ -70,8 +76,17 @@
             ASM_NOP; \
         }
 
+/*
+ * The 68020 has only a 256-byte instruction cache, and its CACR
+ * implements only bits 3:0 (C, CE, F, E). Bit 3 (C) is the same bit as
+ * CACRF_ClearI, so only that bit is set. The other CACR bits are
+ * reserved on the 68020 and must be written as zero.
+ */
 #define CACHE_FLUSH() \
         switch (cpu_type) { \
+            case 68020: \
+                cpu_set_cacr(cpu_get_cacr() | CACRF_ClearI); \
+                break; \
             case 68030: \
                 cpu_set_cacr(cpu_get_cacr() | CACRF_ClearI | CACRF_ClearD); \
                 break; \
@@ -84,6 +99,9 @@
 
 #define CACHE_INVALIDATE() \
         switch (cpu_type) { \
+            case 68020: \
+                cpu_set_cacr(cpu_get_cacr() | CACRF_ClearI); \
+                break; \
             case 68030: \
                 cpu_set_cacr(cpu_get_cacr() | CACRF_ClearI | CACRF_ClearD); \
                 break; \
@@ -94,6 +112,7 @@
         } \
         ASM_NOP;
 
+/* No TLB to flush on 68000, 68010, or 68020 (no on-chip MMU) */
 #define MMU_FLUSH() \
         switch (cpu_type) { \
             case 68030: \
