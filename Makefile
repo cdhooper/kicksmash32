@@ -71,7 +71,6 @@ $(eval $(call RELEASE_IT,amiga/smashfsrom_d,amiga/smashfsrom_d))
 $(eval $(call RELEASE_IT,amiga/smashnet,amiga/smashnet))
 $(eval $(call RELEASE_IT,amiga/smashnet.device,amiga/smashnet.device))
 $(eval $(call RELEASE_IT,amiga/smashnet.netif,amiga/smashnet.netif))
-$(eval $(call RELEASE_IT,amiga/smashtool,amiga/smashtool))
 $(eval $(call RELEASE_IT,amiga/smashtool,amiga/SmashTool))
 $(eval $(call RELEASE_IT,amiga/SmashTool.info,amiga/SmashTool.info))
 $(eval $(call RELEASE_IT,amiga/SmashTool_HiRes.info,amiga/SmashTool_HiRes.info))
@@ -108,9 +107,8 @@ $(RELEASE_ADF): all populating $(RELEASE_TARGETS)
 	@echo "* Building $@"
 	@rm -f $@
 	xdftool $@ format "kicksmash_$(VERSION)"
-	xdftool $@ makedir kicksmash
 	for f in $(RELEASE_DIR)/amiga/*; do \
-		xdftool $@ write "$$f" kicksmash/$$(basename "$$f"); \
+		xdftool $@ write "$$f" $$(basename "$$f"); \
 	done
 	xdftool $@ boot install
 
