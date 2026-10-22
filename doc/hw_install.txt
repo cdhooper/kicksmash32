@@ -1,11 +1,8 @@
 KickSmash Hardware Install
 --------------------------
 
-KickSmash has so far only been tested in Amiga 3000, 4000, and 4000T systems.
-There are known issues with KickSmash in the Amiga 1200, specifically with
-the TF1260 and other CPU accelerators. This combination is not recommended.
-The issue is Gayle, which will glitch ROM enables to KickSmash while code is
-running on the TF.
+KickSmash has been tested in many different Amiga system types (3000,
+4000, 4000T, AA3000, 1200, etc).
 
 1. Turn off your computer
     It had to be said.

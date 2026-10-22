@@ -1,3 +1,225 @@
+Release 2.1
+
+Major changes since 2.0
+- SANA-II Network driver through Kicksmash (smashnet.device).
+- New Amiga SmashTool GUI for programming Kicksmash ROM banks.
+- Kicksmash1200 Rev 10.1, which now works with TF1260
+- New Kicksmash tester board and firmware (Kicksmasher).
+- ROM Switcher suport of CSMKIII, Apollo 4060, and GVP 68060 accelerators.
+- ROM Switcher support of Picasso IV flicker fixer and A3640 MAPROM.
+- Faster file transfer for smashftp and smashfs.
+
+Kicksmash FW
+- Fixed "prom test" in standalone mode to not incorrectly report problems.
+- Removed persistent pull up/down of SOCKET_D31.
+- Fixed missing mode setting of D16-D31 pull-up state during pin tests.
+- Fixed incorrect display for Kicksmash mode when "set" command is used.
+- Increased strength of GD32 pin drivers when USB data is being reset.
+- Return data pins to input pull-down state after Kicksmash communication.
+- Standalone pin test updates to support Kicksmash32 Rev 10 board.
+- Worked around GD32F107 hardware USB data corruption bug.
+  This involved writing my own code which pulls from the USB Receive FIFO
+  and compares against data which is in the backdoor SRAM.
+- There are now separate, but similar, drivers for GD32F107 and STM32F107.
+- Minor improvements to flash erase / program timeout handling.
+- Flash programming code changed to better report the cause of programming
+  and CRC failures.
+- Overclock GD32F107 to 120 MHz to handle Amiga 1200 Gayle with 68020 CPU.
+- Improve pin test detection of new style ROM OE circuit.
+- Added reporting of board state to hostsmash and smash.
+- Improve sensor reporting output of "prom temp"
+- Added sensor reporting of calculated 3.3V.
+- GD32F107: remove broken temperature sensor reporting.
+- GD32F107: adjust voltage sensor calculation to better track actual V5.
+- Fixed STM32 ADC bug introduced in previous commit.
+  The bug will cause the STM32 to think the Amiga is not powered on.
+- Changed power off strategy to no longer drive SOCKET_OE high or low.
+  There is too much risk in doing this for the little backpower gain.
+- Enhanced "gpio" co allow port-wide setting. Example: "gpio pa=1234"
+- Added support for M29F160xE in the standalone flash CFI test.
+- Improve pin tests for GD32F107 -- GPIO drive was not strong enough.
+- Added start of persistent RAM which survives resets, but not power cycles.
+- Fixed bug in Kicksmash1200 stand-alone test.
+- Fixed possible infinite loop bug in handling of corrupt config.
+- Enhanced message locking to allow a task to completely lock the buffers.
+
+ROM Switcher
+- Fixed "CIA-A ECLK timeout" failure when running in FS-UAE with JIT.
+- Screen is now refreshed by both Copper and VBlank in case of fault.
+  This should stop crazy displays on a crash.
+  Black screen color changes to Dark Violet if the CPU hangs (VBlank).
+  Black screen color changes to Dark Copper if the Copper hangs.
+- Replaced gadget rendering of cross-hatched "disable" to a solid dark grey.
+- Default handlers for the entire 256 68000 vectors are now installed.
+- Now supports Picasso IV with GD5446 Rev B and PCI Bridge Rev 2.
+  Does not yet work with GD5446 Rev B and Bridge Rev 1, I think.
+- Now works with 512KB Agnus (previously required at least 1MB Agnus)
+- Fixed bug where keyboard interrupt during initialization could cause a crash.
+  The keyboard interrupt handler was not properly saving/reloading A4.
+- Removed copy of vectors to RAM since they are ROM-based by default.
+  This will very slightly speed up init (1KB copy with cache off).
+- Minor improvements to decrease startup time.
+- Allow modification of Gary BERR bit from MED cmdline.
+- Merge private/public autoconfig structs.
+- Made Copper/VBlank watch colors immune to interrupt latency.
+- Saturate the Copper miss counter so a long outage cannot wrap it.
+- Keep string field bevels within their bounds.
+  (Draw recessed string and integer borders inside the gadget rectangle)
+- Finish the DrawBevelBox tag scan with va_end().
+- Give bank fields room for separate bevel edges to clear up display artifacts.
+- Switched to AmigaOS style mouse pointer.
+- Changed to keep keyboard button outlines on (200-line NTSC) screen.
+- Aligned taller Auto Switch Bank and Timeout fields and labels.
+- Fixed "Save" bug where possibly old data would be written on subsequent save.
+- Added Amiga serial port control of selected bank and start, such that
+  the user may select a Kickstart ROM bank and start it completely from serial.
+- Changed 68040/68060 cache init to also set ITT0/ITT1 and clear cache first.
+- Changed interrupt and exception handling to ignore spurious interrupts unless
+  the rate is causing the main loop to not make progress.
+- Improved interrupt and exception vector reporting to capture the frame before
+  beginning a report. So if a new interrupt occurs while the current is being
+  reported, it won't be clobbered.
+- A4 (globals pointer) is now loaded from a ROM constant, making it more
+  tolerant of RAM corruption.
+- Too many (stacked) exceptions will now force a reboot instead of a hang.
+- Improved order of startup code to improve early spurious interrupt tolerance.
+- ^M^E^D^S^T^O^P now rejects the STOP when re-entering the GUI (no-input hang).
+- Previous commit fixes support of CSMKII and Apollo 4060.
+- This commit fixes support for GVP Tekmagic 68060 A4000 accelerator.
+- This commit fixes support for A3640 in MAPROM mode.
+- Changed initial instructions and ROM signature to be more like Kickstart.
+  This fixes the bug where long reset causes Blizkick MAPROM on A3640 to
+  simply show a blank gray screen. This is because the first instructions
+  were executed from the ROM Switcher and the remainder from the kicked image.
+- Changed startup chipset interrupt enable to happen after autoconfig.
+- Changed CPU VBR vector 0 and 1 to be default handler rather than SP and reset.
+- Changed startup sound to not generate interrupts as it did before.
+- Made bevel corner joins consistent to clean up the UI further.
+- Added smash command to MED command line
+  This means that "smash test" can now be done without booting AmigaOS.
+- Improved ^C handling and reporting (previously didn't work if multiple
+  levels of code was checking for ^C).
+- Added support for polled mode keyboard input
+  Amiga keyboard now works even when stuck in interrupt fault
+- Vertical blank interrupt no longer updates screen point if entry is slow
+  This fixes where if interrupts are disabled briefly during the vertical
+  blank interrupt, that the VBlank handler will then corrupt the screen and
+  mouse pointers for a single refresh.
+
+smash
+- Fixed minor mistakes in error messages (such as missing bank argument).
+- Added ability to set Amiga clock from USB host: "smash clock setu"
+- Can now report additional Kicksmash board state with -i option.
+- Fixed mismatched flash part erase bug.
+- Fixed auto swap bug where only the first 16KB was swapped correctly.
+- Fixed minor text output issues pointed out by Claude
+- Fixed state expiration test early timeout bug
+- Read/Write errors on Amiga files are now handled more gracefully
+- Split source in preparation for integration into ROM Switcher CLI.
+- Message buffer tests now always override locked buffers.
+- Added "debugq" option to show the smash message queue and semaphore fields
+
+smashftp
+- Increased core message backoff when Kicksmash doesn't have response yet
+  This is to corruption of large file "put" transfers.
+- Added wildcard support to get, put, ls, chmod, mv, rm, rd, cd, and local equiv
+- Fixed minor bug where getting a short file could report false error (EOF).
+
+smashnet
+- Added build of standard SANA-II smashnet.device
+- Removed reduced priority of smashnet receive task. This caused no network
+  progress when another task is busy.
+- Made matching changes for no reply on network send an receive
+  The change includes sending a refresh tag for receive every 10 seconds.
+
+smashtool
+- Implemented new graphical AmigaOS tool to do most smash program functions.
+  This includes updating Kicksmash banks with ROM images, setting bank
+  names, setting power on image, long reset images, setting the automatic
+  bank to switch to on timeout, and setting the Amiga clock from Kicksmash.
+- Minor size reduction by embedding a few constant strings.
+
+hostsmash
+- Added DiagROM 2.0 and 2.0+ release signature for auto byte swapping.
+- Initial network support for Linux, MacOS, and Windows (hostsmash -n).
+  Parts of the implementation (most of hostsmash_netif) were written by AI.
+- Fixed fwrite bug where missing data on large transfers is ignored.
+- Added host interface versioning for backwards compatibility.
+- Added support for multiple client threads (finished message tag support).
+- Message interface will now exit if it sees a Kicksmash "CMD>" prompt.
+- Added support for multiple simultaneous threads sending / receiving messages.
+- Improved latency of Windows interactive '-t' terminal.
+- Added automatic detection of Kicksmash COM port under Windows.
+- Full hostsmash help is now only shown if no command is specified.
+- Refactored code to split host file services to a separate source file.
+- Can now report Kicksmash info, including board state with -ii option.
+- --version will also report Kicksmash version if -d device is specified.
+- Added option to "-n" to specify the network option to the back end.
+- Added support for flags passed with KS_CMD_MSG_SEND.
+  It previously would reject that command having flags (such as override).
+- Cleaned hostsmash output prefixes: "HS" is hostsmash and "KS" is Kicksmash.
+- Changed network send and receive to not require a reply from the other side.
+- Changed network receive to be forwarded by an asynchronous thread.
+  With these two changes, ftp read performance went from 1.3K to 3.6K/sec.
+- Disabled Linux packet combining default which severely limited TCP
+  performance because the Amiga network stack was rejecting those packets.
+  With these two changes, ftp read performance went from 3.6K to 44K/sec.
+- Changed the message handler to block instead of polling every 1 ms.
+- Network packet upstream forward to be lower priority than message poll.
+- Made message info poll only occur when debug is enabled.
+  With these three changes, ftp read performance went from 44k to 53K/sec.
+  smashftp and smashfs saw similar gains, where smashftp is over 100KB/sec
+
+hostsmash_netif
+- Turned off debug output of packet send/receive size (-d option enables it)
+
+Kicksmash message interface
+- Minor performance improvements by tweaking delay between send/receive.
+- Simplified message interface to automatically alloc/free tag for most ops.
+  This reduced program sizes by a small amount.
+- Fixed minor issues in CPU TC register handling (for MMU disable/enable)
+- Fixed minor bug in 68030 TT0 get and set code.
+- Fixed persistent smash message semaphore handling
+- Fixed bug where smash message semaphore could get double-freed
+- Fixed bug where smash error response for a different tag can cause
+  the wrong task to respond to the failure.
+- Fixed a buffer pool bug where multiple threads of the same process could
+  grab the same buffer. This could then corrupt packets for other tasks.
+  The buffer pool is now shared among all smash tasks using the semaphore.
+
+Build system
+- Minor fixes to make code compilable with gcc 16.2.
+- Makefile will now automatically fetch Windows pcap.h file for Windows build.
+
+Documentation
+- Updated 74FCT162244 alternatives.
+- Added Windows getting started doc from Samoht.
+- Updated hw_install.txt with ideas from Samoht.
+- Added photos of Kicksmash installed in several different motherboards.
+- Update ROM spacing table.
+- Improvements to Windows getting started guide.
+
+Kicksmash tester
+- Added Kicksmash test board and firmware (Kicksmasher).
+- Fix GPIO names.
+- Several improvements to pin tests.
+  Still unknown whether "Kicksmash is present" detection is good.
+- Added USB polling to smash tests, would previously clobber USB negotiation.
+- Test button can now toggle between:
+  A) Do short smash test loop
+  B) Do indefinite smash test runs
+  C) Stop running smash test
+- Test button will now flicker status LED and do nothing else while pressed.
+- Cleaned up "smash" command help and removed unused code (such as clock set)
+
+PCBs
+- Kicksmash32 Rev 10
+- Kicksmash1200 Rev 10.1
+- Kicksmasher Rev 2
+- Renamed all board directories to make it easier to find the board you want.
+
+----------------------------------------------------------------------------
+
 Release 2.0
 
 Kicksmash FW

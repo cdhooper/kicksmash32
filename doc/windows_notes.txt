@@ -4,7 +4,7 @@ In this document:
 * Windows COM port driver
 * Hostsmash debugging
 * Hostsmash under Wine
-* Windows network packet capture
+* Hostsmash with Windows network
 
 -------------------------------------------------------------------
 DFU Programming
@@ -183,8 +183,10 @@ the following command:
 -------------------------------------------------------------------
 
 
-Windows network packet capture
+Hostsmash with Windows network
 ------------------------------
+To use network support under Windows give "-n pcap" to hostsmash.
+
 The hostsmash network interface relies on Npcap for access to the physical
 hardware. This requires installation of the npcap application, which is
 compatible with most recent versions of Windows. Download the installer
@@ -193,7 +195,26 @@ from the Npcap website:
 If you are building hostsmash for Windows, you might also require the
 Npcap SDK available from the same website.
 
+Be aware that pcap will likely not work if your Windows PC is connected
+by wireless. The Windows Native 802.11 Wireless Driver Framework. Unlike
+wired Ethernet, which allows a single physical port to easily transmit
+and receive frames using multiple source MAC addresses (frequently used
+for bridging or virtualization), Windows wireless drivers restrict how
+packet-capturing software interacts with Wi-Fi hardware.
+This is not just a Windows issue. A Wifi access point (AP) authenticates
+and associates with exactly one MAC address per radio connection.
+
 If you are hoping to run on Windows XP, you may be able to use WinPcap.
 This is untested, and there are likely other parts of hostsmash which
 will also not run on Windows XP:
     https://www.winpcap.org/
+
+
+The other Windows network interface option is "tap" -- it creates a bridge
+to your physical network interface. Support for this interface is not yet
+working.
+Notes for this interface:
+* If the network is killed, you may need to manually remove the bridge:
+    netsh bridge list
+    netsh bridge destroy {GUID-from-the-list}
+    ipconfig /renew

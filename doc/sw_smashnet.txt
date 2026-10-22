@@ -20,11 +20,11 @@ describes options for smashnet.device. A simple file is provided
 in the Kicksmash distribution:
     Copy smashnet.netif Devs:NetInterfaces/smashnet
 
-Start hostsmash with the -n option. Example:
-    ./hostsmash -d /dev/ttyACM0 -n
+Start hostsmash with the -n option. Example (Linux):
+    ./hostsmash -d /dev/ttyACM0 -n macvtap
 
-You may also combine networking with file service:
-    ./hostsmash -d /dev/ttyACM0 -n -M amiga: ../amiga
+You may also combine networking with file service (MacOS):
+    ./hostsmash -d /dev/ttyACM0 -n bpf -M amiga: ../amiga
 
 hostsmash supports Linux, MacOS, and Windows. In order to support
 networking, the host-side implementation is different for each operating
@@ -61,11 +61,7 @@ work similar to Linux.
 
 The equivalent of macvtap on MacOS is vmnet, but this requires special
 entitlement from Apple, so BFP is used instead. MacOS support in
-hostsmash is not well-tested, and may end up using the host's MAC for
-network access of the Amiga. The solution is to create a virtual
-MAC address and record that on disk "virtual_mac.txt", similar to how
-the Windows implementation does this. This has not yet been implemented
-for MacOS.
+hostsmash has been lightly tested, and seems to work for basic TCP/IP.
 
 Windows
 -------
@@ -87,7 +83,9 @@ and the other is using TAP:
 The TAP interface creates a private virtual network interface which
 uses network address translation (NAT) to bridge to the default network.
 This method does not currently work for an unknown reason. The Amiga is
-not able to acquire an address via DHCP.
+not able to acquire an address via DHCP. This may be because further
+bridge configuration needs to be set up on the Windows host, and this
+must be done through Windows network settings.
 
 For now, only the Npcap interface is supported. Like the MacOS BFP,
 Npcap implements an interface which shares the hardware with the default

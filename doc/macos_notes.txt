@@ -1,0 +1,12 @@
+You will likely need to override MacOS "unknown developer" security on
+the hostsmash and hostsmash_netif executables with the following command:
+    sudo xattr -d com.apple.quarantine hostsmash hostsmash_netif
+
+To enable networking on MacOS, you need to either assign setuid root
+permissions to hostsmash_netif or add your account to the admin group
+and then:
+    sudo chgrp admin /dev/bpf*
+    sudo chmod g+rw /dev/bpf*
+
+Wireshark's installer includes ChmodBPF, which creates the access_bpf
+group and reapplies the permissions at every boot.

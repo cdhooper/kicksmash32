@@ -131,7 +131,7 @@ Byte swapping (endian)
         -s 1032     Swap odd and even adjacent bytes. This mode may be
                     useful when dealing with ROM images for the Amiga
                     500 and 2000 computers. Not verified at this point.
-                    It is likely also the mode required for A1200 images.
+                    It is also the mode required for A3000T images.
         -s 2301     Swap adjacent 16-bit words.
 
     From the example above, you can see that "3210" should be the
