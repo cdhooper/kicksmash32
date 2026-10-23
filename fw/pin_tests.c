@@ -863,13 +863,8 @@ restore_state:
     gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
     gpio_setv(KBRST_PORT, KBRST_PIN, 0);
     gpio_setmode(KBRST_PORT, KBRST_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
-    if (config.flags & CF_OE_GATE) {
-        gpio_setv(GPIOB, GPIO15, 0);
-        gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_INPUT_PULLUPDOWN);
-    } else {
-        gpio_setv(GPIOB, GPIO15, 1);
-        gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_INPUT_PULLUPDOWN);
-    }
+    gpio_setv(GPIOB, GPIO15, 1);  // External SOCKET_OE or FLASH_RB
+    gpio_setmode(GPIOB, GPIO15, GPIO_SETMODE_INPUT_PULLUPDOWN);
 }
 
 /*
@@ -1017,6 +1012,17 @@ pin_tests(uint verbose, uint force)
             /* Set one pin the opposite of the others */
             gpio_setv(curport, curpin, pass);
             gpio_setmode(curport, curpin, GPIO_SETMODE_OUTPUT_PPULL_2);
+
+#if 1
+            if ((curport == FLASH_OE_PORT) && (curpin == FLASH_OE_PIN)) {
+                if (config.flags & CF_OE_GATE) {
+                    gpio_setv(GPIOB, GPIO15, 1);  // External SOCKET_OE = high
+                }
+                timer_delay_msec(100);
+            }
+#else
+            timer_delay_msec(1);
+#endif
 
             /* Check other pins for wrong state */
             for (check = 0; check < ARRAY_SIZE(pin_config) + 32 + 20; check++) {

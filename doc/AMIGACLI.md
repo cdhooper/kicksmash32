@@ -18,7 +18,7 @@ Name that bank for future reference.
 
 It's always a good idea to verify what you wrote.
 
-![smash verify](smash_example_4_verify.jpg?raw=true "smash verif")
+![smash verify](smash_example_4_verify.jpg?raw=true "smash verify")
 
 Switch to that bank and reboot.
 

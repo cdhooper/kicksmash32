@@ -1,7 +1,7 @@
 KickSmash Hardware Programming
 ------------------------------
 
-There are two ways to program firmware on your KickSmash.
+There are two ways to program initial firmware on your KickSmash.
     1. ST-Link (requires the hardware programmer)
     2. USB DFU mode
 
@@ -62,6 +62,16 @@ from here:
     then unplug the USB cable and inspect your board for shorts or
     missing components. A common cause of missing voltage is the diode next
     to the AM1117 has been installed backwards.
+
+    If you are updating Kicksmash firmware and you already have a USB cable
+    attached to Kicksmash, you can do so without taking Kicksmash out of
+    your computer. You can even do this without jumpering DFU to V3P3.
+    If you issue the "reset dfu" command to Kicksmash firmware, it will
+    immediately enter a DFU downloader.
+    From your PB:
+        hostsmash -t reset dfu
+    or from your Amiga:
+        smash term reset dfu
 
 3. Program the firmware
     Assuming you are on Linux and have the necessary packages installed,

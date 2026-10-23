@@ -5,7 +5,7 @@ Major changes since 2.0
 - New Amiga SmashTool GUI for programming Kicksmash ROM banks.
 - Kicksmash1200 Rev 10.1, which now works with TF1260
 - New Kicksmash tester board and firmware (Kicksmasher).
-- ROM Switcher suport of CSMKIII, Apollo 4060, and GVP 68060 accelerators.
+- ROM Switcher suport of CSMKII, Apollo 4060, and GVP 68060 accelerators.
 - ROM Switcher support of Picasso IV flicker fixer and A3640 MAPROM.
 - Faster file transfer for smashftp and smashfs.
 
