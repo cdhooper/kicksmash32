@@ -25,9 +25,12 @@ typedef struct {
     uint32_t sp_addr;          // Address of start of this structure
     uint32_t sp_valid;         // Which fields are valid in this structure
     uint32_t sp_reset_magic;   // Reset mode magic
+    uint8_t  sp_ee_mode;       // Flash data mode
+    uint8_t  sp_board_rev;     // Board revision (from config struct)
+    uint8_t  sp_in_amiga;      // Installed in an Amiga
     uint8_t  sp_bank_current;  // Currently active bank
     uint8_t  sp_bank_merge;    // Current banks merged
-    uint8_t  sp_unused[110];   // Unused values (0x00)
+    uint8_t  sp_unused[107];   // Unused values (0x00)
 } sram_persist_t;
 
 SRAM_PERSIST extern sram_persist_t persist;

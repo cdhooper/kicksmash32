@@ -68,7 +68,7 @@ static struct timerequest TimeRequest;
 
 #define TEST_LOOPBACK_BUF 4096
 #define TEST_LOOPBACK_MAX 64
-#define MEM_LOOPS         1000000
+#define MEM_LOOPS         4000000
 
 static const char cmd_options[] =
     "usage: smash <options>\n"
@@ -77,6 +77,9 @@ static const char cmd_options[] =
     "   debug         show debug output (-d)\n"
     "   debugq        show smashmsg semaphore and reply queue (-Q)\n"
     "   erase <opt>   erase flash (-e ?, bank, ...)\n"
+    "   fwread <file> read Kicksmash firmware to file (-R)\n"
+    "   fwverify <file> verify Kicksmash firmware matches file (-V)\n"
+    "   fwwrite <file> write Kicksmash firmware from file (-W)\n"
     "   identify      identify Kicksmash and Flash parts (-i[ii])\n"
     "   read <opt>    read from flash (-r ?, bank, file, ...)\n"
     "   verify <opt>  verify flash matches file (-v ?, bank, file, ...)\n"
@@ -115,6 +118,10 @@ long_to_short_t long_to_short_main[] = {
     { "-C", "conservative" },
     { "-d", "debug" },
     { "-e", "erase" },
+    { "-R", "fwread" },
+    { "-V", "fwverify" },
+    { "-W", "fwupdate" },
+    { "-W", "fwwrite" },
     { "-i", "inquiry" },
     { "-i", "identify" },
     { "-i", "id" },
@@ -408,7 +415,8 @@ spin_memory(uint32_t addr)
     CACHE_RESTORE_STATE();
     INTERRUPTS_ENABLE();
     SUPERVISOR_STATE_EXIT();
-    printf("done\n");
+    if (!flag_quiet)
+        printf("done\n");
 }
 
 static void
@@ -479,9 +487,9 @@ smash_identify(void)
                id.si_ks_date[2], id.si_ks_date[3],
                id.si_ks_time[0], id.si_ks_time[1], id.si_ks_time[2]);
         /* Fixed-size fields are not guaranteed to be NIL-terminated */
-        printf("  USB %08x  Serial \"%.*s\"  Name \"%.*s\"\n",
-               id.si_usbid, (int) sizeof (id.si_serial), id.si_serial,
-               (int) sizeof (id.si_name), id.si_name);
+        printf("  USB %08x  Size %u  Serial \"%.*s\"  Name \"%.*s\"\n",
+               id.si_usbid, (int) id.si_size, (int) sizeof (id.si_serial),
+               id.si_serial, (int) sizeof (id.si_name), id.si_name);
         printf("  Mode: %s\n",
                (id.si_mode == 0) ? "32-bit" :
                (id.si_mode == 1) ? "16-bit" :
@@ -3161,6 +3169,896 @@ cmd_debugq(void)
     return (0);
 }
 
+#define FW_READ_CHUNK     2048         // Matches firmware FW_READ_MAX
+#define FW_READ_DOTS      32           // Width of firmware progress bar
+#define FW_READ_RETRIES   5            // Attempts per firmware read transfer
+#define FW_INFO_MAGIC     0x4b534657   // "KSFW" firmware info (fw/main.h)
+#define FW_INFO_MIN_SIZE  20           // Minimum firmware info struct size
+#define STM32_FLASH_BASE  0x08000000   // Kicksmash flash address of firmware
+
+int are_you_sure(const char *prompt);
+
+/*
+ * fw_le32
+ * -------
+ * Returns the little-endian (STM32 order) 32-bit value at the specified
+ * buffer location.
+ */
+static uint32_t
+fw_le32(const uint8_t *buf)
+{
+    return (buf[0] | (buf[1] << 8) | (buf[2] << 16) |
+            ((uint32_t) buf[3] << 24));
+}
+
+/*
+ * fw_in_updater
+ * -------------
+ * Returns non-zero if the Kicksmash ID indicates that the firmware updater
+ * is running instead of the normal Kicksmash firmware.
+ */
+static int
+fw_in_updater(const smash_id_t *id)
+{
+    return ((id->si_features & SID_FEATURE_FW_UPDATE) != 0);
+}
+
+/*
+ * fw_read_chunk
+ * -------------
+ * Read up to FW_READ_CHUNK bytes of Kicksmash firmware at the specified
+ * offset using KS_CMD_FW_READ. The reply header is placed at the start of
+ * rbuf, which must be sizeof (ks_fw_rw_t) + FW_READ_CHUNK bytes, followed
+ * by the data. Kicksmash may return less data than requested.
+ *
+ * Returns the number of bytes read, or 0 on failure.
+ */
+static uint
+fw_read_chunk(uint offset, uint fw_size, uint8_t *rbuf, uint *retries)
+{
+    ks_fw_rw_t  req;
+    ks_fw_rw_t *rhdr = (ks_fw_rw_t *) rbuf;
+    uint        rbuf_size = sizeof (ks_fw_rw_t) + FW_READ_CHUNK;
+    uint        rlen = 0;
+    uint        len;
+    uint        rc = 0;
+    uint        tries;
+
+    memset(&req, 0, sizeof (req));
+    req.kfrw_offset = offset;
+    len = fw_size - offset;
+    if (len > FW_READ_CHUNK)
+        len = FW_READ_CHUNK;
+    req.kfrw_size = len;
+
+    /* Reads have no side effects, so retry any failure */
+    for (tries = 0; tries < FW_READ_RETRIES; tries++) {
+        rc = send_cmd_retry(KS_CMD_FW_READ, &req, sizeof (req),
+                            rbuf, rbuf_size, &rlen);
+        if (rc == 0)
+            break;
+        (*retries)++;
+        if (flag_debug)
+            printf("\nFW read at offset 0x%x retry: (%s)\n",
+                   offset, smash_err(rc));
+        if (is_user_abort())
+            break;
+    }
+    if (rc != 0) {
+        printf("\nFW read at offset 0x%x failed: (%s)\n",
+               offset, smash_err(rc));
+        return (0);
+    }
+    len = rhdr->kfrw_size;
+    if ((rlen < sizeof (*rhdr)) || (len == 0) ||
+        (len > rlen - sizeof (*rhdr)) || (len > fw_size - offset) ||
+        (rhdr->kfrw_offset != offset)) {
+        printf("\nFW read at offset 0x%x bad reply: "
+               "rlen=%u offset=0x%x size=%u\n",
+               offset, rlen, (uint) rhdr->kfrw_offset, len);
+        return (0);
+    }
+    return (len);
+}
+
+/*
+ * fw_progress
+ * -----------
+ * Advance a firmware operation progress bar.
+ */
+static void
+fw_progress(uint done, uint total, uint *dots)
+{
+    uint dots_now = done * FW_READ_DOTS / total;
+
+    if ((flag_quiet == 0) && (dots_now > *dots)) {
+        for (; *dots < dots_now; (*dots)++)
+            printf(".");
+        fflush(stdout);
+    }
+}
+
+/*
+ * fw_progress_start
+ * -----------------
+ * Display an empty firmware operation progress bar.
+ */
+static void
+fw_progress_start(const char *what)
+{
+    if (flag_quiet == 0) {
+        printf("%s [%*s]\r%s [", what, FW_READ_DOTS, "", what);
+        fflush(stdout);
+    }
+}
+
+/*
+ * fw_progress_end
+ * ---------------
+ * Complete a firmware operation progress bar.
+ */
+static void
+fw_progress_end(int errs)
+{
+    if (flag_quiet == 0) {
+        if (errs == 0)
+            printf("]");
+        printf("\n");
+    }
+}
+
+/*
+ * fw_show_rate
+ * ------------
+ * Display the transfer rate and time of a firmware operation.
+ */
+static void
+fw_show_rate(uint64_t time_start, uint64_t time_end, uint bytes)
+{
+    if ((time_start != 0) && (time_end > time_start)) {
+        printf(" (%u KB/sec) in ",
+               calc_kb_sec((uint) (time_end - time_start), bytes));
+        print_us_diff(time_start, time_end);
+    } else {
+        printf("\n");
+    }
+}
+
+/*
+ * fw_identify
+ * -----------
+ * Issue KS_CMD_ID to Kicksmash.
+ */
+static uint
+fw_identify(smash_id_t *id)
+{
+    uint rlen;
+    uint rc;
+
+    memset(id, 0, sizeof (*id));
+    rc = send_cmd_retry(KS_CMD_ID, NULL, 0, id, sizeof (*id), &rlen);
+    if (rc != 0)
+        printf("Kicksmash ID failure: (%s)\n", smash_err(rc));
+    return (rc);
+}
+
+/*
+ * cmd_fwread
+ * ----------
+ * Read the running Kicksmash firmware image and write it to the specified
+ * file. The firmware size is acquired by KS_CMD_ID. Kicksmash may return
+ * less data per KS_CMD_FW_READ than requested.
+ */
+static int
+cmd_fwread(int argc, char *argv[])
+{
+    const char *filename;
+    smash_id_t  id;
+    uint8_t    *rbuf;
+    uint        offset;
+    uint        fw_size;
+    uint        rbuf_size = sizeof (ks_fw_rw_t) + FW_READ_CHUNK;
+    uint        len;
+    uint        retries = 0;
+    uint        dots = 0;
+    uint64_t    time_start;
+    uint64_t    time_end;
+    int         errs = 0;
+    BPTR        lock;
+    FILE       *fp = NULL;
+
+    if (argc < 2) {
+        printf("fwread requires a filename argument\n");
+        return (1);
+    }
+    filename = argv[1];
+
+    lock = Lock(filename, ACCESS_READ);
+    if (lock != 0L) {
+        char prompt[80];
+        UnLock(lock);
+        snprintf(prompt, sizeof (prompt), "Overwrite existing %s", filename);
+        if (!flag_yes && !are_you_sure(prompt))
+            return (1);
+    }
+
+    if (fw_identify(&id) != 0)
+        return (1);
+    fw_size = id.si_size;
+    if (fw_size == 0) {
+        printf("Kicksmash reported firmware size 0 "
+               "(firmware may be too old)\n");
+        return (1);
+    }
+
+    rbuf = AllocMem(rbuf_size, MEMF_PUBLIC);
+    if (rbuf == NULL) {
+        printf("Failed to allocate %u bytes\n", rbuf_size);
+        return (1);
+    }
+
+    fw_progress_start("Reading");
+    time_start = smash_time();
+
+    for (offset = 0; offset < fw_size; offset += len) {
+        if (is_user_abort()) {
+            errs++;
+            break;
+        }
+        len = fw_read_chunk(offset, fw_size, rbuf, &retries);
+        if (len == 0) {
+            errs++;
+            break;
+        }
+        /* Don't create the file until Kicksmash has provided data */
+        if (fp == NULL) {
+            fp = fopen(filename, "wb");
+            if (fp == NULL) {
+                printf("\nFailed to open %s for write\n", filename);
+                errs++;
+                break;
+            }
+        }
+        if (fwrite(rbuf + sizeof (ks_fw_rw_t), 1, len, fp) != len) {
+            printf("\nWrite to %s failed\n", filename);
+            errs++;
+            break;
+        }
+        fw_progress(offset + len, fw_size, &dots);
+    }
+    time_end = smash_time();
+    fw_progress_end(errs);
+
+    if ((fp != NULL) && (fclose(fp) != 0)) {
+        printf("Close of %s failed\n", filename);
+        errs++;
+    }
+    FreeMem(rbuf, rbuf_size);
+
+    if (errs == 0) {
+        printf("Read %u bytes of firmware to %s", fw_size, filename);
+        fw_show_rate(time_start, time_end, fw_size);
+    }
+    if (retries != 0)
+        printf("%u read retries were required\n", retries);
+    return (errs ? 1 : 0);
+}
+
+/*
+ * fw_file_identify
+ * ----------------
+ * Locate the firmware info structure (FW_INFO_MAGIC) in a firmware image
+ * read from disk, then fill in the version, build date/time, and size
+ * fields of the supplied smash_id_t from it, as KS_CMD_ID would report
+ * for that firmware.
+ *
+ * Returns 0 on success, 1 if the image does not appear to be valid.
+ */
+static int
+fw_file_identify(const uint8_t *buf, uint buf_size, smash_id_t *id)
+{
+    uint        off;
+    uint        vptr_off;
+    uint        str_off = 0;
+    uint        ver[2];
+    uint        date[3];
+    uint        time[3];
+    uint32_t    fi_struct_size;
+    uint32_t    fi_fw_size = 0;
+    const char *str;
+    const char *built;
+
+    for (off = 0; off + FW_INFO_MIN_SIZE <= buf_size; off += 4) {
+        if (fw_le32(buf + off) != FW_INFO_MAGIC)
+            continue;
+        fi_struct_size = fw_le32(buf + off + 4);
+        fi_fw_size     = fw_le32(buf + off + 16);
+        if ((fw_le32(buf + off + 8) == STM32_FLASH_BASE + off) &&
+            (fi_struct_size >= FW_INFO_MIN_SIZE) &&
+            (fi_fw_size <= buf_size) &&
+            (off + fi_struct_size <= fi_fw_size)) {
+            break;
+        }
+    }
+    if (off + FW_INFO_MIN_SIZE > buf_size) {
+        printf("Firmware info not found in file\n");
+        return (1);
+    }
+
+    /* fi_version_str is the flash address of a pointer to version_str */
+    vptr_off = fw_le32(buf + off + 12) - STM32_FLASH_BASE;
+    if ((vptr_off > buf_size - 4) ||
+        ((str_off = fw_le32(buf + vptr_off) - STM32_FLASH_BASE) >=
+         buf_size) ||
+        (memchr(buf + str_off, '\0', buf_size - str_off) == NULL)) {
+        printf("Firmware version string not found in file\n");
+        return (1);
+    }
+
+    /* Format: "Version 2.1+ built YYYY-MM-DD HH:MM:SS" */
+    str = (const char *) buf + str_off;
+    built = strstr(str, " built ");
+    if ((sscanf(str, "Version %u.%u", &ver[0], &ver[1]) != 2) ||
+        (built == NULL) ||
+        (sscanf(built, " built %u-%u-%u %u:%u:%u", &date[0], &date[1],
+                &date[2], &time[0], &time[1], &time[2]) != 6)) {
+        printf("Could not parse firmware version \"%s\"\n", str);
+        return (1);
+    }
+
+    memset(id, 0, sizeof (*id));
+    id->si_ks_version[0] = ver[0];
+    id->si_ks_version[1] = ver[1];
+    id->si_ks_date[0]    = date[0] / 100;
+    id->si_ks_date[1]    = date[0] % 100;
+    id->si_ks_date[2]    = date[1];
+    id->si_ks_date[3]    = date[2];
+    id->si_ks_time[0]    = time[0];
+    id->si_ks_time[1]    = time[1];
+    id->si_ks_time[2]    = time[2];
+    id->si_size          = fi_fw_size;
+    return (0);
+}
+
+/*
+ * fw_id_show
+ * ----------
+ * Display firmware version, build date/time, and size from a smash_id_t.
+ */
+static void
+fw_id_show(const char *what, const smash_id_t *id)
+{
+    printf("%-8s Kicksmash %u.%u built %02u%02u-%02u-%02u %02u:%02u:%02u  "
+           "Size %u\n", what,
+           id->si_ks_version[0], id->si_ks_version[1],
+           id->si_ks_date[0], id->si_ks_date[1],
+           id->si_ks_date[2], id->si_ks_date[3],
+           id->si_ks_time[0], id->si_ks_time[1], id->si_ks_time[2],
+           (uint) id->si_size);
+}
+
+/*
+ * fw_id_match
+ * -----------
+ * Returns TRUE if the firmware identity fields of two smash_id_t match.
+ */
+static int
+fw_id_match(const smash_id_t *id1, const smash_id_t *id2)
+{
+    return ((memcmp(id1->si_ks_version, id2->si_ks_version,
+                    sizeof (id1->si_ks_version)) == 0) &&
+            (memcmp(id1->si_ks_date, id2->si_ks_date,
+                    sizeof (id1->si_ks_date)) == 0) &&
+            (memcmp(id1->si_ks_time, id2->si_ks_time, 3) == 0) &&
+            (id1->si_size == id2->si_size));
+}
+
+/*
+ * fw_file_load
+ * ------------
+ * Read a firmware image file into memory allocated with AllocMem() and
+ * identify it with fw_file_identify(). The caller must FreeMem() the
+ * buffer when done.
+ *
+ * Returns 0 on success, 1 on failure (no buffer is then allocated).
+ */
+static int
+fw_file_load(const char *filename, uint8_t **fbufp, uint *fbuf_sizep,
+             smash_id_t *file_id)
+{
+    uint8_t *fbuf;
+    uint     fbuf_size;
+    long     flen;
+    FILE    *fp;
+
+    fp = fopen(filename, "rb");
+    if (fp == NULL) {
+        printf("Failed to open %s\n", filename);
+        return (1);
+    }
+    if ((fseek(fp, 0, SEEK_END) != 0) || ((flen = ftell(fp)) <= 0) ||
+        (fseek(fp, 0, SEEK_SET) != 0)) {
+        printf("Failed to get size of %s\n", filename);
+        fclose(fp);
+        return (1);
+    }
+    fbuf_size = flen;
+    fbuf = AllocMem(fbuf_size, MEMF_PUBLIC);
+    if (fbuf == NULL) {
+        printf("Failed to allocate %u bytes\n", fbuf_size);
+        fclose(fp);
+        return (1);
+    }
+    if (fread(fbuf, 1, fbuf_size, fp) != fbuf_size) {
+        printf("Failed to read %s\n", filename);
+        fclose(fp);
+        FreeMem(fbuf, fbuf_size);
+        return (1);
+    }
+    fclose(fp);
+
+    if (fw_file_identify(fbuf, fbuf_size, file_id) != 0) {
+        FreeMem(fbuf, fbuf_size);
+        return (1);
+    }
+    if (file_id->si_size != fbuf_size) {
+        printf("Note: %s is %u bytes; firmware image is %u bytes\n",
+               filename, fbuf_size, (uint) file_id->si_size);
+    }
+    *fbufp = fbuf;
+    *fbuf_sizep = fbuf_size;
+    return (0);
+}
+
+/*
+ * fw_verify_image
+ * ---------------
+ * Read the Kicksmash firmware with KS_CMD_FW_READ and compare it with
+ * the firmware image in memory.
+ *
+ * Returns 0 if the firmware matches, 1 otherwise.
+ */
+static int
+fw_verify_image(const uint8_t *fbuf, uint fw_size, const char *filename)
+{
+    uint8_t *rbuf;
+    uint     rbuf_size = sizeof (ks_fw_rw_t) + FW_READ_CHUNK;
+    uint     offset;
+    uint     pos;
+    uint     len;
+    uint     retries = 0;
+    uint     miscompares = 0;
+    uint     first_bad = 0;
+    uint     dots = 0;
+    uint64_t time_start;
+    uint64_t time_end;
+    int      errs = 0;
+
+    rbuf = AllocMem(rbuf_size, MEMF_PUBLIC);
+    if (rbuf == NULL) {
+        printf("Failed to allocate %u bytes\n", rbuf_size);
+        return (1);
+    }
+
+    fw_progress_start("Verifying");
+    time_start = smash_time();
+
+    for (offset = 0; offset < fw_size; offset += len) {
+        if (is_user_abort()) {
+            errs++;
+            break;
+        }
+        len = fw_read_chunk(offset, fw_size, rbuf, &retries);
+        if (len == 0) {
+            errs++;
+            break;
+        }
+        for (pos = 0; pos < len; pos++) {
+            if (rbuf[sizeof (ks_fw_rw_t) + pos] != fbuf[offset + pos]) {
+                if (miscompares++ == 0)
+                    first_bad = offset + pos;
+            }
+        }
+        fw_progress(offset + len, fw_size, &dots);
+    }
+    time_end = smash_time();
+    fw_progress_end(errs);
+    FreeMem(rbuf, rbuf_size);
+
+    if (retries != 0)
+        printf("%u read retries were required\n", retries);
+    if (errs != 0) {
+        printf("Firmware verify incomplete\n");
+    } else if (miscompares != 0) {
+        printf("Kicksmash firmware does not match %s: %u bytes differ, "
+               "first at offset 0x%x\n", filename, miscompares, first_bad);
+        errs++;
+    } else {
+        printf("Verified %u bytes of firmware with %s", fw_size, filename);
+        fw_show_rate(time_start, time_end, fw_size);
+    }
+    return (errs ? 1 : 0);
+}
+
+/*
+ * cmd_fwverify
+ * ------------
+ * Compare a firmware image file with the firmware in Kicksmash flash.
+ * If the version, build date/time, or size reported by KS_CMD_ID differ
+ * from the file, they are reported as not matching without reading the
+ * flash. Otherwise, the flash is read with KS_CMD_FW_READ and compared.
+ */
+static int
+cmd_fwverify(int argc, char *argv[])
+{
+    const char *filename;
+    smash_id_t  id;
+    smash_id_t  file_id;
+    uint8_t    *fbuf;
+    uint        fbuf_size;
+    uint        fw_size;
+    int         errs = 0;
+    int         in_updater;
+
+    if (argc < 2) {
+        printf("fwverify requires a filename argument\n");
+        return (1);
+    }
+    filename = argv[1];
+
+    if (fw_file_load(filename, &fbuf, &fbuf_size, &file_id) != 0)
+        return (1);
+    fw_size = file_id.si_size;
+
+    if (fw_identify(&id) != 0) {
+        errs++;
+        goto fwverify_end;
+    }
+
+    /*
+     * The updater reports its own version and build date/time, but the
+     * size of the firmware in flash, so only the size can be checked.
+     */
+    in_updater = fw_in_updater(&id);
+    fw_id_show(in_updater ? "Updater" : "Running", &id);
+    fw_id_show("File", &file_id);
+    if (in_updater ? (id.si_size != fw_size) : !fw_id_match(&id, &file_id)) {
+        printf("Kicksmash firmware does not match %s\n", filename);
+        errs++;
+        goto fwverify_end;
+    }
+    errs += fw_verify_image(fbuf, fw_size, filename);
+
+fwverify_end:
+    FreeMem(fbuf, fbuf_size);
+    return (errs ? 1 : 0);
+}
+
+#define FW_WRITE_CHUNK      2048  // Bytes per KS_CMD_FW_WRITE (FW_WRITE_MAX)
+#define FW_WRITE_RETRIES    5     // Attempts per firmware write transfer
+#define FW_WRITE_REPLY_MS   500   // Max time for page erase + program reply
+#define FW_REBOOT_SETTLE_MS 50    // Wait before polling a rebooting Kicksmash
+#define FW_REBOOT_POLL_MS   10    // Interval between reboot completion checks
+#define FW_REBOOT_WAIT_MS   5000  // Max time for Kicksmash to reboot
+#define FW_ROM_WAIT_MS      30000 // Max time for ROM to become normal again
+#define FW_ROM_STABLE       3     // Consecutive ROM matches required
+#define FW_ROM_CHECK_LONGS  64    // ROM longwords compared (256 bytes)
+#define FW_CIA_MS(ms)       ((ms) * 716U)  // Milliseconds to CIA ticks
+
+static uint32_t fw_rom_snap[FW_ROM_CHECK_LONGS];
+
+/*
+ * fw_irq_mask_all
+ * ---------------
+ * Raise the CPU interrupt priority mask to level 7, returning the
+ * previous status register. Must be called in Supervisor state.
+ */
+static inline uint16_t
+fw_irq_mask_all(void)
+{
+    uint16_t sr;
+    __asm__ __volatile__("move.w %%sr, %0\n\t"
+                         "ori.w  #0x0700, %%sr"
+                         : "=d" (sr) : : "cc", "memory");
+    return (sr);
+}
+
+/*
+ * fw_irq_restore
+ * --------------
+ * Restore the CPU status register saved by fw_irq_mask_all().
+ */
+static inline void
+fw_irq_restore(uint16_t sr)
+{
+    __asm__ __volatile__("move.w %0, %%sr" : : "d" (sr) : "cc", "memory");
+}
+
+/*
+ * fw_rom_snapshot
+ * ---------------
+ * Record the start of the Kickstart ROM, for comparison by fw_rom_matches().
+ */
+static void
+fw_rom_snapshot(void)
+{
+    uint pos;
+
+    for (pos = 0; pos < FW_ROM_CHECK_LONGS; pos++)
+        fw_rom_snap[pos] = *VADDR32(ROM_BASE + pos * 4);
+}
+
+/*
+ * fw_rom_matches
+ * --------------
+ * Returns non-zero if the start of the Kickstart ROM matches the
+ * snapshot taken by fw_rom_snapshot().
+ */
+static int
+fw_rom_matches(void)
+{
+    uint pos;
+
+    for (pos = 0; pos < FW_ROM_CHECK_LONGS; pos++)
+        if (*VADDR32(ROM_BASE + pos * 4) != fw_rom_snap[pos])
+            return (0);
+    return (1);
+}
+
+/*
+ * fw_reboot
+ * ---------
+ * Send KS_CMD_FW_UNLOCK (enter the firmware updater) or KS_CMD_FW_LOCK
+ * (leave the updater and start the new firmware). Either command causes
+ * the Kicksmash CPU to reset. While Kicksmash reboots, which takes some
+ * hundreds of milliseconds, its address lines which select the ROM bank
+ * are not driven, so the Kickstart ROM contents can't be trusted. No
+ * Kickstart ROM code may execute until Kicksmash has finished, so this
+ * function runs from start to finish in Supervisor state with all
+ * interrupts masked, and with the data cache and MMU disabled. It only
+ * spins on the CIA timer and talks to Kicksmash.
+ *
+ * Completion requires that the start of the ROM matches its contents
+ * from before the command, and that KS_CMD_ID reports the expected mode
+ * (updater or normal firmware). If Kicksmash doesn't finish rebooting
+ * in time, this function still waits for the ROM to be normal again
+ * before returning, as returning earlier would crash the Amiga.
+ *
+ * Returns 0 on success, otherwise an error code.
+ */
+static uint
+fw_reboot(uint16_t cmd, int want_updater, smash_id_t *id)
+{
+    uint     rc;
+    uint     rc2 = MSG_STATUS_NO_REPLY;
+    uint     waited;
+    uint     stable = 0;
+    uint     rlen;
+    uint16_t sr;
+
+    SUPERVISOR_STATE_ENTER();
+    INTERRUPTS_DISABLE();
+    CACHE_DISABLE_DATA();
+    MMU_DISABLE();
+    sr = fw_irq_mask_all();
+
+    /* Nothing below may call Kickstart ROM code */
+    fw_rom_snapshot();
+    rc = send_cmd_core(cmd, NULL, 0, NULL, 0, NULL);
+    if (rc == 0) {
+        cia_spin(FW_CIA_MS(FW_REBOOT_SETTLE_MS));
+        rc = MSG_STATUS_NO_REPLY;
+        for (waited = FW_REBOOT_SETTLE_MS; waited < FW_REBOOT_WAIT_MS;
+             waited += FW_REBOOT_POLL_MS) {
+            if (!fw_rom_matches()) {
+                stable = 0;
+            } else if (++stable >= FW_ROM_STABLE) {
+                memset(id, 0, sizeof (*id));
+                rc2 = send_cmd_core(KS_CMD_ID, NULL, 0, id, sizeof (*id),
+                                    &rlen);
+                if ((rc2 == 0) &&
+                    (!fw_in_updater(id) == !want_updater) &&
+                    fw_rom_matches()) {
+                    rc = 0;
+                    break;
+                }
+                if (rc2 == 0)
+                    rc2 = MSG_STATUS_BAD_DATA;  // Not yet in expected mode
+            }
+            cia_spin(FW_CIA_MS(FW_REBOOT_POLL_MS));
+        }
+        if (rc != 0)
+            rc = rc2;
+
+        /* Never return to Kickstart code until the ROM is normal */
+        for (waited = 0, stable = 0;
+             (stable < FW_ROM_STABLE) && (waited < FW_ROM_WAIT_MS);
+             waited += FW_REBOOT_POLL_MS) {
+            stable = fw_rom_matches() ? stable + 1 : 0;
+            cia_spin(FW_CIA_MS(FW_REBOOT_POLL_MS));
+        }
+    }
+
+    fw_irq_restore(sr);
+    CACHE_FLUSH();
+    MMU_RESTORE();
+    CACHE_RESTORE_STATE();
+    INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
+    return (rc);
+}
+
+/*
+ * cmd_fwwrite
+ * -----------
+ * Write a firmware image file to Kicksmash. The Kicksmash firmware updater
+ * is started with KS_CMD_FW_UNLOCK, the image is sent with KS_CMD_FW_WRITE,
+ * and KS_CMD_FW_LOCK restarts Kicksmash in the new firmware, which is then
+ * verified against the file.
+ */
+static int
+cmd_fwwrite(int argc, char *argv[])
+{
+    const char *filename;
+    smash_id_t  id;
+    smash_id_t  file_id;
+    ks_fw_rw_t  rhdr;
+    ks_fw_rw_t *req;
+    uint8_t    *fbuf = NULL;
+    uint8_t    *wbuf = NULL;
+    uint        wbuf_size = sizeof (ks_fw_rw_t) + FW_WRITE_CHUNK;
+    uint        fbuf_size = 0;
+    uint        fw_size;
+    uint        offset;
+    uint        rlen;
+    uint        len;
+    uint        rc = 0;
+    uint        tries;
+    uint        retries = 0;
+    uint        dots = 0;
+    uint64_t    time_start;
+    uint64_t    time_end;
+    int         errs = 0;
+
+    if (argc < 2) {
+        printf("fwwrite requires a filename argument\n");
+        return (1);
+    }
+    filename = argv[1];
+
+    if (fw_file_load(filename, &fbuf, &fbuf_size, &file_id) != 0)
+        return (1);
+    fw_size = file_id.si_size;
+
+    /* Identify the running firmware */
+    if (fw_identify(&id) != 0) {
+        errs++;
+        goto fwwrite_end;
+    }
+    fw_id_show(fw_in_updater(&id) ? "Updater" : "Running", &id);
+    fw_id_show("File", &file_id);
+    if (!fw_in_updater(&id) &&
+        ((id.si_features & SID_FEATURE_CAN_FW_UPDATE) == 0)) {
+        printf("Kicksmash firmware does not support firmware update\n");
+        errs++;
+        goto fwwrite_end;
+    }
+
+    if (!flag_yes && !are_you_sure("Write Kicksmash firmware")) {
+        errs++;
+        goto fwwrite_end;
+    }
+
+    wbuf = AllocMem(wbuf_size, MEMF_PUBLIC);
+    if (wbuf == NULL) {
+        printf("Failed to allocate %u bytes\n", wbuf_size);
+        errs++;
+        goto fwwrite_end;
+    }
+
+    /* Start the firmware updater, unless it's already running */
+    if (fw_in_updater(&id)) {
+        printf("Kicksmash firmware updater is already running\n");
+    } else {
+        rc = fw_reboot(KS_CMD_FW_UNLOCK, 1, &id);
+        if (rc != 0) {
+            printf("Kicksmash firmware updater did not start: (%s)\n",
+                   smash_err(rc));
+            errs++;
+            goto fwwrite_end;
+        }
+    }
+
+    fw_progress_start("Writing");
+    time_start = smash_time();
+
+    req = (ks_fw_rw_t *) wbuf;
+    for (offset = 0; offset < fw_size; offset += len) {
+        if (is_user_abort()) {
+            errs++;
+            break;
+        }
+        len = fw_size - offset;
+        if (len > FW_WRITE_CHUNK)
+            len = FW_WRITE_CHUNK;
+        memset(req, 0, sizeof (*req));
+        req->kfrw_offset = offset;
+        req->kfrw_size = len;
+        memcpy(wbuf + sizeof (*req), fbuf + offset, len);
+
+        /*
+         * The updater erases each flash page which begins within the
+         * write area, then programs the data, before it replies.
+         * Writes may safely be repeated.
+         */
+        for (tries = 0; tries < FW_WRITE_RETRIES; tries++) {
+            smash_reply_wait = FW_CIA_MS(FW_WRITE_REPLY_MS);
+            rc = send_cmd_retry(KS_CMD_FW_WRITE, wbuf, sizeof (*req) + len,
+                                &rhdr, sizeof (rhdr), &rlen);
+            smash_reply_wait = 0;
+            if (rc == 0)
+                break;
+            retries++;
+            if (flag_debug)
+                printf("\nFW write at offset 0x%x retry: (%s)\n",
+                       offset, smash_err(rc));
+        }
+        if (rc != 0) {
+            printf("\nFW write at offset 0x%x failed: (%s)\n",
+                   offset, smash_err(rc));
+            errs++;
+            break;
+        }
+        if ((rlen < sizeof (rhdr)) || (rhdr.kfrw_offset != offset) ||
+            (rhdr.kfrw_size != len)) {
+            printf("\nFW write at offset 0x%x bad reply: "
+                   "rlen=%u offset=0x%x size=%u\n",
+                   offset, rlen, (uint) rhdr.kfrw_offset,
+                   (uint) rhdr.kfrw_size);
+            errs++;
+            break;
+        }
+        fw_progress(offset + len, fw_size, &dots);
+    }
+    time_end = smash_time();
+    fw_progress_end(errs);
+    if (retries != 0)
+        printf("%u write retries were required\n", retries);
+    if (errs != 0) {
+        printf("Firmware write incomplete; Kicksmash updater is still "
+               "running\n");
+        goto fwwrite_end;
+    }
+    printf("Wrote %u bytes of firmware from %s", fw_size, filename);
+    fw_show_rate(time_start, time_end, fw_size);
+
+    /* Restart Kicksmash in the new firmware */
+    rc = fw_reboot(KS_CMD_FW_LOCK, 0, &id);
+    if (rc != 0) {
+        printf("Kicksmash did not restart in the new firmware: (%s)\n",
+               smash_err(rc));
+        errs++;
+        goto fwwrite_end;
+    }
+    fw_id_show("Running", &id);
+    if (!fw_id_match(&id, &file_id)) {
+        printf("Kicksmash firmware does not match %s\n", filename);
+        errs++;
+        goto fwwrite_end;
+    }
+    if (fw_verify_image(fbuf, fw_size, filename) != 0) {
+        errs++;
+        goto fwwrite_end;
+    }
+    printf("Kicksmash firmware update verified\n");
+
+fwwrite_end:
+    if (wbuf != NULL)
+        FreeMem(wbuf, wbuf_size);
+    FreeMem(fbuf, fbuf_size);
+    return (errs ? 1 : 0);
+}
+
 /*
  * exit_status() converts a command's status to a program exit code.
  *               Kicksmash status codes such as MSG_STATUS_NO_REPLY are
@@ -3233,6 +4131,13 @@ main(int argc, char *argv[])
                         break;
                     case 'Q':  // debugq: show message semaphore and queue
                         exit(exit_status(cmd_debugq()));
+                    case 'R':  // read Kicksmash firmware to file
+                        exit(exit_status(cmd_fwread(argc - arg, argv + arg)));
+                    case 'V':  // verify Kicksmash firmware with file
+                        exit(exit_status(cmd_fwverify(argc - arg,
+                                                      argv + arg)));
+                    case 'W':  // write Kicksmash firmware from file
+                        exit(exit_status(cmd_fwwrite(argc - arg, argv + arg)));
                     case 'r':  // read flash to file
                         exit(exit_status(cmd_readwrite(argc - arg, argv + arg)));
                         break;

@@ -67,9 +67,9 @@ static void SystemInit_post(void) { }
 #define SYSTEM_MEMORY_BASE 0x1fff0000  // STM32F4xx
 #endif
 
-extern uint _binary_objs_usbdfu_bin_start;
-extern uint _binary_objs_usbdfu_bin_end;
-extern uint _binary_objs_usbdfu_bin_size;
+extern uint _binary_objs_updater_bin_start;
+extern uint _binary_objs_updater_bin_end;
+extern uint _binary_objs_updater_bin_size;
 
 /* Force exceptions/interrupts to use new VTOR */
 static void dmb(void)
@@ -97,13 +97,13 @@ reset_check(void)
     } else if (persist.sp_reset_magic == RESET_TO_DFU_MAGIC) {
         persist.sp_reset_magic = 3;
 
-        uint len = ADDR8(&_binary_objs_usbdfu_bin_end) -
-                   ADDR8(&_binary_objs_usbdfu_bin_start);
+        uint len = ADDR8(&_binary_objs_updater_bin_end) -
+                   ADDR8(&_binary_objs_updater_bin_start);
         uint32_t  addr = 0x20000000;  // SRAM Base
         uint32_t *base = ADDR32(addr);
 
         /* Copy USB DFU to SRAM */
-        memcpy(base, &_binary_objs_usbdfu_bin_start, len);
+        memcpy(base, &_binary_objs_updater_bin_start, len);
 
         /* Set the vector table pointer */
         SCB_VTOR = addr;
@@ -131,6 +131,7 @@ reset_check(void)
 void
 reset_cpu(void)
 {
+    persist.sp_reset_magic = 0;
     scb_reset_system();
 }
 

@@ -9,12 +9,13 @@
  * M29F160xT / MX29F800x specific code (read, write, erase, status, etc).
  */
 
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
 #include "board.h"
 #include "main.h"
 #include "printf.h"
 #include "uart.h"
-#include <stdbool.h>
-#include <string.h>
 #include "m29f160xt.h"
 #include "irq.h"
 #include "utils.h"
@@ -26,6 +27,7 @@
 #include "config.h"
 #include "kbrst.h"
 #include "msg.h"
+#include "persist.h"
 #include <libopencm3/stm32/dma.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/timer.h>
@@ -1467,6 +1469,8 @@ ee_set_bank(uint8_t bank)
             ee_address_override((bank << 4) | 0x0, 0);
             break;
     }
+    persist.sp_bank_current = bank;
+    persist.sp_bank_merge = config.bi.bi_merge[bank];
 
     config.bi.bi_bank_current = bank;
     config.bi.bi_bank_nextreset = 0xff;

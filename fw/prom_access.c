@@ -9,6 +9,7 @@
  * EEPROM high level access code for MX29F1615 programmer.
  */
 
+#include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
 #include "main.h"

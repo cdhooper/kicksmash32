@@ -12,3 +12,6 @@ SECTIONS
 }
 
 INCLUDE cortex-m-generic.ld
+
+/* Size in bytes of the firmware image in flash (.text through .data) */
+_fw_size = ABSOLUTE(LOADADDR(.data) + SIZEOF(.data) - ORIGIN(rom));

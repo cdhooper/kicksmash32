@@ -112,12 +112,18 @@ stm32flash_write(uint32_t addr, uint len, void *buf, uint flags)
     if (addr + len > 0x40000)
         return (RC_BAD_PARAM);
 
-    if ((flags & STM32FLASH_FLAG_AUTOERASE) &&
-        ((addr & (FL_PAGE_SIZE - 1)) == 0)) {
-        /* Write at the start of a page */
-        rc = stm32flash_erase(addr, len);
-        if (rc != 0)
-            return (rc);
+    if (flags & STM32FLASH_FLAG_AUTOERASE) {
+        /*
+         * Erase each page which begins within the area to be written.
+         * A page which begins before the write area is not erased, as
+         * it may hold data written by a previous call.
+         */
+        uint32_t page = (addr + FL_PAGE_SIZE - 1) & ~(FL_PAGE_SIZE - 1);
+        if (page < addr + len) {
+            rc = stm32flash_erase(page, addr + len - page);
+            if (rc != 0)
+                return (rc);
+        }
     }
     addr += FLASH_BASE;
 

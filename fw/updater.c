@@ -7,6 +7,8 @@
  * GNU Lesser General Public License.
  */
 
+typedef unsigned int uint;
+
 #include <string.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/gpio.h>
@@ -16,18 +18,37 @@
 #include <libopencm3/usb/dfu.h>
 #include <libopencm3/stm32/usart.h>
 #include "clock.h"
+#include "timer.h"
 #include "gd32f107_usb.h"
+#include "persist.h"
+#include "printf.h"
+#include "uart.h"
+#include "gpio.h"
+#include "msg.h"
 
+#define CONSOLE_USART USART1
+
+#define BIT(x)      (1U << (x))
 #define ADDR8(x)    ((uint8_t *)  ((uintptr_t)(x)))
 #define STM32_UDID_LEN                  12    // 96 bits
 #define STM32_UDID_BASE                 DESIG_UNIQUE_ID_BASE
 
+uint8_t usb_serial_str[32];
+
 #define UART_DEBUG
 #ifdef UART_DEBUG
-int sprintf(char *buf, const char *fmt, ...);
-int sprintf(char *buf, const char *fmt, ...)
+int
+sprintf(char *buf, const char *fmt, ...)
 {
     strcpy(buf, fmt);
+    return (0);
+}
+
+__attribute__((format(__printf__, 1, 2)))
+int
+printf(const char *fmt, ...)
+{
+    uart_puts(fmt);
     return (0);
 }
 
@@ -70,17 +91,16 @@ static void
 uart_putc(int ch)
 {
     if (ch == '\n')
-        uart_send_blocking(USART1, '\r');
-    uart_send_blocking(USART1, (uint16_t) ch);
+        uart_send_blocking(CONSOLE_USART, '\r');
+    uart_send_blocking(CONSOLE_USART, (uint16_t) ch);
 }
 
-void uart_putchar(int ch);
-void uart_putchar(int ch)
+void
+uart_putchar(int ch)
 {
     uart_putc(ch);
 }
 
-void uart_puts(const char *str);
 void
 uart_puts(const char *str)
 {
@@ -88,7 +108,16 @@ uart_puts(const char *str)
         uart_putc(*(str++));
 }
 
-static void
+static int
+uart_getchar(void)
+{
+    if (USART_SR(CONSOLE_USART) & (USART_SR_RXNE | USART_SR_ORE)) {
+        return (USART_DR(CONSOLE_USART) & USART_DR_MASK);
+    }
+    return (-1);
+}
+
+void
 uart_puthex(uint32_t x)
 {
     uint32_t digit;
@@ -102,7 +131,7 @@ uart_puthex(uint32_t x)
     uart_puts(ptr);
 }
 
-static void
+void
 uart_init(void)
 {
     gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_50_MHZ,
@@ -123,13 +152,13 @@ uart_init(void)
     gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO7);
 
     /* Setup UART parameters. */
-    usart_set_baudrate(USART1, 115200);
-    usart_set_databits(USART1, 8);
-    usart_set_stopbits(USART1, USART_STOPBITS_1);
-    usart_set_mode(USART1, USART_MODE_TX_RX);
-    usart_set_parity(USART1, USART_PARITY_NONE);
-    usart_set_flow_control(USART1, USART_FLOWCONTROL_NONE);
-    usart_enable(USART1);
+    usart_set_baudrate(CONSOLE_USART, 115200);
+    usart_set_databits(CONSOLE_USART, 8);
+    usart_set_stopbits(CONSOLE_USART, USART_STOPBITS_1);
+    usart_set_mode(CONSOLE_USART, USART_MODE_TX_RX);
+    usart_set_parity(CONSOLE_USART, USART_PARITY_NONE);
+    usart_set_flow_control(CONSOLE_USART, USART_FLOWCONTROL_NONE);
+    usart_enable(CONSOLE_USART);
 }
 #endif /* UART_DEBUG */
 
@@ -163,7 +192,7 @@ static uint8_t usbd_control_buffer[2048];
 static enum dfu_state usbdfu_state = STATE_DFU_IDLE;
 
 static struct {
-    uint8_t buf[sizeof(usbd_control_buffer)];
+    uint8_t buf[sizeof (usbd_control_buffer)];
     uint16_t len;
     uint32_t addr;
     uint16_t blocknum;
@@ -187,7 +216,7 @@ const struct usb_device_descriptor dev = {
 };
 
 const struct usb_dfu_descriptor dfu_function = {
-    .bLength = sizeof(struct usb_dfu_descriptor),
+    .bLength = sizeof (struct usb_dfu_descriptor),
     .bDescriptorType = DFU_FUNCTIONAL,
     .bmAttributes = USB_DFU_CAN_DOWNLOAD | USB_DFU_WILL_DETACH,
     .wDetachTimeout = 255,
@@ -205,12 +234,14 @@ const struct usb_interface_descriptor iface = {
     .bInterfaceSubClass = 1,
     .bInterfaceProtocol = 2,
 
-    /* The ST Microelectronics DfuSe application needs this string.
-     * The format isn't documented... */
+    /*
+     * The ST Microelectronics DfuSe application needs this string.
+     * The format isn't documented...
+     */
     .iInterface = 4,
 
     .extra = &dfu_function,
-    .extralen = sizeof(dfu_function),
+    .extralen = sizeof (dfu_function),
 };
 
 const struct usb_interface ifaces[] = {
@@ -332,15 +363,29 @@ usbdfu_getstatus(uint32_t *bwPollTimeout)
 {
     switch (usbdfu_state) {
         case STATE_DFU_DNLOAD_SYNC:
+            /*
+             * The operation is performed in usbdfu_getstatus_complete()
+             * and the next request isn't answered until it is done, so
+             * the host may poll early without harm. Request roughly the
+             * typical time for the operation, so the host doesn't sit
+             * idle after it has finished.
+             */
             usbdfu_state = STATE_DFU_DNBUSY;
-            *bwPollTimeout = 100;
-            return DFU_STATUS_OK;
+            if (prog.blocknum != 0) {
+                /* Program half-words: ~53 usec each (STM32F1 typical) */
+                *bwPollTimeout = (prog.len / 2) * 53 / 1000 + 1;
+            } else if (prog.buf[0] == CMD_ERASE) {
+                *bwPollTimeout = 25;  // Page erase (STM32F1 20-40 ms)
+            } else {
+                *bwPollTimeout = 0;   // Set address: nothing to wait for
+            }
+            return (DFU_STATUS_OK);
         case STATE_DFU_MANIFEST_SYNC:
             /* Device will reset when read is complete. */
             usbdfu_state = STATE_DFU_MANIFEST;
-            return DFU_STATUS_OK;
+            return (DFU_STATUS_OK);
         default:
-            return DFU_STATUS_OK;
+            return (DFU_STATUS_OK);
     }
 }
 
@@ -349,8 +394,8 @@ usbdfu_getstatus_complete(usbd_device *usbd_dev, struct usb_setup_data *req)
 {
     static uint8_t lstate;
     int i;
-    (void)req;
-    (void)usbd_dev;
+    (void) req;
+    (void) usbd_dev;
 
     switch (usbdfu_state) {
         case STATE_DFU_DNBUSY:
@@ -400,7 +445,8 @@ usbdfu_getstatus_complete(usbd_device *usbd_dev, struct usb_setup_data *req)
         case STATE_DFU_MANIFEST:
             /* USB device must detach, we just reset... */
             uart_puts("\nReset\n");
-            uart_wait_done(USART1);
+            msg_shutdown();
+            uart_wait_done(CONSOLE_USART);
             scb_reset_system();
             break; /* Will never return. */
         case STATE_DFU_IDLE:
@@ -424,10 +470,10 @@ usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *req,
                        void (**complete)(usbd_device *usbd_dev,
                                          struct usb_setup_data *req))
 {
-    (void)usbd_dev;
+    (void) usbd_dev;
 
     if ((req->bmRequestType & 0x7F) != 0x21)
-        return USBD_REQ_NOTSUPP; /* Only accept class request. */
+        return (USBD_REQ_NOTSUPP); /* Only accept class request. */
 
     switch (req->bRequest) {
         case DFU_DNLOAD:
@@ -440,21 +486,23 @@ usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *req,
                 memcpy(prog.buf, *buf, *len);
                 usbdfu_state = STATE_DFU_DNLOAD_SYNC;
             }
-            return USBD_REQ_HANDLED;
+            return (USBD_REQ_HANDLED);
         case DFU_CLRSTATUS:
             uart_puts("CLRSTATUS\n");
             /* Clear error and return to dfuIDLE. */
             if (usbdfu_state == STATE_DFU_ERROR)
                 usbdfu_state = STATE_DFU_IDLE;
-            return USBD_REQ_HANDLED;
+            return (USBD_REQ_HANDLED);
         case DFU_ABORT:
             /* Abort returns to dfuIDLE state. */
-            uart_puts("\nDone");
-            usbdfu_state = STATE_DFU_IDLE;
-            return USBD_REQ_HANDLED;
+            if (usbdfu_state != STATE_DFU_IDLE) {
+                usbdfu_state = STATE_DFU_IDLE;
+                uart_puts("\nDone");
+            }
+            return (USBD_REQ_HANDLED);
         case DFU_UPLOAD:
             /* Upload not supported for now. */
-            return USBD_REQ_NOTSUPP;
+            return (USBD_REQ_NOTSUPP);
         case DFU_GETSTATUS: {
             uint32_t bwPollTimeout = 0; /* 24-bit integer in DFU class spec */
             (*buf)[0] = usbdfu_getstatus(&bwPollTimeout);
@@ -465,22 +513,22 @@ usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *req,
             (*buf)[5] = 0; /* iString not used here */
             *len = 6;
             *complete = usbdfu_getstatus_complete;
-            return USBD_REQ_HANDLED;
+            return (USBD_REQ_HANDLED);
         }
         case DFU_GETSTATE:
             /* Return state with no state transision. */
             *buf[0] = usbdfu_state;
             *len = 1;
-            return USBD_REQ_HANDLED;
+            return (USBD_REQ_HANDLED);
     }
 
-    return USBD_REQ_NOTSUPP;
+    return (USBD_REQ_NOTSUPP);
 }
 
 static void
 usbdfu_set_config(usbd_device *usbd_dev, uint16_t wValue)
 {
-    (void)wValue;
+    (void) wValue;
 
     usbd_register_control_callback(
                 usbd_dev,
@@ -489,24 +537,93 @@ usbdfu_set_config(usbd_device *usbd_dev, uint16_t wValue)
                 usbdfu_control_request);
 }
 
+/*
+ * ee_address_override
+ * -------------------
+ * Override the Flash A17, A18 and A19 address
+ *
+ * override = 0  Record new override
+ * override = 1  Temporarily disable override
+ * override = 2  Restore previous override
+ *
+ * bits
+ *   0    1=Drive A17
+ *   1    1=Drive A18
+ *   2    1=Drive A19
+ *   3    Unused
+ *   4    A17 driven value
+ *   5    A18 driven value
+ *   6    A19 driven value
+ *   7    Unused
+ */
+static void
+address_override(uint8_t bits)
+{
+    uint           bit;
+    static const uint32_t ports[] =
+                          { FLASH_A17_PORT, FLASH_A18_PORT, FLASH_A19_PORT };
+    static const uint32_t pins[]  =
+                          { FLASH_A17_PIN,  FLASH_A18_PIN,  FLASH_A19_PIN };
+
+    for (bit = 0; bit < 3; bit++) {
+        uint32_t port  = ports[bit];
+        uint16_t pin   = pins[bit];
+        if (bits & BIT(bit)) {
+            /* Drive address pin */
+            uint     shift = (bits & BIT(bit + 4)) ? 0 : 16;
+            gpio_set_mode(port, GPIO_MODE_OUTPUT_50_MHZ,
+                          GPIO_CNF_OUTPUT_PUSHPULL, pin);
+            GPIO_BSRR(port) = pin << shift;
+        } else {
+            /* Disable drive */
+            gpio_set_mode(port, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, pin);
+        }
+    }
+}
+
+static void
+set_bank(uint8_t bank)
+{
+    /*
+     * sp_bank_merge tells what bits of A17, A18, and A19 to force.
+     * If the width of the bank is 8, then none are forced.
+     * If the width of the bank is 4, then A19 is forced.
+     * If the width of the bank is 2, then A19 and A18 are forced.
+     * If the width of the bank is 1, then A19, A18, and A17 are forced.
+     */
+    switch (persist.sp_bank_merge >> 4) {
+        case 0:  // 512KB bank (width 1)
+            address_override((bank << 4) | 0x7);
+            break;
+        case 1:  // 1MB bank (width 2)
+            address_override((bank << 4) | 0x6);
+            break;
+        case 2:  // 2MB bank (width 4)
+            address_override((bank << 4) | 0x4);
+            break;
+        case 3:  // 4MB bank (width 8)
+            address_override((bank << 4) | 0x0);
+            break;
+    }
+}
+
 void
 main(void)
 {
+    uint run_count = 0;
     usbd_device *usbd_dev;
-    static uint8_t usb_serial_str[32];
-    int led_state = 0;
 
     rcc_periph_clock_enable(RCC_GPIOA);
+    rcc_periph_clock_enable(RCC_GPIOB);
+    rcc_periph_clock_enable(RCC_GPIOC);
+    rcc_periph_clock_enable(RCC_GPIOD);
+    rcc_periph_clock_enable(RCC_GPIOE);
 
-#if 0
-    /* Internal clock might not be accurate enough for USB */
-    rcc_clock_setup_pll(&rcc_hsi_configs[RCC_CLOCK_HSI_48MHZ]);
-#else
-    /* Use 8 MHz external clock */
+    persist_init();
+    set_bank(persist.sp_bank_current);
     clock_init();
-#endif
+    timer_init();  // Needed for KS_CMD_UPTIME, msg timeouts, and delays
 
-    rcc_periph_clock_enable(RCC_GPIOA);
     rcc_periph_clock_enable(RCC_AFIO);
 
     uart_init();
@@ -514,11 +631,16 @@ main(void)
 
     /* POWER_LED, FLASH_OEWE, FLASH_OE, FLASH_WE */
     gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
-                  GPIO_CNF_OUTPUT_PUSHPULL, GPIO8 | GPIO9 | GPIO13 | GPIO14);
-    gpio_set(GPIOB, GPIO13);  // FLASH_OE (flash read LED will be dim)
+                  GPIO_CNF_OUTPUT_PUSHPULL, GPIO8 | GPIO9 | GPIO14);
     gpio_set(GPIOB, GPIO14);  // FLASH_WE
+#if 0
+    gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
+                  GPIO_CNF_OUTPUT_PUSHPULL, GPIO13);
+    gpio_set(GPIOB, GPIO13);  // FLASH_OE (flash read LED will be dim)
+#endif
     set_flashled(0);          // Flash write LED off
     set_powerled(1);          // Power LED on
+    msg_init();
 
     rcc_periph_clock_enable(RCC_OTGFS);
 
@@ -535,16 +657,23 @@ main(void)
         driver = &stm32f107_usb_driver;
     }
     usbd_dev = usbd_init(driver, &dev, &config, usb_strings,
-                         4, usbd_control_buffer, sizeof(usbd_control_buffer));
+                         4, usbd_control_buffer, sizeof (usbd_control_buffer));
     usbd_register_set_config_callback(usbd_dev, usbdfu_set_config);
 
     while (1) {
-        set_powerled(((led_state++) & 0x000000ff) ? 0 : 1);  // flicker
+        set_powerled((run_count & 0x000000ff) ? 0 : 1);  // flicker
         usbd_poll(usbd_dev);
+        msg_poll();
+        if ((run_count & 0x000000ff) == 0) {
+            if (uart_getchar() == 0x03) {  // ^C
+                uart_puts("^C Abort.\n");
+                goto finish;
+            }
+        }
+        run_count++;
     }
-}
-
-void timer_delay_usec(unsigned int usec);
-void timer_delay_usec(unsigned int usec)
-{
+finish:
+    msg_shutdown();
+    uart_wait_done(CONSOLE_USART);
+    scb_reset_system();
 }

@@ -35,6 +35,9 @@ void msg_init(void);
 extern const uint32_t lcrc32_table[];
 #endif
 extern void (*ecia_spin)(unsigned int ticks);
+#if !defined(ROMFS) && !defined(STANDALONE)
+extern uint smash_reply_wait;  // Extra CIA ticks to wait for a slow reply
+#endif
 extern uint (*esend_cmd_core)(uint16_t cmd, void *arg, uint16_t arglen,
                               void *reply, uint replymax, uint *replyalen);
 uint send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,

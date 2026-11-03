@@ -9,6 +9,7 @@
  * Amiga KBRST handling
  */
 
+#include <stdint.h>
 #include "board.h"
 #include "main.h"
 #include "gpio.h"

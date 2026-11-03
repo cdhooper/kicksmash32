@@ -7,7 +7,8 @@ SRCS   := main.c clock.c gpio.c printf.c timer.c uart.c usb.c version.c \
 	  led.c irq.c mem_access.c readline.c cmdline.c cmds.c pcmds.c \
 	  prom_access.c m29f160xt.c utils.c crc32.c adc.c kbrst.c scanf.c \
 	  pin_tests.c stm32flash.c config.c msg.c gd32f107_usb.c persist.c
-USRCS  := usbdfu.c clock.c gd32f107_usb.c
+USRCS  := updater.c clock.c gd32f107_usb.c persist.c updater_msg.c \
+	  crc32.c timer.c version.c stm32flash.c
 
 OBJDIR := objs
 OBJS   := $(SRCS:%.c=$(OBJDIR)/%.o)
@@ -37,7 +38,7 @@ OPENCM3_HEADER := $(OPENCM3_DIR)/include/libopencm3/stm32/rcc.h
 
 # Our output name
 BINARY = $(OBJDIR)/fw
-UBINARY = $(OBJDIR)/usbdfu
+UBINARY = $(OBJDIR)/updater
 
 # Linker script for our MCU
 LDSCRIPT = stm32f1.ld  # Also works for STM32F4
@@ -181,19 +182,19 @@ $(OBJDIR)/%.list: $(OBJDIR)/%.elf
 
 $(OBJDIR)/%.map: $(OBJDIR)/%.elf
 
-DFUBIN_OBJ := $(OBJDIR)/usbdfu_bin.o
+DFUBIN_OBJ := $(OBJDIR)/updater_bin.o
 $(BINARY).elf: $(DFUBIN_OBJ)
 $(OBJDIR)/%.elf: $(OBJS) $(LDSCRIPT) $(OPENCM3_LIB)
 	@echo Building $@
 	$(QUIET)$(LD) $(TGT_LDFLAGS) $(LDFLAGS) $(OBJS) $(DFUBIN_OBJ) $(LDLIBS) -o $@
 
-# Stand-alone program usbdfu:
-# usbdfu.c CC-> usbdfu.o LINK-> usbdfu.elf OC-> usbdfu.bin OC->
-# usbdfu_bin_temp.o OC-> usbdfu_bin.o   which gets linked with
+# Stand-alone program updater:
+# updater.c CC-> updater.o LINK-> updater.elf OC-> updater.bin OC->
+# updater_bin.t.o OC-> updater_bin.o   which gets linked with
 # $(OBJS) to finally create fw.elf and fw.bin
-$(UBINARY).elf: $(UOBJS) usbdfu.ld $(OPENCM3_LIB)
+$(UBINARY).elf: $(UOBJS) updater.ld $(OPENCM3_LIB)
 	@echo Building $@
-	$(QUIET)$(LD) --static -nostartfiles -nostdlib -Tusbdfu.ld -mthumb -mcpu=cortex-m3 -msoft-float -ggdb3 -Wl,-Map=$(UBINARY).map -Wl,--cref -Wl,--gc-sections -L$(OPENCM3_DIR)/lib $(UOBJS) $(LDLIBS) -o $@
+	$(QUIET)$(LD) --static -nostartfiles -nostdlib -Tupdater.ld -mthumb -mcpu=cortex-m3 -msoft-float -ggdb3 -Wl,-Map=$(UBINARY).map -Wl,--cref -Wl,--gc-sections -L$(OPENCM3_DIR)/lib $(UOBJS) $(LDLIBS) -o $@
 
 $(DFUBIN_OBJ): $(UBINARY).bin Makefile
 	@echo Building $@
@@ -204,8 +205,8 @@ $(DFUBIN_OBJ): $(UBINARY).bin Makefile
 #     arm-none-eabi-ld --print-output-format
 # Get argument options for objcopy -B
 #     arm-none-eabi-ld --verbose | sed -n 's/OUTPUT_ARCH(\([^()*]*\))/\1/p'
-# Show sections and symbols in usbdfu_bin.o
-#     arm-none-eabi-objdump -x objs/usbdfu_bin.o
+# Show sections and symbols in updater_bin.o
+#     arm-none-eabi-objdump -x objs/updater_bin.o
 
 $(OBJDIR)/%.o: %.c
 	@echo Building $@
@@ -231,7 +232,7 @@ $(OBJDIR)/%.size: $(OBJDIR)/%.elf
     } \
 	{printf("%10s %8s\n", $$1, human($$2))} \
 '
-$(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o, $(OBJS))
+$(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o, $(OBJS) $(UOBJS))
 
 $(OBJS) $(UOBJS): Makefile $(OPENCM3_HEADER) | $(OBJDIR)
 

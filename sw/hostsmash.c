@@ -6,7 +6,7 @@
  *
  * ---------------------------------------------------------------------
  *
- * UNIX side to interact with MX29F1615 programmer and Amiga Kicksmash
+ * UNIX side to interact with Amiga Kicksmash
  */
 
 #define _GNU_SOURCE
@@ -56,6 +56,7 @@ typedef unsigned int uint;
 #include "hostsmash.h"
 #include "hostsmash_fs.h"
 #include "hostsmash_net.h"
+#include "hostsmash_dfu.h"
 
 #define MSG_DEBUG
 #ifndef MSG_DEBUG
@@ -75,6 +76,10 @@ static const struct option long_opts[] = {
     { "debugnet", no_argument,       NULL, 0x80 + 'n' },
     { "erase",    no_argument,       NULL, 'e' },
     { "fill",     no_argument,       NULL, 'f' },
+    { "fwread",   required_argument, NULL, 'R' },
+    { "fwupdate", required_argument, NULL, 'W' },
+    { "fwverify", required_argument, NULL, 'F' },
+    { "fwwrite",  required_argument, NULL, 'W' },
     { "identify", no_argument,       NULL, 'i' },
     { "help",     no_argument,       NULL, 'h' },
     { "len",      required_argument, NULL, 'l' },
@@ -82,6 +87,7 @@ static const struct option long_opts[] = {
     { "Mount",    required_argument, NULL, 'M' },
     { "net",      required_argument, NULL, 'n' },
     { "read",     no_argument,       NULL, 'r' },
+    { "serial",   required_argument, NULL, 0x80 + 'S' },
     { "swap",     required_argument, NULL, 's' },
     { "term",     no_argument,       NULL, 't' },
     { "verify",   no_argument,       NULL, 'v' },
@@ -99,6 +105,7 @@ static char short_opts[] = {
     'b', ':',    // --bank <num>
     'c', ':',    // --clock [show|set]
     'D', ':',    // --delay <num>
+    'F', ':',    // --fwverify <filename>
     'd', ':',    // --device <filename>
     'e',         // --erase
     'f',         // --fill
@@ -109,9 +116,11 @@ static char short_opts[] = {
     'M', ':',    // --Mount <vol> <dir>
     'n', ':',    // --net <args>
     'r',         // --read <filename>
+    'R', ':',    // --fwread <filename>
     's', ':',    // --swap <mode>
     't',         // --term
     'v',         // --verify <filename>
+    'W', ':',    // --fwwrite <filename>
     'w',         // --write <filename>
     'y',         // --yes
     '\0'
@@ -133,6 +142,7 @@ static const char usage_text[] =
 "       --debugmsg           debug Amiga messages\n"
 "       --debugnet           debug network operations\n"
 "    -e --erase              erase EEPROM (use -a <addr> for sector erase)\n"
+"    -F --fwverify <filename> verify Kicksmash firmware matches file\n"
 "    -f --fill               fill EEPROM with duplicates of the same image\n"
 "    -h --help               display usage\n"
 "    -i --identify           identify installed EEPROM\n"
@@ -143,8 +153,12 @@ static const char usage_text[] =
 "                            -n macvtap or -n \"-d macvtap eth0\"\n"
 "                            (see hostsmash_netif -h)\n"
 "    -r --read <filename>    read EEPROM and write to file\n"
+"    -R --fwread <filename>  read Kicksmash firmware and write to file\n"
 "    -s --swap <mode>        byte swap mode (2301, 3210, 1032, noswap=0123)\n"
+"       --serial <serial>    select Kicksmash by USB serial number (or, for\n"
+"                            --fwwrite to a DFU device, by USB port path)\n"
 "    -v --verify <filename>  verify file matches EEPROM contents\n"
+"    -W --fwwrite <filename> write Kicksmash firmware from file (DFU)\n"
 "    -w --write <filename>   read file and write to EEPROM\n"
 "    -t --term [<command>]   operate in terminal mode (CLI) to KickSmash\n"
 "    -y --yes                answer all prompts with 'yes'\n"
@@ -219,6 +233,9 @@ netprintf(const char *fmt, ...)
 #define MODE_CLOCK_SET 0x0200
 #define MODE_ID_KS     0x0400
 #define MODE_VERSION   0x0800
+#define MODE_FWREAD    0x1000
+#define MODE_FWVERIFY  0x2000
+#define MODE_FWWRITE   0x4000
 
 /* XXX: Need to register USB device ID at http://pid.codes */
 #define MX_VENDOR 0x1209
@@ -321,6 +338,8 @@ static uint             swapmode          = SWAPMODE_AUTO;
 static uint             kicksmash_mode    = KICKSMASH_MODE_AUTO;
 static char            *terminal_cmd      = NULL;
 static uint             amiga_net_service = 0;
+static bool             reopen_quiet      = FALSE;  // Hide reopen messages
+static bool             cmd_quiet         = FALSE;  // Hide CMD: timeout
 
 #ifdef __MINGW32__
 #define UNUSED(x) (void)(x)
@@ -1170,7 +1189,7 @@ reopen_dev(void)
         CloseHandle(dev_handle);
         dev_handle = INVALID_HANDLE_VALUE;
     }
-    if (now - last_time > 5) {
+    if (!reopen_quiet && (now - last_time > 5)) {
         printed = TRUE;
         printf("\n<< Closed %s >>", device_name);
         fflush(stdout);
@@ -1199,7 +1218,7 @@ top:
     }
 
     now = time(NULL);
-    if (now - last_time > 5) {
+    if (!reopen_quiet && (now - last_time > 5)) {
         if (printed == FALSE)
             printf("\n");
         printf("\r<< Reopened %s >>\n", device_name);
@@ -1226,7 +1245,7 @@ reopen_dev(void)
             warnx("Failed to release exclusive lock on %s", device_name);
         close(temp);
     }
-    if (now - last_time > 5) {
+    if (!reopen_quiet && (now - last_time > 5)) {
         printed = TRUE;
         printf("\n<< Closed %s >>", device_name);
         fflush(stdout);
@@ -1247,7 +1266,7 @@ top:
     dev_fd = temp;
 
     now = time(NULL);
-    if (now - last_time > 5) {
+    if (!reopen_quiet && (now - last_time > 5)) {
         if (printed == FALSE)
             printf("\n");
         printf("\r<< Reopened %s >>\n", device_name);
@@ -1983,7 +2002,8 @@ send_cmd(const char *cmd)
     send_ll_str("\n");         // ^M  (request new command prompt)
 
     if (wait_for_text("CMD>", 500)) {
-        warnx("CMD: timeout");
+        if (!cmd_quiet)
+            warnx("CMD: timeout");
         return (1);
     }
 
@@ -3133,14 +3153,8 @@ run_terminal_mode(void)
 #define LINUX_BY_ID_DIR "/dev/serial/by-id"
 
 /*
- * find_mx_programmer() will attempt to locate tty device associated with USB
- *                      connection of the MX25F1615 programmer. If found, it
- *                      will update the device_name[] global with the file
- *                      path to the serial interface.
- *
- * @param  [in]  None.
- * @global [out] device_name[] is the located path of the programmer (if found).
- * @return       None.
+ * Locating the tty device associated with the USB connection of Kicksmash
+ * (ks_port_list() and find_mx_programmer()).
  *
  * OS-specific implementation notes are below
  * Linux
@@ -3164,8 +3178,7 @@ run_terminal_mode(void)
  *         From the above, one could use /dev/bus/usb/001/031 to open a
  *              serial device which corresponds to the installed USB host.
  *              Unfortunately, the "../../../../" is not consistent across
- *              USB devices. The ACM device of the MX29F1615 programmer
- *              has a depth of "../../../" from the appropriate uevent file.
+ *              USB devices.
  *      Additionally on Linux, one could
  *          Walk USB busses/devices and search for the programmer.
  *          Then use /dev/bus/usb/<dirname>/<filename> to find the unique
@@ -3194,71 +3207,177 @@ run_terminal_mode(void)
  *          only if that port is currently present in
  *          HARDWARE\DEVICEMAP\SERIALCOMM (i.e. the device is plugged in
  *          now, not merely remembered from a prior connection).
+ *          The instance ID of the USB device is its serial number; a
+ *          composite device's COM port is under an interface instance
+ *          which is named with the device's ParentIdPrefix value.
  *          If exactly one Kicksmash is present, auto-select it; if several
  *          are present, list the COM ports and require the user to pass -d.
  */
+/* A Kicksmash serial port on the host */
+typedef struct {
+    char path[PATH_MAX];  // Device path to open
+    char serial[64];      // USB serial number (empty if unknown)
+    char usbpath[32];     // USB port path, Linux only (empty if unknown)
+} ks_port_t;
+
+#define KS_PORTS_MAX 16
+
+static char select_serial[64];  // --serial: select device by serial number
+
+#ifdef LINUX
+/*
+ * ks_sysfs_read() reads a one-line sysfs attribute into buf.
+ */
 static void
-find_mx_programmer(void)
+ks_sysfs_read(const char *dir, const char *attr, char *buf, size_t buflen)
 {
+    char  path[PATH_MAX + 32];
+    FILE *fp;
+
+    buf[0] = '\0';
+    snprintf(path, sizeof (path), "%s/%s", dir, attr);
+    fp = fopen(path, "r");
+    if (fp == NULL)
+        return;
+    if (fgets(buf, buflen, fp) == NULL)
+        buf[0] = '\0';
+    fclose(fp);
+    buf[strcspn(buf, "\r\n")] = '\0';
+}
+#endif
+
+/*
+ * ks_port_list() returns the Kicksmash serial ports currently attached.
+ *
+ * @param [out] ports - Array to receive port information.
+ * @param [in]  max   - Maximum number of ports to return.
+ *
+ * @return      Number of ports found.
+ */
+static uint
+ks_port_list(ks_port_t *ports, uint max)
+{
+    uint nports = 0;
 #ifdef LINUX
     /*
      * For Linux, walk /dev/serial/by-id looking for a name which matches
-     * the programmer.
+     * the programmer. The same device may appear more than once (usb-
+     * and pci- prefixes), so ports are de-duplicated by tty device. The
+     * USB serial number and port path come from sysfs.
      */
-    DIR *dirp;
+    char           ttys[KS_PORTS_MAX][PATH_MAX];
+    DIR           *dirp;
     struct dirent *dent;
+    uint           pos;
+
     dirp = opendir(LINUX_BY_ID_DIR);
     if (dirp == NULL)
-        return;  // Old version of Linux?
-    while ((dent = readdir(dirp)) != NULL) {
-        if ((strstr(dent->d_name, "MX29F1615") != 0) ||
-            (strstr(dent->d_name, "KickSmash") != 0)) {
-            snprintf(device_name, sizeof (device_name), "%s/%s",
-                     LINUX_BY_ID_DIR, dent->d_name);
-            closedir(dirp);
-            printf("Using %s\n", device_name);
-            return;
+        return (0);  // Old version of Linux?
+    while (((dent = readdir(dirp)) != NULL) && (nports < max) &&
+           (nports < KS_PORTS_MAX)) {
+        char        link[PATH_MAX];
+        char        tty[PATH_MAX];
+        char        sysdev[PATH_MAX];
+        char        usbdev[PATH_MAX];
+        const char *tname;
+        char       *ptr;
+
+        if ((strstr(dent->d_name, "MX29F1615") == NULL) &&
+            (strstr(dent->d_name, "KickSmash") == NULL)) {
+            continue;
         }
+        if (((size_t) snprintf(link, sizeof (link), "%s/%s", LINUX_BY_ID_DIR,
+                               dent->d_name) >= sizeof (link)) ||
+            (realpath(link, tty) == NULL)) {
+            continue;
+        }
+        for (pos = 0; pos < nports; pos++)
+            if (strcmp(ttys[pos], tty) == 0)
+                break;
+        if (pos < nports) {
+            /* Duplicate: prefer the usb- name */
+            if (strncmp(dent->d_name, "usb-", 4) == 0)
+                strcpy(ports[pos].path, link);
+            continue;
+        }
+        strcpy(ttys[nports], tty);
+        memset(&ports[nports], 0, sizeof (ports[nports]));
+        strcpy(ports[nports].path, link);
+
+        /* /sys/class/tty/ttyACM0/device -> .../1-6.1.6/1-6.1.6:1.0 */
+        tname = strrchr(tty, '/');
+        tname = (tname == NULL) ? tty : tname + 1;
+        if (((size_t) snprintf(link, sizeof (link), "/sys/class/tty/%s/device",
+                               tname) < sizeof (link)) &&
+            (realpath(link, sysdev) != NULL)) {
+            strcpy(usbdev, sysdev);
+            ptr = strrchr(usbdev, '/');
+            if (ptr != NULL) {
+                *ptr = '\0';
+                ks_sysfs_read(usbdev, "serial", ports[nports].serial,
+                              sizeof (ports[nports].serial));
+                ptr = strrchr(usbdev, '/');
+                ptr = (ptr != NULL) ? ptr + 1 : usbdev;
+                if (strlen(ptr) < sizeof (ports[nports].usbpath))
+                    strcpy(ports[nports].usbpath, ptr);
+            }
+        }
+        nports++;
     }
     closedir(dirp);
 #endif
 #ifdef OSX
-    char buf[128];
+    char buf[256];
+    char serial[64] = "";
     bool_t saw_programmer = FALSE;
     FILE *fp = popen("ioreg -lrx -c IOUSBHostDevice", "r");
     if (fp == NULL)
-        return;
+        return (0);
 
     /*
-     * First find "MX29F1615" text and then find line with "IOCalloutDevice"
-     * to locate the path to the serial interface for the installed programmer.
+     * First find "KickSmash" text, then capture the "USB Serial Number"
+     * property, then find the line with "IOCalloutDevice" to locate the
+     * path to the serial interface.
      */
-    while (fgets(buf, sizeof (buf), fp) != NULL) {
+    while ((fgets(buf, sizeof (buf), fp) != NULL) && (nports < max)) {
         if (saw_programmer) {
+            char *ptr;
+            char *eptr;
+            if ((strstr(buf, "\"USB Serial Number\"") != NULL) &&
+                ((ptr = strchr(buf, '=')) != NULL) &&
+                ((ptr = strchr(ptr, '"')) != NULL) &&
+                ((eptr = strchr(ptr + 1, '"')) != NULL)) {
+                *eptr = '\0';
+                snprintf(serial, sizeof (serial), "%s", ptr + 1);
+            }
             if (strstr(buf, "IOCalloutDevice") != NULL) {
-                char *ptr = strchr(buf, '=');
+                ptr = strchr(buf, '=');
                 if (ptr != NULL) {
-                    char *eptr;
                     ptr += 3;
                     eptr = strchr(ptr, '"');
                     if (eptr != NULL)
                         *eptr = '\0';
-                    strncpy(device_name, ptr, sizeof (device_name) - 1);
-                    device_name[sizeof (device_name) - 1] = '\0';
-                    printf("Using %s\n", device_name);
-                    return;
+                    memset(&ports[nports], 0, sizeof (ports[nports]));
+                    snprintf(ports[nports].path, sizeof (ports[nports].path),
+                             "%s", ptr);
+                    snprintf(ports[nports].serial,
+                             sizeof (ports[nports].serial), "%s", serial);
+                    nports++;
+                    saw_programmer = FALSE;  // Look for another
+                    serial[0] = '\0';
+                    continue;
                 }
                 printf("%.80s\n", buf);
             }
-            continue;
         }
         if ((strstr(buf, "MX29F1615") != NULL) ||
             (strstr(buf, "KickSmash") != NULL)) {
             saw_programmer = TRUE;
+            serial[0] = '\0';
         }
     }
 
-    fclose(fp);
+    pclose(fp);
 #endif
 #ifdef __MINGW32__
     /*
@@ -3269,9 +3388,9 @@ find_mx_programmer(void)
      * HARDWARE\DEVICEMAP\SERIALCOMM).  Stale entries for previously
      * attached boards are therefore ignored.
      *
-     * If exactly one such port is found, auto-select it (same behaviour
-     * as Linux /dev/serial/by-id).  If more than one is present, list
-     * them and leave device_name empty so the caller requires -d.
+     * The instance ID of the USB device (Enum\USB\VID_1209&PID_1610) is
+     * its serial number. A composite device's interface instances are
+     * instead named with the device's ParentIdPrefix value.
      */
     {
         static const char *enum_roots[] = {
@@ -3279,14 +3398,54 @@ find_mx_programmer(void)
             "SYSTEM\\CurrentControlSet\\Enum\\USBCCGP",
             NULL
         };
+        struct {
+            char serial[64];
+            char prefix[64];
+        } parents[KS_PORTS_MAX];
+        uint nparents = 0;
         char vidpid[32];
-        char ports[16][40];   /* collected COM names, e.g. "COM5" */
-        uint nports = 0;
+        char path[512];
         uint r;
         HKEY hSerialMap = NULL;
+        HKEY hDev;
 
         snprintf(vidpid, sizeof (vidpid), "VID_%04X&PID_%04X",
                  MX_VENDOR, MX_DEVICE);
+
+        /* Serial numbers and their ParentIdPrefix values */
+        snprintf(path, sizeof (path), "%s\\%s", enum_roots[0], vidpid);
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ,
+                          &hDev) == ERROR_SUCCESS) {
+            DWORD index = 0;
+            while (nparents < ARRAY_SIZE(parents)) {
+                char  inst[64];
+                DWORD inst_len = sizeof (inst);
+                DWORD ptype = REG_SZ;
+                DWORD plen = sizeof (parents[0].prefix);
+                HKEY  hInst;
+
+                if (RegEnumKeyExA(hDev, index++, inst, &inst_len,
+                                  NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+                    break;
+                }
+                snprintf(parents[nparents].serial,
+                         sizeof (parents[nparents].serial), "%s", inst);
+                parents[nparents].prefix[0] = '\0';
+                if (RegOpenKeyExA(hDev, inst, 0, KEY_READ,
+                                  &hInst) == ERROR_SUCCESS) {
+                    if ((RegQueryValueExA(hInst, "ParentIdPrefix", NULL,
+                                          &ptype,
+                                          (LPBYTE) parents[nparents].prefix,
+                                          &plen) != ERROR_SUCCESS) ||
+                        (ptype != REG_SZ)) {
+                        parents[nparents].prefix[0] = '\0';
+                    }
+                    RegCloseKey(hInst);
+                }
+                nparents++;
+            }
+            RegCloseKey(hDev);
+        }
 
         /* Active COM ports only (connected right now) */
         if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
@@ -3295,24 +3454,21 @@ find_mx_programmer(void)
             hSerialMap = NULL;
         }
 
-        for (r = 0; enum_roots[r] != NULL && nports < ARRAY_SIZE(ports); r++) {
+        for (r = 0; enum_roots[r] != NULL && nports < max; r++) {
             HKEY hEnum;
             if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, enum_roots[r], 0,
                               KEY_READ, &hEnum) != ERROR_SUCCESS) {
                 continue;
             }
-
             char subkey[256];
             DWORD subkey_len;
             DWORD index = 0;
-
-            while (nports < ARRAY_SIZE(ports)) {
+            while (nports < max) {
                 subkey_len = sizeof (subkey);
                 if (RegEnumKeyExA(hEnum, index++, subkey, &subkey_len,
                                   NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
                     break;
                 }
-
                 /*
                  * Match VID_1209&PID_1610 (case-insensitive; may have
                  * trailing &MI_xx or similar for composite interfaces)
@@ -3330,13 +3486,12 @@ find_mx_programmer(void)
                 char inst[256];
                 DWORD inst_len;
                 DWORD iindex = 0;
-                while (nports < ARRAY_SIZE(ports)) {
+                while (nports < max) {
                     inst_len = sizeof (inst);
                     if (RegEnumKeyExA(hVidPid, iindex++, inst, &inst_len,
                                       NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
                         break;
 
-                    char path[512];
                     HKEY hInst;
                     snprintf(path, sizeof (path), "%s\\Device Parameters",
                              inst);
@@ -3366,7 +3521,6 @@ find_mx_programmer(void)
                             DWORD vdata_len;
                             DWORD vtype;
                             DWORD vindex = 0;
-
                             while (1) {
                                 vname_len = sizeof (vname);
                                 vdata_len = sizeof (vdata);
@@ -3384,7 +3538,6 @@ find_mx_programmer(void)
                                 }
                             }
                         }
-
                         if (present) {
                             /*
                              * Deduplicate (same port can appear under USB
@@ -3393,15 +3546,30 @@ find_mx_programmer(void)
                             uint already = 0;
                             uint p;
                             for (p = 0; p < nports; p++) {
-                                if (strcasecmp(ports[p], portname) == 0) {
+                                if (strcasecmp(ports[p].path, portname) == 0) {
                                     already = 1;
                                     break;
                                 }
                             }
                             if (!already) {
-                                strncpy(ports[nports], portname,
-                                        sizeof (ports[0]) - 1);
-                                ports[nports][sizeof (ports[0]) - 1] = '\0';
+                                memset(&ports[nports], 0,
+                                       sizeof (ports[nports]));
+                                snprintf(ports[nports].path,
+                                         sizeof (ports[nports].path),
+                                         "%s", portname);
+                                for (p = 0; p < nparents; p++) {
+                                    size_t plen2 = strlen(parents[p].prefix);
+                                    if ((strcasecmp(inst,
+                                                    parents[p].serial) == 0) ||
+                                        ((plen2 != 0) &&
+                                         (strncasecmp(inst, parents[p].prefix,
+                                                      plen2) == 0))) {
+                                        snprintf(ports[nports].serial,
+                                                 sizeof (ports[nports].serial),
+                                                 "%s", parents[p].serial);
+                                        break;
+                                    }
+                                }
                                 nports++;
                             }
                         }
@@ -3412,26 +3580,103 @@ find_mx_programmer(void)
             }
             RegCloseKey(hEnum);
         }
-
         if (hSerialMap != NULL)
             RegCloseKey(hSerialMap);
-
-        if (nports == 1) {
-            /* Single Kicksmash found -- auto-select, same as Linux */
-            strncpy(device_name, ports[0], sizeof (device_name) - 1);
-            device_name[sizeof (device_name) - 1] = '\0';
-            printf("Using %s\n", device_name);
-        } else if (nports > 1) {
-            uint p;
-            printf("Multiple Kicksmash devices found:");
-            for (p = 0; p < nports; p++)
-                printf(" %s", ports[p]);
-            printf("\nSpecify one with -d <port> (e.g. -d %s)\n", ports[0]);
-            /* Leave device_name empty so main() will require -d */
-        }
-        /* nports == 0: leave device_name empty; main() will error */
     }
 #endif
+    (void) max;
+    return (nports);
+}
+
+/*
+ * ks_port_find() locates an attached Kicksmash serial port by serial
+ *                number or USB port path. If neither is specified, a
+ *                port which is not in the exclude list is located.
+ *
+ * @param [in]  serial   - USB serial number, or NULL / empty.
+ * @param [in]  usbpath  - USB port path, or NULL / empty.
+ * @param [in]  exclude  - Ports to ignore (when serial and usbpath unknown).
+ * @param [in]  nexclude - Number of ports in exclude list.
+ * @param [out] port     - The located port.
+ *
+ * @return      TRUE  - A port was found.
+ * @return      FALSE - No matching port was found.
+ */
+static bool
+ks_port_find(const char *serial, const char *usbpath,
+             const ks_port_t *exclude, uint nexclude, ks_port_t *port)
+{
+    ks_port_t ports[KS_PORTS_MAX];
+    uint      nports = ks_port_list(ports, ARRAY_SIZE(ports));
+    uint      cur;
+    uint      ex;
+
+    for (cur = 0; cur < nports; cur++) {
+        if ((serial != NULL) && (serial[0] != '\0')) {
+            if (strcmp(ports[cur].serial, serial) != 0)
+                continue;
+        } else if ((usbpath != NULL) && (usbpath[0] != '\0') &&
+                   (ports[cur].usbpath[0] != '\0')) {
+            if (strcmp(ports[cur].usbpath, usbpath) != 0)
+                continue;
+        } else {
+            for (ex = 0; ex < nexclude; ex++)
+                if (strcmp(ports[cur].path, exclude[ex].path) == 0)
+                    break;
+            if (ex < nexclude)
+                continue;
+        }
+        *port = ports[cur];
+        return (TRUE);
+    }
+    return (FALSE);
+}
+
+/*
+ * find_mx_programmer() will attempt to locate the tty device associated
+ *                      with the USB connection of Kicksmash. If found,
+ *                      it will update the device_name[] global with the
+ *                      file path to the serial interface. If --serial
+ *                      was specified, only a device with that USB serial
+ *                      number is selected.
+ *
+ * @param  [in]  None.
+ * @global [out] device_name[] is the located path of the programmer (if found).
+ * @return       None.
+ */
+static void
+find_mx_programmer(void)
+{
+    ks_port_t ports[KS_PORTS_MAX];
+    uint      nports = ks_port_list(ports, ARRAY_SIZE(ports));
+    uint      cur;
+    uint      matches = 0;
+    uint      first = 0;
+
+    for (cur = 0; cur < nports; cur++) {
+        if ((select_serial[0] != '\0') &&
+            (strcmp(ports[cur].serial, select_serial) != 0)) {
+            continue;
+        }
+        if (matches++ == 0)
+            first = cur;
+    }
+    if (matches == 0)
+        return;  // main() will error
+#ifdef __MINGW32__
+    if (matches > 1) {
+        printf("Multiple Kicksmash devices found:");
+        for (cur = 0; cur < nports; cur++)
+            if ((select_serial[0] == '\0') ||
+                (strcmp(ports[cur].serial, select_serial) == 0))
+                printf(" %s", ports[cur].path);
+        printf("\nSpecify one with -d <port> (e.g. -d %s)\n",
+               ports[first].path);
+        return;  // Leave device_name empty so main() will require -d
+    }
+#endif
+    snprintf(device_name, sizeof (device_name), "%s", ports[first].path);
+    printf("Using %s\n", device_name);
 }
 
 /*
@@ -3946,8 +4191,8 @@ show_ks_inquiry(void)
            id.si_ks_date[0], id.si_ks_date[1],
            id.si_ks_date[2], id.si_ks_date[3],
            id.si_ks_time[0], id.si_ks_time[1], id.si_ks_time[2]);
-    printf("  USB %08x  Serial \"%s\"  Name \"%s\"\n",
-           SWAP32(id.si_usbid), id.si_serial, id.si_name);
+    printf("  USB %08x  Size %u  Serial \"%s\"  Name \"%s\"\n",
+           SWAP32(id.si_usbid), SWAP32(id.si_size), id.si_serial, id.si_name);
     printf("  Mode: %s\n",
            (id.si_mode == 0) ? "32-bit" :
            (id.si_mode == 1) ? "16-bit" :
@@ -4913,6 +5158,1091 @@ clock_ks_show(int enter)
 }
 
 
+#define FW_READ_CHUNK   2048            // Matches firmware FW_READ_MAX
+#define FW_READ_MAXSIZE (256 << 10)     // STM32 / GD32 flash size
+
+/*
+ * fw_read() reads the Kicksmash firmware image from the STM32 internal
+ *           flash and writes it to the specified file.
+ *
+ * @param [in] filename - Destination filename.
+ *
+ * @return     RC_SUCCESS - Firmware was read and written to the file.
+ * @return     other      - Failure.
+ */
+static rc_t
+fw_read(const char *filename)
+{
+    uint8_t    rxbuf[sizeof (ks_fw_rw_t) + FW_READ_CHUNK];
+    uint8_t   *fwbuf;
+    uint32_t   offset = 0;
+    uint       status;
+    uint       rxlen;
+    uint       rc;
+    ks_fw_rw_t req;
+    ks_fw_rw_t *reply = (ks_fw_rw_t *) rxbuf;
+    FILE      *fp;
+
+    fwbuf = malloc(FW_READ_MAXSIZE);
+    if (fwbuf == NULL)
+        errx(EXIT_FAILURE, "Could not allocate %u bytes", FW_READ_MAXSIZE);
+
+    if (send_cmd("prom service")) {
+        printf("could not enter prom service\n");
+        rc = RC_TIMEOUT;  // "timeout" was reported in this case
+        goto fw_read_fail;
+    }
+
+    while (offset < FW_READ_MAXSIZE) {
+        uint32_t got_offset;
+        uint     got_size;
+
+        memset(&req, 0, sizeof (req));
+        req.kfrw_offset = SWAP32(offset);
+        req.kfrw_size   = SWAP16(FW_READ_CHUNK);
+        rc = send_ks_cmd(KS_CMD_FW_READ, &req, sizeof (req),
+                         rxbuf, sizeof (rxbuf), &status, &rxlen, 0);
+        if (rc != 0) {
+            printf("FW read at 0x%x failed: %d (%s)\n",
+                   offset, rc, smash_err(rc));
+            goto fw_read_fail;
+        }
+        if ((status == KS_STATUS_FAIL) && (offset != 0)) {
+            /* Offset is past end of image (image is multiple of chunk) */
+            break;
+        }
+        if (status != KS_STATUS_OK) {
+            printf("FW read at 0x%x failed: %d (%s)\n",
+                   offset, status, smash_err(status));
+            rc = status;
+            goto fw_read_fail;
+        }
+        if (rxlen < sizeof (*reply)) {
+            printf("FW read at 0x%x: short reply (%u bytes)\n",
+                   offset, rxlen);
+            rc = MSG_STATUS_BAD_LENGTH;
+            goto fw_read_fail;
+        }
+        got_offset = SWAP32(reply->kfrw_offset);
+        got_size   = SWAP16(reply->kfrw_size);
+        if ((got_offset != offset) || (got_size > FW_READ_CHUNK) ||
+            (got_size != rxlen - sizeof (*reply)) ||
+            (got_size > FW_READ_MAXSIZE - offset)) {
+            printf("FW read at 0x%x: bad reply offset=0x%x size=0x%x "
+                   "len=0x%x\n", offset, got_offset, got_size, rxlen);
+            rc = MSG_STATUS_BAD_LENGTH;
+            goto fw_read_fail;
+        }
+        memcpy(fwbuf + offset, rxbuf + sizeof (*reply), got_size);
+        offset += got_size;
+        if (got_size < FW_READ_CHUNK)
+            break;  // Short read means end of image
+    }
+
+    fp = fopen(filename, "wb");
+    if (fp == NULL)
+        err(EXIT_FAILURE, "Failed to open %s", filename);
+    if (fwrite(fwbuf, offset, 1, fp) != 1)
+        err(EXIT_FAILURE, "Failed to write %s", filename);
+    fclose(fp);
+    printf("Read 0x%x bytes of firmware and wrote to file %s\n",
+           offset, filename);
+    rc = RC_SUCCESS;
+
+fw_read_fail:
+    free(fwbuf);
+    return (rc);
+}
+
+#define FW_READ_DOTS      32          // Width of firmware progress bar
+#define FW_READ_RETRIES   5           // Attempts per firmware read transfer
+#define FW_INFO_MAGIC     0x4B534657  // "KSFW" firmware info (fw/main.h)
+#define FW_INFO_MIN_SIZE  20          // Minimum firmware info struct size
+#define STM32_FLASH_BASE  0x08000000  // Kicksmash flash address of firmware
+
+/*
+ * fw_time_usec() returns the current time in microseconds.
+ */
+static uint64_t
+fw_time_usec(void)
+{
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return ((uint64_t) tv.tv_sec * 1000000 + tv.tv_usec);
+}
+
+/*
+ * fw_print_us_diff() displays the elapsed time between two fw_time_usec()
+ *                    values in milliseconds or seconds.
+ */
+static void
+fw_print_us_diff(uint64_t start, uint64_t end)
+{
+    uint64_t diff = end - start;
+    uint32_t diff2;
+    const char *scale = "ms";
+
+    if ((diff >> 32) != 0)  // Finished before started?
+        diff = 0;
+    if (diff >= 100000) {
+        diff /= 1000;
+        scale = "sec";
+    }
+    diff2 = diff / 10;
+    printf("%u.%02u %s\n", diff2 / 100, diff2 % 100, scale);
+}
+
+/*
+ * fw_calc_kb_sec() returns the transfer rate in KB/sec.
+ */
+static uint
+fw_calc_kb_sec(uint usecs, uint bytes)
+{
+    if (usecs == 0)
+        usecs = 1;
+    while (bytes > 4000000) {
+        bytes >>= 1;
+        usecs >>= 1;
+    }
+    return (bytes * 1000 / usecs);
+}
+
+/*
+ * fw_le32() returns the little-endian (STM32 order) 32-bit value at the
+ *           specified buffer location.
+ */
+static uint32_t
+fw_le32(const uint8_t *buf)
+{
+    return (buf[0] | (buf[1] << 8) | (buf[2] << 16) | ((uint32_t) buf[3] << 24));
+}
+
+/*
+ * fw_file_identify() locates the firmware info structure (FW_INFO_MAGIC)
+ *                    in a firmware image read from disk, then fills in
+ *                    the version, build date/time, and size fields of
+ *                    the supplied smash_id_t from it, as KS_CMD_ID would
+ *                    report (big-endian) for that firmware.
+ *
+ * @return 0 - Success.
+ * @return 1 - The image does not appear to be valid.
+ */
+static int
+fw_file_identify(const uint8_t *buf, uint buf_size, smash_id_t *id)
+{
+    uint        off;
+    uint        vptr_off;
+    uint        str_off;
+    uint        ver[2];
+    uint        date[3];
+    uint        time[3];
+    uint32_t    fi_struct_size = 0;
+    uint32_t    fi_fw_size = 0;
+    const char *str;
+    const char *built;
+
+    for (off = 0; off + FW_INFO_MIN_SIZE <= buf_size; off += 4) {
+        if (fw_le32(buf + off) != FW_INFO_MAGIC)
+            continue;
+        fi_struct_size = fw_le32(buf + off + 4);
+        fi_fw_size     = fw_le32(buf + off + 16);
+        if ((fw_le32(buf + off + 8) == STM32_FLASH_BASE + off) &&
+            (fi_struct_size >= FW_INFO_MIN_SIZE) &&
+            (fi_fw_size <= buf_size) &&
+            (off + fi_struct_size <= fi_fw_size)) {
+            break;
+        }
+    }
+    if (off + FW_INFO_MIN_SIZE > buf_size) {
+        printf("Firmware info not found in file\n");
+        return (1);
+    }
+
+    /* fi_version_str is the flash address of a pointer to version_str */
+    vptr_off = fw_le32(buf + off + 12) - STM32_FLASH_BASE;
+    if ((vptr_off > buf_size - 4) ||
+        ((str_off = fw_le32(buf + vptr_off) - STM32_FLASH_BASE) >=
+         buf_size) ||
+        (memchr(buf + str_off, '\0', buf_size - str_off) == NULL)) {
+        printf("Firmware version string not found in file\n");
+        return (1);
+    }
+
+    /* Format: "Version 2.1+ built YYYY-MM-DD HH:MM:SS" */
+    str = (const char *) buf + str_off;
+    built = strstr(str, " built ");
+    if ((sscanf(str, "Version %u.%u", &ver[0], &ver[1]) != 2) ||
+        (built == NULL) ||
+        (sscanf(built, " built %u-%u-%u %u:%u:%u", &date[0], &date[1],
+                &date[2], &time[0], &time[1], &time[2]) != 6)) {
+        printf("Could not parse firmware version \"%s\"\n", str);
+        return (1);
+    }
+
+    memset(id, 0, sizeof (*id));
+    id->si_ks_version[0] = SWAP16(ver[0]);
+    id->si_ks_version[1] = SWAP16(ver[1]);
+    id->si_ks_date[0]    = date[0] / 100;
+    id->si_ks_date[1]    = date[0] % 100;
+    id->si_ks_date[2]    = date[1];
+    id->si_ks_date[3]    = date[2];
+    id->si_ks_time[0]    = time[0];
+    id->si_ks_time[1]    = time[1];
+    id->si_ks_time[2]    = time[2];
+    id->si_size          = SWAP32(fi_fw_size);
+    return (0);
+}
+
+/*
+ * fw_id_show() displays firmware version, build date/time, and size
+ *              from a smash_id_t.
+ */
+static void
+fw_id_show(const char *what, const smash_id_t *id)
+{
+    printf("%-8s Kicksmash %u.%u built %02u%02u-%02u-%02u %02u:%02u:%02u  "
+           "Size %u\n", what,
+           SWAP16(id->si_ks_version[0]), SWAP16(id->si_ks_version[1]),
+           id->si_ks_date[0], id->si_ks_date[1],
+           id->si_ks_date[2], id->si_ks_date[3],
+           id->si_ks_time[0], id->si_ks_time[1], id->si_ks_time[2],
+           SWAP32(id->si_size));
+}
+
+/*
+ * fw_id_match() returns TRUE if the firmware identity fields of two
+ *               smash_id_t match.
+ */
+static int
+fw_id_match(const smash_id_t *id1, const smash_id_t *id2)
+{
+    return ((memcmp(id1->si_ks_version, id2->si_ks_version,
+                    sizeof (id1->si_ks_version)) == 0) &&
+            (memcmp(id1->si_ks_date, id2->si_ks_date,
+                    sizeof (id1->si_ks_date)) == 0) &&
+            (memcmp(id1->si_ks_time, id2->si_ks_time, 3) == 0) &&
+            (id1->si_size == id2->si_size));
+}
+
+/*
+ * fw_file_load() reads a firmware image file into allocated memory and
+ *                identifies it with fw_file_identify(). The caller must
+ *                free() the buffer when done.
+ *
+ * @return 0 - Success.
+ * @return 1 - Failure (no buffer is then allocated).
+ */
+static int
+fw_file_load(const char *filename, uint8_t **fbufp, uint *fbuf_sizep,
+             smash_id_t *file_id)
+{
+    uint8_t *fbuf;
+    uint     fbuf_size;
+    long     flen;
+    FILE    *fp;
+
+    fp = fopen(filename, "rb");
+    if (fp == NULL) {
+        printf("Failed to open %s\n", filename);
+        return (1);
+    }
+    if ((fseek(fp, 0, SEEK_END) != 0) || ((flen = ftell(fp)) <= 0) ||
+        (fseek(fp, 0, SEEK_SET) != 0)) {
+        printf("Failed to get size of %s\n", filename);
+        fclose(fp);
+        return (1);
+    }
+    fbuf_size = flen;
+    fbuf = malloc(fbuf_size);
+    if (fbuf == NULL) {
+        printf("Failed to allocate %u bytes\n", fbuf_size);
+        fclose(fp);
+        return (1);
+    }
+    if (fread(fbuf, 1, fbuf_size, fp) != fbuf_size) {
+        printf("Failed to read %s\n", filename);
+        fclose(fp);
+        free(fbuf);
+        return (1);
+    }
+    fclose(fp);
+
+    if (fw_file_identify(fbuf, fbuf_size, file_id) != 0) {
+        free(fbuf);
+        return (1);
+    }
+    if (SWAP32(file_id->si_size) != fbuf_size) {
+        printf("Note: %s is %u bytes; firmware image is %u bytes\n",
+               filename, fbuf_size, SWAP32(file_id->si_size));
+    }
+    *fbufp = fbuf;
+    *fbuf_sizep = fbuf_size;
+    return (0);
+}
+
+/*
+ * fw_read_chunk() reads up to FW_READ_CHUNK bytes of Kicksmash firmware
+ *                 at the specified offset using KS_CMD_FW_READ. The reply
+ *                 header is placed at the start of rbuf, which must be
+ *                 sizeof (ks_fw_rw_t) + FW_READ_CHUNK bytes, followed by
+ *                 the data. Kicksmash may return less data than requested.
+ *
+ * @return Number of bytes read, or 0 on failure.
+ */
+static uint
+fw_read_chunk(uint offset, uint fw_size, uint8_t *rbuf, uint *retries)
+{
+    ks_fw_rw_t  req;
+    ks_fw_rw_t *rhdr = (ks_fw_rw_t *) rbuf;
+    uint        rbuf_size = sizeof (ks_fw_rw_t) + FW_READ_CHUNK;
+    uint        rlen = 0;
+    uint        status = 0;
+    uint        len;
+    uint        rc = 0;
+    uint        tries;
+
+    memset(&req, 0, sizeof (req));
+    req.kfrw_offset = SWAP32(offset);
+    len = fw_size - offset;
+    if (len > FW_READ_CHUNK)
+        len = FW_READ_CHUNK;
+    req.kfrw_size = SWAP16(len);
+
+    /* Reads have no side effects, so retry any failure */
+    for (tries = 0; tries < FW_READ_RETRIES; tries++) {
+        rc = send_ks_cmd(KS_CMD_FW_READ, &req, sizeof (req),
+                         rbuf, rbuf_size, &status, &rlen, 0);
+        if (rc == 0)
+            rc = status;
+        if (rc == 0)
+            break;
+        (*retries)++;
+        if (ks_message_terminated)
+            break;
+    }
+    if (rc != 0) {
+        printf("\nFW read at offset 0x%x failed: (%s)\n",
+               offset, smash_err(rc));
+        return (0);
+    }
+    len = SWAP16(rhdr->kfrw_size);
+    if ((rlen < sizeof (*rhdr)) || (len == 0) ||
+        (len > rlen - sizeof (*rhdr)) || (len > fw_size - offset) ||
+        (SWAP32(rhdr->kfrw_offset) != offset)) {
+        printf("\nFW read at offset 0x%x bad reply: "
+               "rlen=%u offset=0x%x size=%u\n",
+               offset, rlen, SWAP32(rhdr->kfrw_offset), len);
+        return (0);
+    }
+    return (len);
+}
+
+/*
+ * fw_progress() advances a progress bar for a firmware operation.
+ */
+static void
+fw_progress(uint done, uint total, uint *dots)
+{
+    uint dots_now = done * FW_READ_DOTS / total;
+
+    if (dots_now > *dots) {
+        for (; *dots < dots_now; (*dots)++)
+            printf(".");
+        fflush(stdout);
+    }
+}
+
+/*
+ * fw_verify_image() reads the Kicksmash firmware with KS_CMD_FW_READ and
+ *                   compares it with the firmware image in memory.
+ *
+ * @param [in] fbuf     - Firmware image.
+ * @param [in] fw_size  - Firmware image size.
+ * @param [in] filename - Firmware image filename (for messages).
+ *
+ * @return     0 - Firmware matches.
+ * @return     1 - Firmware does not match, or verify failed.
+ */
+static int
+fw_verify_image(const uint8_t *fbuf, uint fw_size, const char *filename)
+{
+    uint8_t    *rbuf;
+    uint        rbuf_size = sizeof (ks_fw_rw_t) + FW_READ_CHUNK;
+    uint        offset;
+    uint        pos;
+    uint        len;
+    uint        retries = 0;
+    uint        miscompares = 0;
+    uint        first_bad = 0;
+    uint        dots = 0;
+    uint        dots_now;
+    uint64_t    time_start;
+    uint64_t    time_end;
+    int         errs = 0;
+
+    rbuf = malloc(rbuf_size);
+    if (rbuf == NULL) {
+        printf("Failed to allocate %u bytes\n", rbuf_size);
+        return (1);
+    }
+
+    printf("Verifying [%*s]\rVerifying [", FW_READ_DOTS, "");
+    fflush(stdout);
+    time_start = fw_time_usec();
+
+    for (offset = 0; offset < fw_size; offset += len) {
+        if (ks_message_terminated) {
+            errs++;
+            break;
+        }
+        len = fw_read_chunk(offset, fw_size, rbuf, &retries);
+        if (len == 0) {
+            errs++;
+            break;
+        }
+        for (pos = 0; pos < len; pos++) {
+            if (rbuf[sizeof (ks_fw_rw_t) + pos] != fbuf[offset + pos]) {
+                if (miscompares++ == 0)
+                    first_bad = offset + pos;
+            }
+        }
+        dots_now = (offset + len) * FW_READ_DOTS / fw_size;
+        if (dots_now > dots) {
+            for (; dots < dots_now; dots++)
+                printf(".");
+            fflush(stdout);
+        }
+    }
+    time_end = fw_time_usec();
+    if (errs == 0)
+        printf("]");
+    printf("\n");
+    free(rbuf);
+
+    if (retries != 0)
+        printf("%u read retries were required\n", retries);
+    if (errs != 0) {
+        printf("Firmware verify incomplete\n");
+    } else if (miscompares != 0) {
+        printf("Kicksmash firmware does not match %s: %u bytes differ, "
+               "first at offset 0x%x\n", filename, miscompares, first_bad);
+        errs++;
+    } else {
+        printf("Verified %u bytes of firmware with %s (%u KB/sec) in ",
+               fw_size, filename,
+               fw_calc_kb_sec((uint) (time_end - time_start), fw_size));
+        fw_print_us_diff(time_start, time_end);
+    }
+    return (errs ? 1 : 0);
+}
+
+/*
+ * fw_verify() verifies the Kicksmash firmware matches the specified
+ *             firmware image file.
+ *
+ * @param [in] filename - Firmware image file to compare against.
+ *
+ * @return     0 - Firmware matches.
+ * @return     1 - Firmware does not match, or verify failed.
+ */
+static int
+fw_verify(const char *filename)
+{
+    smash_id_t  id;
+    smash_id_t  file_id;
+    uint8_t    *fbuf;
+    uint        fbuf_size;
+    uint        fw_size;
+    uint        rlen;
+    uint        status;
+    uint        rc;
+    int         errs = 0;
+    int         in_updater;
+
+    if (fw_file_load(filename, &fbuf, &fbuf_size, &file_id) != 0)
+        return (1);
+    fw_size = SWAP32(file_id.si_size);
+
+    if (send_cmd("prom service")) {
+        printf("could not enter prom service\n");
+        errs++;
+        goto fwverify_end;
+    }
+
+    memset(&id, 0, sizeof (id));
+    rc = send_ks_cmd(KS_CMD_ID, NULL, 0, &id, sizeof (id), &status, &rlen, 0);
+    if (rc == 0)
+        rc = status;
+    if (rc != 0) {
+        printf("Kicksmash ID failure: (%s)\n", smash_err(rc));
+        errs++;
+        goto fwverify_end;
+    }
+
+    /*
+     * The updater reports its own version and build date/time, but the
+     * size of the firmware in flash, so only the size can be checked.
+     */
+    in_updater = ((SWAP16(id.si_features) & SID_FEATURE_FW_UPDATE) != 0);
+    fw_id_show(in_updater ? "Updater" : "Running", &id);
+    fw_id_show("File", &file_id);
+    if (in_updater ? (id.si_size != file_id.si_size) :
+                     !fw_id_match(&id, &file_id)) {
+        printf("Kicksmash firmware does not match %s\n", filename);
+        errs++;
+        goto fwverify_end;
+    }
+    errs += fw_verify_image(fbuf, fw_size, filename);
+
+fwverify_end:
+    free(fbuf);
+    return (errs ? 1 : 0);
+}
+
+#define FW_WRITE_CHUNK    2048        // Maximum bytes per DFU download
+#define FW_WRITE_RETRIES  5           // Attempts per firmware write transfer
+#define FW_USB_SETTLE_MS  500         // USB re-enumeration delay
+#define FW_DFU_WAIT_MS    10000       // Time to wait for DFU device to appear
+#define FW_REAPPEAR_TRIES 20          // Serial port reappear polls (500 ms)
+
+static bool fw_serial_started = TRUE;  // Serial device open, threads running
+static char fw_dfu_id[64];             // DFU device to write (already in DFU)
+
+/*
+ * fw_serial_is_open() returns TRUE if the serial device is currently open.
+ */
+static bool
+fw_serial_is_open(void)
+{
+#ifdef __MINGW32__
+    return (dev_handle != INVALID_HANDLE_VALUE);
+#else
+    return (dev_fd != -1);
+#endif
+}
+
+/*
+ * fw_serial_use() switches communication to the specified serial port.
+ *                 If the serial device has not been opened, it is opened
+ *                 and the serial I/O threads are started. Otherwise, the
+ *                 reader thread will reopen the device at the new path.
+ *
+ * @return TRUE  - The serial device is open.
+ * @return FALSE - The serial device is not (yet) available.
+ */
+static bool
+fw_serial_use(const ks_port_t *port)
+{
+    if (!fw_serial_started) {
+        snprintf(device_name, sizeof (device_name), "%s", port->path);
+#ifdef __MINGW32__
+        host_device_name = malloc(strlen(device_name) + 16);
+        if (host_device_name == NULL)
+            err(EXIT_FAILURE, "malloc failed");
+        sprintf(host_device_name, "\\\\.\\%s", device_name);
+#endif
+        if (serial_open(FALSE) != RC_SUCCESS)
+            return (FALSE);
+        create_threads();
+        fw_serial_started = TRUE;
+        return (TRUE);
+    }
+#ifndef __MINGW32__
+    if (strcmp(device_name, port->path) != 0) {
+        /* Board came back at a different path */
+        snprintf(device_name, sizeof (device_name), "%s", port->path);
+    }
+#endif
+    return (fw_serial_is_open());
+}
+
+/*
+ * fw_ks_identify() enters prom service mode and issues KS_CMD_ID.
+ *
+ * @return 0 on success, otherwise a KS_STATUS or MSG_STATUS error code.
+ */
+static uint
+fw_ks_identify(smash_id_t *id)
+{
+    uint status = 0;
+    uint rlen;
+    uint rc;
+
+    if (send_cmd("prom service"))
+        return (MSG_STATUS_NO_REPLY);
+    memset(id, 0, sizeof (*id));
+    rc = send_ks_cmd(KS_CMD_ID, NULL, 0, id, sizeof (*id), &status, &rlen, 0);
+    if (rc == 0)
+        rc = status;
+    return (rc);
+}
+
+/*
+ * fw_select_dfu() selects a DFU device to write when the --fwwrite
+ *                 Kicksmash serial device was not specified (or is not
+ *                 present). A DFU device is preferred over a Kicksmash
+ *                 serial device. If --serial was specified, only a
+ *                 matching DFU device (by serial number or USB port
+ *                 path) is selected.
+ *
+ * @global [out] fw_dfu_id - The USB port path of the selected device.
+ *
+ * @return  1 - A single DFU device was selected.
+ * @return  0 - No DFU device is present.
+ * @return -1 - More than one DFU device is present (they are listed).
+ */
+static int
+fw_select_dfu(void)
+{
+    dfu_info_t list[DFU_LIST_MAX];
+    uint       count = dfu_list(list, ARRAY_SIZE(list));
+    uint       matches = 0;
+    uint       first = 0;
+    uint       cur;
+
+    for (cur = 0; cur < count; cur++) {
+        if (!dfu_id_match(&list[cur], select_serial))
+            continue;
+        if (matches++ == 0)
+            first = cur;
+    }
+    if (matches == 0)
+        return (0);
+    if (matches > 1) {
+        printf("Multiple DFU devices found:\n");
+        for (cur = 0; cur < count; cur++) {
+            if (!dfu_id_match(&list[cur], select_serial))
+                continue;
+            printf("    USB %-12s Serial %-16s %s\n", list[cur].usbpath,
+                   list[cur].serial, list[cur].kind);
+        }
+        printf("Specify one with --serial <serial or USB path>\n");
+        return (-1);
+    }
+    snprintf(fw_dfu_id, sizeof (fw_dfu_id), "%s",
+             (list[first].usbpath[0] != '\0') ? list[first].usbpath :
+             list[first].serial);
+    return (1);
+}
+
+/*
+ * fw_page_start() returns the address of the flash page which contains
+ *                 the specified address.
+ */
+static uint32_t
+fw_page_start(dfu_dev_t *dev, uint32_t addr)
+{
+    uint32_t page = dfu_flash_base(dev);
+    uint     size;
+
+    while (((size = dfu_page_size(dev, page)) != 0) && (page + size <= addr))
+        page += size;
+    return (page);
+}
+
+/*
+ * fw_dfu_erase() erases each flash page which overlaps the specified
+ *                range of the firmware image. Pages beyond the image
+ *                (including the Kicksmash config area at the end of
+ *                flash) are not touched.
+ *
+ * @param [in]  dev      - DFU device.
+ * @param [in]  start    - Image start offset of range.
+ * @param [in]  end      - Image end offset of range (exclusive).
+ * @param [io]  retries  - Count of retries required.
+ * @param [in]  progress - Display a progress bar.
+ *
+ * @return 0 - Success.
+ * @return 1 - Failure.
+ */
+static int
+fw_dfu_erase(dfu_dev_t *dev, uint start, uint end, uint *retries,
+             bool progress)
+{
+    uint32_t base = dfu_flash_base(dev);
+    uint32_t addr = fw_page_start(dev, base + start);
+    char     errbuf[80];
+    uint     size;
+    uint     tries;
+    uint     dots = 0;
+    int      errs = 0;
+
+    if (progress) {
+        printf("Erasing [%*s]\rErasing [", FW_READ_DOTS, "");
+        fflush(stdout);
+    }
+    while (addr < base + end) {
+        if (ks_message_terminated) {
+            errs++;
+            break;
+        }
+        size = dfu_page_size(dev, addr);
+        if (size == 0) {
+            printf("\nFW erase at offset 0x%x is outside of flash\n",
+                   addr - base);
+            errs++;
+            break;
+        }
+        for (tries = 0; tries < FW_WRITE_RETRIES; tries++) {
+            if (dfu_erase_page(dev, addr, errbuf, sizeof (errbuf)) == 0)
+                break;
+            (*retries)++;
+            dfu_recover(dev);
+            if (ks_message_terminated)
+                break;
+        }
+        if (tries >= FW_WRITE_RETRIES) {
+            printf("\nFW erase at offset 0x%x failed: (%s)\n",
+                   addr - base, errbuf);
+            errs++;
+            break;
+        }
+        addr += size;
+        if (progress) {
+            fw_progress(((addr - base < end) ? addr - base : end) - start,
+                        end - start, &dots);
+        }
+    }
+    if (progress) {
+        if (errs == 0)
+            printf("]");
+        printf("\n");
+    }
+    return (errs);
+}
+
+/*
+ * fw_dfu_program() writes the firmware image to the (erased) flash.
+ *                  When the write chunk size matches the device transfer
+ *                  size, the address is set once, and then sequential
+ *                  DfuSe blocks are written. If a block must be retried,
+ *                  the flash page holding it is erased again, and writing
+ *                  restarts at the start of that page.
+ *
+ * @return 0 - Success.
+ * @return 1 - Failure.
+ */
+static int
+fw_dfu_program(dfu_dev_t *dev, const uint8_t *fbuf, uint fw_size,
+               uint *retries)
+{
+    uint8_t  wbuf[FW_WRITE_CHUNK];
+    char     errbuf[80];
+    uint32_t base = dfu_flash_base(dev);
+    uint     chunk = dfu_xfer_size(dev);
+    bool     sequential;
+    bool     need_setaddr = TRUE;
+    uint     base_offset = 0;  // Image offset of DFU_FIRST_BLOCK
+    uint     offset = 0;
+    uint     fail_end = 0;     // End of the chunk which last failed
+    uint     fails = 0;
+    uint     len = 0;
+    uint     dots = 0;
+    int      errs = 0;
+
+    if ((chunk == 0) || (chunk > FW_WRITE_CHUNK))
+        chunk = FW_WRITE_CHUNK;
+    sequential = (chunk == dfu_xfer_size(dev));
+
+    printf("Writing [%*s]\rWriting [", FW_READ_DOTS, "");
+    fflush(stdout);
+    while (offset < fw_size) {
+        uint block;
+        int  rc = 0;
+
+        if (ks_message_terminated) {
+            errs++;
+            break;
+        }
+        len = fw_size - offset;
+        if (len > chunk)
+            len = chunk;
+        memcpy(wbuf, fbuf + offset, len);
+        block = len;
+        if (block & 1)
+            wbuf[block++] = 0xff;  // Flash is programmed 16 bits at a time
+
+        if (need_setaddr || !sequential) {
+            rc = dfu_set_address(dev, base + offset, errbuf, sizeof (errbuf));
+            base_offset = offset;
+            need_setaddr = FALSE;
+        }
+        if (rc == 0) {
+            rc = dfu_download(dev, DFU_FIRST_BLOCK +
+                              (offset - base_offset) / chunk,
+                              wbuf, block, errbuf, sizeof (errbuf));
+        }
+        if (rc == 0) {
+            offset += len;
+            if (offset >= fail_end)
+                fails = 0;
+            fw_progress(offset, fw_size, &dots);
+            continue;
+        }
+
+        /* Erase the page holding the failed chunk and restart there */
+        (*retries)++;
+        if (++fails >= FW_WRITE_RETRIES) {
+            printf("\nFW write at offset 0x%x failed: (%s)\n",
+                   offset, errbuf);
+            errs++;
+            break;
+        }
+        fail_end = offset + len;
+        dfu_recover(dev);
+        offset = fw_page_start(dev, base + offset) - base;
+        offset -= offset % chunk;
+        (void) fw_dfu_erase(dev, offset, fail_end, retries, FALSE);
+        need_setaddr = TRUE;
+    }
+    if (errs == 0)
+        printf("]");
+    printf("\n");
+    return (errs);
+}
+
+/*
+ * fw_reconnect() waits for Kicksmash to reappear on a serial port after
+ *                a firmware update, then identifies it with KS_CMD_ID.
+ *                The port is located by USB serial number if known,
+ *                otherwise by USB port path (Linux) or as a port which
+ *                was not present before the update.
+ *
+ * @param [in]  serial  - Expected USB serial number, or empty.
+ * @param [in]  usbpath - USB port path of the DFU device, or empty.
+ * @param [in]  before  - Kicksmash serial ports present before the update.
+ * @param [in]  nbefore - Number of ports in before list.
+ * @param [out] id      - Kicksmash identification.
+ *
+ * @return 0 on success, otherwise a KS_STATUS or MSG_STATUS error code.
+ */
+static uint
+fw_reconnect(const char *serial, const char *usbpath,
+             const ks_port_t *before, uint nbefore, smash_id_t *id)
+{
+    ks_port_t port;
+    uint      tries;
+    uint      rc = MSG_STATUS_NO_REPLY;
+
+    cmd_quiet = TRUE;
+    for (tries = 0; tries < FW_REAPPEAR_TRIES; tries++) {
+        if (tries > 0)
+            time_delay_msec(500);
+        if (!ks_port_find(serial, usbpath, before, nbefore, &port) ||
+            !fw_serial_use(&port)) {
+            continue;
+        }
+        rc = fw_ks_identify(id);
+        if (rc == 0)
+            break;
+    }
+    cmd_quiet = FALSE;
+    return (rc);
+}
+
+/*
+ * fw_write() writes a firmware image file to Kicksmash using USB DFU.
+ *
+ *            If Kicksmash is running its firmware, the Kicksmash firmware
+ *            updater is started with KS_CMD_FW_UNLOCK, which causes
+ *            Kicksmash to re-enumerate on USB as a DFU device. A device
+ *            which is already in DFU mode (the Kicksmash updater or the
+ *            STM32 ROM DFU bootloader) is written directly.
+ *
+ *            The flash pages of the image are erased, the image is
+ *            written, and the DFU leave request (the equivalent of
+ *            KS_CMD_FW_LOCK in the updater) starts the new firmware.
+ *            Kicksmash is then located on its serial port, identified
+ *            with KS_CMD_ID, and its flash is read back and compared.
+ *
+ * @param [in] filename - Firmware image file to write.
+ *
+ * @return     0 - Firmware was written and verified.
+ * @return     1 - Failure.
+ */
+static int
+fw_write(const char *filename)
+{
+    dfu_dev_t        *dev = NULL;
+    const dfu_info_t *info;
+    smash_id_t        id;
+    smash_id_t        file_id;
+    ks_port_t         before[KS_PORTS_MAX];
+    uint8_t          *fbuf = NULL;
+    char              serial[sizeof (info->serial)];
+    char              usbpath[sizeof (info->usbpath)];
+    uint              nbefore;
+    uint              fbuf_size = 0;
+    uint              fw_size;
+    uint              rc;
+    uint              retries = 0;
+    uint64_t          time_start;
+    uint64_t          time_end;
+    int               errs = 0;
+    bool              in_dfu = (fw_dfu_id[0] != '\0');
+
+    if (!dfu_supported()) {
+        printf("hostsmash was built without libusb; firmware write (DFU) "
+               "is not supported\n");
+        return (1);
+    }
+    if (fw_file_load(filename, &fbuf, &fbuf_size, &file_id) != 0)
+        return (1);
+    fw_size = SWAP32(file_id.si_size);
+    if (fw_size == 0) {
+        printf("Firmware image size %u is invalid\n", fw_size);
+        errs++;
+        goto fwwrite_end;
+    }
+
+    /* Identify the running firmware or the DFU device */
+    serial[0] = '\0';
+    usbpath[0] = '\0';
+    if (in_dfu) {
+        dev = dfu_wait_open(fw_dfu_id, FW_DFU_WAIT_MS);
+        if (dev == NULL) {
+            errs++;
+            goto fwwrite_end;
+        }
+        info = dfu_dev_info(dev);
+        printf("%-8s %s at USB %s  Serial %s\n", "DFU",
+               info->kind, info->usbpath, info->serial);
+        if (info->is_updater)
+            snprintf(serial, sizeof (serial), "%s", info->serial);
+        snprintf(usbpath, sizeof (usbpath), "%s", info->usbpath);
+    } else {
+        rc = fw_ks_identify(&id);
+        if (rc != 0) {
+            printf("Kicksmash ID failure: (%s)\n", smash_err(rc));
+            errs++;
+            goto fwwrite_end;
+        }
+        memcpy(serial, id.si_serial, sizeof (id.si_serial));
+        serial[sizeof (id.si_serial)] = '\0';
+        fw_id_show("Running", &id);
+    }
+    fw_id_show("File", &file_id);
+
+    if (!are_you_sure("Write Kicksmash firmware")) {
+        errs++;
+        goto fwwrite_end;
+    }
+
+    /* Start the firmware updater, unless already in DFU mode */
+    if (!in_dfu) {
+        uint status = 0;
+
+        reopen_quiet = TRUE;  // Serial device will disappear
+        rc = send_ks_cmd(KS_CMD_FW_UNLOCK, NULL, 0, NULL, 0, &status, NULL, 0);
+        if (rc == 0)
+            rc = status;
+        if (rc != 0) {
+            printf("Kicksmash FW unlock failure: (%s)\n", smash_err(rc));
+            if (rc == KS_STATUS_UNKCMD)
+                printf("Use \"reset dfu\" at the Kicksmash CMD> prompt "
+                       "to start the updater\n");
+            errs++;
+            goto fwwrite_end;
+        }
+        /* USB must re-enumerate */
+        time_delay_msec(FW_USB_SETTLE_MS);
+        dev = dfu_wait_open(serial, FW_DFU_WAIT_MS);
+        if (dev == NULL) {
+            errs++;
+            goto fwwrite_end;
+        }
+        snprintf(usbpath, sizeof (usbpath), "%s", dfu_dev_info(dev)->usbpath);
+    }
+    if (dfu_flash_base(dev) != STM32_FLASH_BASE) {
+        printf("DFU flash is at 0x%08x, not 0x%08x\n",
+               dfu_flash_base(dev), STM32_FLASH_BASE);
+        errs++;
+        goto fwwrite_end;
+    }
+    if (fw_size > dfu_flash_size(dev)) {
+        printf("Firmware image size %u exceeds %u bytes of flash\n",
+               fw_size, dfu_flash_size(dev));
+        errs++;
+        goto fwwrite_end;
+    }
+    dfu_recover(dev);
+
+    time_start = fw_time_usec();
+    if ((fw_dfu_erase(dev, 0, fw_size, &retries, TRUE) != 0) ||
+        (fw_dfu_program(dev, fbuf, fw_size, &retries) != 0)) {
+        errs++;
+    }
+    time_end = fw_time_usec();
+    if (retries != 0)
+        printf("%u erase/write retries were required\n", retries);
+    if (errs != 0) {
+        printf("Firmware write incomplete; Kicksmash is still in DFU mode\n");
+        goto fwwrite_end;
+    }
+    printf("Wrote %u bytes of firmware from %s (%u KB/sec) in ",
+           fw_size, filename,
+           fw_calc_kb_sec((uint) (time_end - time_start), fw_size));
+    fw_print_us_diff(time_start, time_end);
+
+    /* Note serial ports present now, to find a new one if serial unknown */
+    reopen_quiet = TRUE;
+    nbefore = ks_port_list(before, ARRAY_SIZE(before));
+
+    /* Start the new firmware */
+    dfu_leave(dev);
+    dfu_close(dev);
+    dev = NULL;
+
+    /* USB must re-enumerate */
+    time_delay_msec(FW_USB_SETTLE_MS);
+
+    /* Wait for the new firmware to appear on its serial port */
+    rc = fw_reconnect(serial, usbpath, before, nbefore, &id);
+    reopen_quiet = FALSE;
+    if (rc != 0) {
+        printf("Kicksmash did not respond on a serial port after update: "
+               "(%s)\n", smash_err(rc));
+        printf("Firmware was written. To verify, use:\n"
+               "    hostsmash --fwverify %s%s%s\n", filename,
+               (serial[0] != '\0') ? " --serial " : "", serial);
+        errs++;
+        goto fwwrite_end;
+    }
+    if ((serial[0] != '\0') &&
+        (strncmp(id.si_serial, serial, sizeof (id.si_serial)) != 0)) {
+        printf("Kicksmash at %s has serial %.*s, expected %s\n",
+               device_name, (int) sizeof (id.si_serial), id.si_serial,
+               serial);
+        errs++;
+        goto fwwrite_end;
+    }
+    if (SWAP16(id.si_features) & SID_FEATURE_FW_UPDATE) {
+        printf("Kicksmash is still running the firmware updater\n");
+        errs++;
+        goto fwwrite_end;
+    }
+    fw_id_show("Running", &id);
+    if (!fw_id_match(&id, &file_id)) {
+        printf("Kicksmash firmware does not match %s\n", filename);
+        errs++;
+        goto fwwrite_end;
+    }
+    if (fw_verify_image(fbuf, fw_size, filename) != 0) {
+        errs++;
+        goto fwwrite_end;
+    }
+    printf("Kicksmash firmware update verified at %s (serial %.*s)\n",
+           device_name, (int) sizeof (id.si_serial), id.si_serial);
+
+fwwrite_end:
+    cmd_quiet = FALSE;
+    reopen_quiet = FALSE;
+    dfu_close(dev);
+    free(fbuf);
+    return (errs ? 1 : 0);
+}
+
 /*
  * run_mode() handles command line options provided by the user.
  *
@@ -4972,6 +6302,12 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len_specified,
         // XXX: Also add regular clock set service to message mode
         return (clock_ks_show(enter));
     }
+    if (mode & MODE_FWREAD)
+        return (fw_read(file1) != RC_SUCCESS);
+    if (mode & MODE_FWVERIFY)
+        return (fw_verify(file1));
+    if (mode & MODE_FWWRITE)
+        return (fw_write(file1));
     if (((file1 == NULL) || (file1[0] == '\0')) &&
         (mode & (MODE_READ | MODE_VERIFY | MODE_WRITE))) {
         warnx("You must specify a filename with -r or -v or -w option\n");
@@ -5289,6 +6625,27 @@ errx(EXIT_FAILURE, "how did we get here?");
                          "-%c may not be specified with any other mode", ch);
                 mode = MODE_READ;
                 break;
+            case 'R':
+                if (mode != MODE_UNKNOWN)
+                    errx(EXIT_FAILURE,
+                         "-%c may not be specified with any other mode", ch);
+                mode = MODE_FWREAD;
+                file1 = optarg;
+                break;
+            case 'F':
+                if (mode != MODE_UNKNOWN)
+                    errx(EXIT_FAILURE,
+                         "-%c may not be specified with any other mode", ch);
+                mode = MODE_FWVERIFY;
+                file1 = optarg;
+                break;
+            case 'W':
+                if (mode != MODE_UNKNOWN)
+                    errx(EXIT_FAILURE,
+                         "-%c may not be specified with any other mode", ch);
+                mode = MODE_FWWRITE;
+                file1 = optarg;
+                break;
             case 's':
                 if ((strcasecmp(optarg, "a3000") == 0) ||
                     (strcasecmp(optarg, "a4000") == 0) ||
@@ -5354,6 +6711,9 @@ errx(EXIT_FAILURE, "how did we get here?");
             case 0x80 + 'n':
                 debug_net++;
                 break;
+            case 0x80 + 'S':
+                snprintf(select_serial, sizeof (select_serial), "%s", optarg);
+                break;
             default:
                 warnx("Unknown option -%c 0x%x", ch, ch);
                 usage(stderr);
@@ -5400,6 +6760,27 @@ errx(EXIT_FAILURE, "how did we get here?");
 
     if (argc > 0)
         errx(EXIT_USAGE, "Too many arguments: %s", argv[0]);
+
+    if ((mode == MODE_FWWRITE) &&
+        ((device_name[0] == '\0') || (access(device_name, F_OK) != 0))) {
+        /*
+         * Prefer a device which is already in DFU mode (the Kicksmash
+         * updater or the STM32 ROM DFU bootloader) over one which has
+         * a serial port.
+         */
+        int sel = fw_select_dfu();
+        if (sel < 0)
+            exit(EXIT_USAGE);
+        if (sel > 0) {
+            atexit(at_exit_func);
+            fw_serial_started = FALSE;
+            rc = run_mode(mode, bank, baseaddr, len, report_max, fill,
+                          file1, file2);
+            if (fw_serial_started)
+                wait_for_tx_writer();
+            exit(rc);
+        }
+    }
 
     if (device_name[0] == '\0')
         find_mx_programmer();

@@ -798,7 +798,7 @@ remote_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch)
             dname = (char *) (dent + 1);
             pos  += sizeof (*dent) + entlen;
 
-            if (wild_entry_match(pattern, dname, 0)) {
+            if (wild_entry_match(pattern, dname, 1)) {
                 (*nmatch)++;
                 scan_rc = cb(arg, prefix, dname, hm_type_is_dir(dent->hmd_type),
                              dent);

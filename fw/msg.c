@@ -8,12 +8,13 @@
  *
  * Amiga message interface.
  */
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
 #include "board.h"
 #include "main.h"
 #include "printf.h"
 #include "uart.h"
-#include <stdbool.h>
-#include <string.h>
 #include "irq.h"
 #include "clock.h"
 #include "config.h"
@@ -35,6 +36,8 @@
 #define SWAP16(x)   __builtin_bswap16(x)
 #define SWAP32(x)   __builtin_bswap32(x)
 #define SWAP64(x)   __builtin_bswap64(x)
+
+#define FW_READ_MAX 2048  // Maximum bytes per KS_CMD_FW_READ
 
 #define likely(x)   __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
@@ -88,6 +91,9 @@
 #define timer_set_ti1_ch1(timer)              TIM_CR2(timer) &= ~TIM_CR2_TI1S
 #define nvic_enable_irq(irqn)   NVIC_ISER(irqn / 32) = (1 << (irqn % 32))
 #define nvic_disable_irq(irqn)  NVIC_ICER(irqn / 32) = (1 << (irqn % 32))
+
+/* Linker script symbol: value is the firmware image size in flash */
+extern uint8_t _fw_size;
 
 extern uint8_t usb_serial_str[32];
 
@@ -868,9 +874,9 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             uint32_t crc;
             memcpy((void *)buffer_txd_lo, sm_magic, sizeof (sm_magic));
             pos = sizeof (sm_magic) / 2;
-            buffer_txd_lo[pos++] = rlen1;
+            buffer_txd_lo[pos++] = rlen;
             buffer_txd_lo[pos++] = status;
-            crc = crc32r(0, &rlen1, 2);
+            crc = crc32r(0, &rlen, 2);
             crc = crc32r(crc, &status, 2);
             crc = crc32(crc, rbuf1, rlen1);
             if (rlen1 != 0) {
@@ -878,8 +884,9 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
                 pos += rlen1 / 2;
             }
             if (rlen2 != 0) {
+                crc = crc32(crc, rbuf2, rlen2);
                 memcpy((void *)&buffer_txd_lo[pos], rbuf2, rlen2);
-                pos += rlen2 / 2;
+                pos += (rlen2 + 1) / 2;
             }
             buffer_txd_lo[pos++] = crc >> 16;
             buffer_txd_lo[pos++] = (uint16_t) crc;
@@ -1052,7 +1059,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             reply.si_ks_time[3] = 0;
             strcpy(reply.si_serial, (const char *)usb_serial_str);
             reply.si_rev      = SWAP16(0x0002);     // Protocol version 0.2
-            reply.si_features = SWAP16(0x0003);     // Features
+            reply.si_features = SWAP16(0x0007);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
             reply.si_mode     = ee_mode;
             reply.si_cpu      = is_gd32;
@@ -1062,6 +1069,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             reply.si_busfreq  = clock_get_apb2() / 1000000;
             reply.si_busfreq  = SWAP16(reply.si_busfreq);
             reply.si_state    = SWAP32(board_state);
+            reply.si_size     = SWAP32((uintptr_t) &_fw_size);
             strcpy(reply.si_name, config.name);
             memset(reply.si_unused, 0, sizeof (reply.si_unused));
             ks_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
@@ -1398,6 +1406,57 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
             break;
         }
+        case KS_CMD_FW_UNLOCK:
+            /* Reply, then reboot into the updater */
+            ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            timer_delay_usec(100);
+            reset_dfu(0);
+            break;
+        case KS_CMD_FW_LOCK:
+            /* Already locked */
+            ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
+            break;
+        case KS_CMD_FW_READ: {
+            ks_fw_rw_t req;
+            uint16_t   adata[3];
+            uint32_t   offset;
+            uint32_t   len;
+            uint       pos;
+
+            if (cmd_len < sizeof (req)) {
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                break;
+            }
+
+            /* Compute start of message payload */
+            cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
+            if ((int) cons_s < 0)
+                cons_s += ARRAY_SIZE(buffer_rxa_lo);
+            for (pos = 0; pos < ARRAY_SIZE(adata); pos++) {
+                adata[pos] = buffer_rxa_lo[cons_s];
+                if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
+                    cons_s = 0;
+            }
+            offset = (adata[0] << 16) | adata[1];
+            len    = adata[2];
+            if (offset >= fw_info.fi_fw_size) {
+                ks_reply(0, KS_STATUS_FAIL, 0, NULL, 0, NULL);
+                break;
+            }
+            if (len > FW_READ_MAX)
+                len = FW_READ_MAX;
+            if (len > fw_info.fi_fw_size - offset)
+                len = fw_info.fi_fw_size - offset;
+            memset(&req, 0, sizeof (req));
+            req.kfrw_offset = SWAP32(offset);
+            req.kfrw_size   = SWAP16(len);
+            ks_reply(0, KS_STATUS_OK, sizeof (req), &req,
+                     len, (const void *) (FLASH_BASE + offset));
+            break;
+        }
+        case KS_CMD_FW_WRITE:
+            ks_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
+            break;
         case KS_CMD_BANK_INFO:
             /* Get bank info */
             ks_reply(0, KS_STATUS_OK, sizeof (config.bi), &config.bi, 0, NULL);
@@ -2494,7 +2553,7 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             reply.si_ks_time[3] = 0;
             strcpy(reply.si_serial, (const char *)usb_serial_str);
             reply.si_rev      = SWAP16(0x0002);     // Protocol version 0.2
-            reply.si_features = SWAP16(0x0003);     // Features
+            reply.si_features = SWAP16(0x0007);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
             reply.si_mode     = ee_mode;
             reply.si_cpu      = is_gd32;
@@ -2504,6 +2563,7 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             reply.si_busfreq  = clock_get_apb2() / 1000000;
             reply.si_busfreq  = SWAP16(reply.si_busfreq);
             reply.si_state    = SWAP32(board_state);
+            reply.si_size     = SWAP32((uintptr_t) &_fw_size);
             strcpy(reply.si_name, config.name);
             memset(reply.si_unused, 0, sizeof (reply.si_unused));
             usb_msg_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);
@@ -2538,6 +2598,44 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             } else {
                 usb_msg_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
             }
+            break;
+        case KS_CMD_FW_UNLOCK:
+            usb_msg_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            timer_delay_msec(50);
+            reset_dfu(0);
+            break;
+        case KS_CMD_FW_LOCK:
+            /* Already locked */
+            usb_msg_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
+            break;
+        case KS_CMD_FW_READ: {
+            ks_fw_rw_t req;
+            uint32_t offset;
+            uint32_t len;
+
+            if (cmd_len < sizeof (req)) {
+                usb_msg_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                break;
+            }
+            /* Request is not 32-bit aligned in the input buffer */
+            memcpy(&req, buf, sizeof (req));
+            offset = SWAP32(req.kfrw_offset);
+            len    = SWAP16(req.kfrw_size);
+            if (offset >= fw_info.fi_fw_size) {
+                usb_msg_reply(0, KS_STATUS_FAIL, 0, NULL, 0, NULL);
+                break;
+            }
+            if (len > FW_READ_MAX)
+                len = FW_READ_MAX;
+            if (len > fw_info.fi_fw_size - offset)
+                len = fw_info.fi_fw_size - offset;
+            req.kfrw_size = SWAP16(len);
+            usb_msg_reply(0, KS_STATUS_OK, sizeof (req), &req,
+                      len, (const void *) (FLASH_BASE + offset));
+            break;
+        }
+        case KS_CMD_FW_WRITE:
+            usb_msg_reply(0, KS_STATUS_LOCKED, 0, NULL, 0, NULL);
             break;
         case KS_CMD_BANK_INFO:
             /* Get bank info */

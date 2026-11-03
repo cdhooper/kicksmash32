@@ -33,6 +33,18 @@
 #include "msg.h"
 #include "version.h"
 
+/* Linker script symbol: value is the firmware image size in flash */
+extern uint8_t _fw_size;
+
+/* Firmware identification, located by scanning flash (see main.h) */
+const fw_info_t fw_info = {
+    .fi_magic       = FW_INFO_MAGIC,
+    .fi_struct_size = sizeof (fw_info_t),
+    .fi_self        = &fw_info,
+    .fi_version_str = &version_str,
+    .fi_fw_size     = (uintptr_t) &_fw_size,
+};
+
 static void
 reset_periphs(void)
 {
@@ -55,12 +67,10 @@ main_poll(void)
     led_poll();
 }
 
-extern uint _binary_objs_usbdfu_bin_start;
-extern uint _binary_objs_usbdfu_bin_end;
-extern uint _binary_objs_usbdfu_bin_size;
 int
 main(void)
 {
+    uint persist_good = (persist.sp_magic == SP_MAGIC);
     reset_periphs();
     persist_init();
     reset_check();
@@ -76,10 +86,15 @@ main(void)
     identify_cpu();
     show_reset_reason();
     config_read();
+    persist.sp_board_rev = config.board_rev;
     led_set_brightness(config.led_level);
     usb_startup();
     check_board_standalone();
-    ee_update_bank_at_poweron();
+    if (persist_good) {
+        ee_set_bank(persist.sp_bank_current);
+    } else {
+        ee_update_bank_at_poweron();
+    }
 
     adc_init();
     ee_init();

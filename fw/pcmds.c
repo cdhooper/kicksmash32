@@ -724,7 +724,8 @@ cmd_reset(int argc, char * const *argv)
         shutdown_all();
         reset_cpu();
         return (RC_FAILURE);
-    } else if (strncmp(argv[1], "dfu", 3) == 0) {
+    } else if ((strncmp(argv[1], "dfu", 3) == 0) ||
+               (strncmp(argv[1], "update", 3) == 0)) {
         uint isrom = (argv[1][3] == 'r');
         printf("Resetting to DFU%s...\n", isrom ? " in ROM" : "");
         shutdown_all();

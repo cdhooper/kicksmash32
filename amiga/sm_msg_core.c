@@ -36,6 +36,19 @@
 uint smash_cmd_shift = 2;
 extern uint flag_debug;
 
+#if defined(ROMFS) || defined(STANDALONE)
+#define SMASH_REPLY_WAIT 0
+#else
+/*
+ * Additional time (CIA ticks) to wait for a Kicksmash reply, beyond the
+ * normal reply wait. This is set by a caller which issues a command that
+ * Kicksmash takes a long time to complete before replying, such as
+ * KS_CMD_FW_WRITE (flash page erase and program).
+ */
+uint smash_reply_wait = 0;
+#define SMASH_REPLY_WAIT smash_reply_wait
+#endif
+
 #ifdef ROMFS
 #define crc32 lcrc32
 #define cia_ticks lcia_ticks
@@ -346,7 +359,12 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
      * Example 2: ?        0x1017   0x0204   0x0117   0x0119   len
      */
 #define WAIT_FOR_MAGIC_LOOPS 128
-    for (word = 0; word < WAIT_FOR_MAGIC_LOOPS; word++) {
+    uint extra_wait = SMASH_REPLY_WAIT;
+    uint got_magic = 0;
+    for (word = 0; (word < WAIT_FOR_MAGIC_LOOPS) || (extra_wait != 0);
+         word++) {
+        if ((word >= WAIT_FOR_MAGIC_LOOPS) && (extra_wait != 0))
+            extra_wait--;  // Bound the extended wait in all cases
         // XXX: This code might need to change for 16-bit Amigas
         if (word & 1) {
             val = (uint16_t) val32;
@@ -366,8 +384,17 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             if (val != sm_magic[magic]) {
                 /* This word might begin a new magic sequence */
                 magic = (val == sm_magic[0]) ? 1 : 0;
-                if (magic == 0)
-                    cia_spin(word);
+                if (magic == 0) {
+                    if (word < WAIT_FOR_MAGIC_LOOPS) {
+                        cia_spin(word);
+                    } else {
+                        /* Extended wait for a slow reply */
+                        uint ticks = (extra_wait < WAIT_FOR_MAGIC_LOOPS) ?
+                                     extra_wait : WAIT_FOR_MAGIC_LOOPS;
+                        cia_spin(ticks);
+                        extra_wait -= ticks;
+                    }
+                }
                 continue;
             }
         } else if (magic < ARRAY_SIZE(sm_magic) + 1) {
@@ -377,12 +404,13 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             replystatus = val;  // Reply status
             crc = crc32(crc, &val, sizeof (val));
             word++;
+            got_magic = 1;
             break;
         }
         magic++;
     }
 
-    if (word >= WAIT_FOR_MAGIC_LOOPS) {
+    if (!got_magic) {
         /* Did not see reply magic */
         replystatus = MSG_STATUS_NO_REPLY;
         if (replyalen != NULL) {

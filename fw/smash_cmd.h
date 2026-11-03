@@ -30,6 +30,10 @@
 #define KS_CMD_FLASH_ERASE   0x13  // Generate flash erase sequence
 #define KS_CMD_FLASH_WRITE   0x14  // Generate flash write sequence
 #define KS_CMD_FLASH_MWRITE  0x15  // Flash write multiple (not implemented)
+#define KS_CMD_FW_UNLOCK     0x18  // Allow firmware update erase / write
+#define KS_CMD_FW_LOCK       0x19  // Disable firmware update erase / write
+#define KS_CMD_FW_READ       0x1a  // Read section of firmware
+#define KS_CMD_FW_WRITE      0x1b  // Write section of firmware
 #define KS_CMD_BANK_INFO     0x20  // Get ROM bank information structure
 #define KS_CMD_BANK_SET      0x21  // Set bank (options in high bits)
 #define KS_CMD_BANK_MERGE    0x22  // Merge or unmerge banks
@@ -319,6 +323,10 @@
  * message to the reply message.
  */
 
+/*
+ * The below structure is used for the following command:
+ *    KS_CMD_BANK_INFO
+ */
 #define ROM_BANKS 8
 typedef struct {
     uint8_t  bi_valid;                    // 0x01 = valid
@@ -331,6 +339,10 @@ typedef struct {
     uint8_t  bi_unused[12];               // Unused space
 } bank_info_t;
 
+/*
+ * The below structure is used for the following command:
+ *    KS_CMD_ID
+ */
 typedef struct {
     uint16_t si_ks_version[2];           // Kicksmash version    (major-minor)
     uint8_t  si_ks_date[4];              // Kicksmash build date (cc-yy-mm-dd)
@@ -346,9 +358,17 @@ typedef struct {
     uint16_t si_cpufreq;                 // CPU core frequency
     uint16_t si_busfreq;                 // Bus frequency
     uint32_t si_state;                   // Board state
-    uint8_t  si_unused[16];              // Unused space
+    uint32_t si_size;                    // Firmware total size in bytes
+    uint8_t  si_unused[12];              // Unused space
 } smash_id_t;
 
+#define SID_FEATURE_CAN_FW_UPDATE 0x0004  // Can do firmware update
+#define SID_FEATURE_FW_UPDATE     0x0008  // Running firmware updater
+
+/*
+ * The below structure is used for the following command:
+ *    KS_CMD_MSG_INFO
+ */
 typedef struct {
     uint16_t smi_atou_inuse;             // Amiga -> USB buffer bytes in use
     uint16_t smi_atou_avail;             // Amiga -> USB buffer bytes free
@@ -359,10 +379,26 @@ typedef struct {
     uint8_t  smi_unused[16];             // Unused space
 } smash_msg_info_t;
 
+/*
+ * The below structure is used for the following commands:
+ *    KS_CMD_MSG_SEND
+ *    KS_CMD_MSG_RECEIVE
+ */
 typedef struct {
     uint8_t  km_op;        // Operation to perform (KM_OP_*)
     uint8_t  km_status;    // Status reply
     uint16_t km_tag;       // Message tag or sequence number
 } km_msg_hdr_t;
+
+/*
+ * The below structure is used for the following commands:
+ *    KS_CMD_FW_READ
+ *    KS_CMD_FW_WRITE
+ */
+typedef struct {
+    uint32_t kfrw_offset;          // Offset for read or write
+    uint16_t kfrw_size;            // Number of bytes to read or write
+    uint8_t  kfrw_unused[6];       // Unused space
+} ks_fw_rw_t;
 
 #endif /* _SMASH_CMD_H */

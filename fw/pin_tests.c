@@ -9,6 +9,7 @@
  * Pin tests for board connectivity and soldering issues.
  */
 
+#include <stdint.h>
 #include "board.h"
 #include "main.h"
 #include "printf.h"
@@ -24,6 +25,7 @@
 #include "prom_access.h"
 #include "led.h"
 #include "irq.h"
+#include "persist.h"
 
 #include <libopencm3/stm32/timer.h>
 
@@ -328,6 +330,9 @@ check_board_standalone(void)
     }
     printf("KBRST");
     usb_poll();
+
+    if (kbrst_in_amiga)
+        persist.sp_in_amiga = 1;
 
     if (addr_conn || kbrst_in_amiga) {
         printf("\n");

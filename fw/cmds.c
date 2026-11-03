@@ -1976,7 +1976,8 @@ _gettimeofday(struct timeval *tv, void *tz)
     return (0);
 }
 
-int isatty(int fd)
+int
+isatty(int fd)
 {
     if (fd <= 2) {
         ULONG ihandle = (fd == 0) ? Input() : Output();

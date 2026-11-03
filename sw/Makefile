@@ -1,5 +1,5 @@
 HOSTSMASH_PROG=hostsmash
-HOSTSMASH_SRCS=hostsmash.c hostsmash_fs.c hostsmash_net.c \
+HOSTSMASH_SRCS=hostsmash.c hostsmash_fs.c hostsmash_net.c hostsmash_dfu.c \
                ../fw/version.c ../fw/crc32.c
 HSNET_PROG=hostsmash_netif
 HSNET_SRCS=hostsmash_netif.c ../fw/version.c
@@ -96,6 +96,18 @@ endif
 
 #CFLAGS += -fanalyzer
 
+# libusb-1.0 provides DFU support for hostsmash --fwwrite
+ifeq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
+    LIBUSB_CFLAGS := $(shell pkg-config --cflags libusb-1.0 2>/dev/null)
+    LIBUSB_LIBS   := $(shell pkg-config --libs libusb-1.0 2>/dev/null)
+endif
+ifneq (,$(LIBUSB_LIBS))
+    CFLAGS += -DHAVE_LIBUSB $(LIBUSB_CFLAGS)
+    HOSTSMASH_LIBS := $(LIBUSB_LIBS)
+else
+    $(info libusb-1.0 not found: hostsmash --fwwrite (DFU) will be disabled)
+endif
+
 HOSTSMASH_OPROG := $(OBJDIR)/$(HOSTSMASH_PROG)
 HSNET_OPROG := $(OBJDIR)/$(HSNET_PROG)
 CRCIT_OPROG := $(OBJDIR)/$(CRCIT_PROG)
@@ -143,13 +155,13 @@ $(foreach SRCFILE,$(CRCIT_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),CR
 
 $(OBJDIR)/netif_windows.o: | $(NPCAP_HDR)
 
-$(HOSTSMASH_OBJS) $(HSNET_OBJS) $(CRCIT_OBJS): Makefile ../fw/version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h hostsmash.h hostsmash_net.h hostsmash_netif.h
+$(HOSTSMASH_OBJS) $(HSNET_OBJS) $(CRCIT_OBJS): Makefile ../fw/version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h hostsmash.h hostsmash_net.h hostsmash_netif.h hostsmash_dfu.h
 $(OBJDIR)/hostsmash.o: | $(USB_HDR) $(NPCAP_HDR)
 $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(HOSTSMASH_OBJS) $(HSNET_OBJS)) Makefile
 
 $(HOSTSMASH_OPROG): $(HOSTSMASH_OBJS)
 	@echo Building $@
-	$(QUIET)$(CC) -o $@ $(HOSTSMASH_OBJS) $(LDFLAGS)
+	$(QUIET)$(CC) -o $@ $(HOSTSMASH_OBJS) $(LDFLAGS) $(HOSTSMASH_LIBS)
 	@rm -f $(HOSTSMASH_PROG)
 	@ln -s $@
 

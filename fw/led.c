@@ -9,9 +9,9 @@
  * STM32 LED control
  */
 
+#include <stdint.h>
 #include "board.h"
 #include "main.h"
-#include <stdint.h>
 #include "led.h"
 #include "gpio.h"
 #include "timer.h"
