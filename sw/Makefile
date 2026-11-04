@@ -1,5 +1,6 @@
 HOSTSMASH_PROG=hostsmash
 HOSTSMASH_SRCS=hostsmash.c hostsmash_fs.c hostsmash_net.c hostsmash_dfu.c \
+               hostsmash_windrv.c \
                ../fw/version.c ../fw/crc32.c
 HSNET_PROG=hostsmash_netif
 HSNET_SRCS=hostsmash_netif.c ../fw/version.c
@@ -38,11 +39,18 @@ endif
 ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
     CFLAGS := $(filter-out -DALLOW_CREATE_LINK, $(CFLAGS))
     # -static works for Vista+, but doesn't work for XP
-    LDFLAGS += -lws2_32 -lwinmm -static
+    LDFLAGS += -lws2_32 -lwinmm -lsetupapi -lcfgmgr32 -static
     OBJDIR := objs.win64
     HOSTSMASH_SRCS += mingw-realpath.c
     HSNET_SRCS += netif_windows.c
     CC := x86_64-w64-mingw32-gcc
+
+    LIBUSB_REL      := v1.0.30/libusb-1.0.30.7z
+    LIBUSB_REL_FILE := $(notdir $(LIBUSB_REL))
+    LIBUSB_DIR      := libusb-windows
+    LIBUSB_HDR      := $(LIBUSB_DIR)/include/libusb.h
+    LIBUSB_CFLAGS   := -I$(LIBUSB_DIR)/include
+    LIBUSB_LIBS     := $(LIBUSB_DIR)/MinGW64/static/libusb-1.0.a
 
     # netif_windows.c talks to the physical NIC via Npcap (the current
     # WinPcap-API-compatible driver/library -- https://npcap.com/),
@@ -67,6 +75,7 @@ ifneq (,$(filter $(TARGET_OS),win32))
     LDFLAGS += -Lmingw_7.5.0_i686  # old version of pthread library for Win XP
     OBJDIR := objs.win32
     CC := i686-w64-mingw32-gcc
+    LIBUSB_LIBS := $(LIBUSB_DIR)/MinGW32/static/libusb-1.0.a
 endif
 ifneq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
     HOSTSMASH_PROG := $(HOSTSMASH_PROG).exe
@@ -101,11 +110,32 @@ ifeq (,$(filter $(TARGET_OS),Windows_NT Windows win win32 win64))
     LIBUSB_CFLAGS := $(shell pkg-config --cflags libusb-1.0 2>/dev/null)
     LIBUSB_LIBS   := $(shell pkg-config --libs libusb-1.0 2>/dev/null)
 endif
+ifeq ($(TARGET_OS),Darwin)
+ifeq (,$(LIBUSB_LIBS))
+    # Homebrew libusb without pkg-config
+    LIBUSB_PREFIX := $(shell brew --prefix libusb 2>/dev/null)
+    ifneq (,$(wildcard $(LIBUSB_PREFIX)/include/libusb-1.0/libusb.h))
+        LIBUSB_CFLAGS := -I$(LIBUSB_PREFIX)/include/libusb-1.0
+        LIBUSB_LIBS   := -L$(LIBUSB_PREFIX)/lib -lusb-1.0
+    endif
+endif
+endif
 ifneq (,$(LIBUSB_LIBS))
     CFLAGS += -DHAVE_LIBUSB $(LIBUSB_CFLAGS)
     HOSTSMASH_LIBS := $(LIBUSB_LIBS)
 else
     $(info libusb-1.0 not found: hostsmash --fwwrite (DFU) will be disabled)
+    ifeq ($(TARGET_OS),Darwin)
+        $(info To enable it on macOS, install Homebrew (https://brew.sh), then run:)
+        $(info $()    brew install libusb pkg-config)
+        $(info $()    make clean; make)
+        $(info If you use MacPorts instead:  sudo port install libusb pkgconfig)
+    else ifeq ($(TARGET_OS),Linux)
+        $(info To enable it, install the libusb-1.0 development package, then)
+        $(info rebuild with "make clean; make":)
+        $(info $()    Fedora:          sudo dnf install libusb1-devel)
+        $(info $()    Debian/Raspbian: sudo apt-get install libusb-1.0-0-dev pkg-config)
+    endif
 endif
 
 HOSTSMASH_OPROG := $(OBJDIR)/$(HOSTSMASH_PROG)
@@ -154,8 +184,9 @@ $(foreach SRCFILE,$(HSNET_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),HS
 $(foreach SRCFILE,$(CRCIT_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),CRCIT_OBJS)))
 
 $(OBJDIR)/netif_windows.o: | $(NPCAP_HDR)
+$(OBJDIR)/hostsmash_dfu.o: | $(LIBUSB_HDR)
 
-$(HOSTSMASH_OBJS) $(HSNET_OBJS) $(CRCIT_OBJS): Makefile ../fw/version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h hostsmash.h hostsmash_net.h hostsmash_netif.h hostsmash_dfu.h
+$(HOSTSMASH_OBJS) $(HSNET_OBJS) $(CRCIT_OBJS): Makefile ../fw/version.h ../fw/smash_cmd.h ../fw/crc32.h ../amiga/host_cmd.h hostsmash.h hostsmash_net.h hostsmash_netif.h hostsmash_dfu.h hostsmash_windrv.h
 $(OBJDIR)/hostsmash.o: | $(USB_HDR) $(NPCAP_HDR)
 $(OBJDIR)/version.o: $(filter-out $(OBJDIR)/version.o,$(HOSTSMASH_OBJS) $(HSNET_OBJS)) Makefile
 
@@ -195,6 +226,16 @@ $(NPCAP_HDR):
 	@echo Getting the Windows Npcap SDK
 	wget https://npcap.com/dist/$(NPCAP_SDK_ZIP)
 	unzip npcap-sdk-*.zip -d $(NPCAP_SDK_DIR)
+
+
+$(LIBUSB_REL_FILE):
+	@echo Getting Windows libusb
+	wget https://github.com/libusb/libusb/releases/download/$(LIBUSB_REL)
+
+$(LIBUSB_HDR): | $(LIBUSB_REL_FILE)
+	@echo Extracting Windows libusb
+	@mkdir -p $(LIBUSB_DIR)
+	@-(cd $(LIBUSB_DIR); 7z x ../$(LIBUSB_REL_FILE))
 
 clean:
 	@echo Cleaning

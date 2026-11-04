@@ -2,6 +2,11 @@ You will likely need to override MacOS "unknown developer" security on
 the hostsmash and hostsmash_netif executables with the following command:
     sudo xattr -d com.apple.quarantine hostsmash hostsmash_netif
 
+Another way is to use cat and chmod. Example:
+    cat hostsmash > ~/bin/hostsmash
+    cat hostsmash_netif > ~/bin/hostsmash_netif
+    chmod +x ~/bin/hostsmash ~/bin/hostsmash_netif
+
 To enable networking on MacOS, you need to either assign setuid root
 permissions to hostsmash_netif or add your account to the admin group
 and then:

@@ -465,9 +465,29 @@ static const struct usb_interface_descriptor data_iface[] = {
     }
 };
 
+/*
+ * The device descriptor class (Misc / Common / IAD) declares that functions
+ * are described by Interface Association Descriptors. Without one, Windows
+ * splits the CDC interfaces into separate devices and its built-in usbser
+ * driver can't start (code 10), so a driver had to be installed by
+ * wdikicksmash.bat or Zadig. With this IAD, Windows 10 and newer bind
+ * usbser to both interfaces as a single COM port.
+ */
+static const struct usb_iface_assoc_descriptor cdc_iface_assoc = {
+    .bLength           = USB_DT_INTERFACE_ASSOCIATION_SIZE,
+    .bDescriptorType   = USB_DT_INTERFACE_ASSOCIATION,
+    .bFirstInterface   = 0,
+    .bInterfaceCount   = 2,
+    .bFunctionClass    = USB_CLASS_CDC,
+    .bFunctionSubClass = USB_CDC_SUBCLASS_ACM,
+    .bFunctionProtocol = USB_CDC_PROTOCOL_AT,
+    .iFunction         = 0,
+};
+
 static const struct usb_interface ifaces[] = {
     {
         .num_altsetting     = 1,
+        .iface_assoc        = &cdc_iface_assoc,
         .altsetting         = comm_iface,
     }, {
         .num_altsetting     = 1,

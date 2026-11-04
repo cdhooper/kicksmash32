@@ -39,6 +39,7 @@ a1200_romoe/
 photos
 fw/libopencm3/
 fw/stutils/
+smasherfw/libopencm3/
 amiga/smash
 amiga/smashfs
 amiga/smashftp
@@ -59,6 +60,8 @@ sw/*.macos
 sw/*.linux
 sw/crcit
 sw/npcap-sdk
+sw/libusb-windows
+sw/libusb-*.7z
 romswitcher/switcher.rom
 romswitcher/switcher
 romswitcher/unused/

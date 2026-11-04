@@ -57,6 +57,7 @@ typedef unsigned int uint;
 #include "hostsmash_fs.h"
 #include "hostsmash_net.h"
 #include "hostsmash_dfu.h"
+#include "hostsmash_windrv.h"
 
 #define MSG_DEBUG
 #ifndef MSG_DEBUG
@@ -323,6 +324,7 @@ static pthread_cond_t   rx_rb_cv  = PTHREAD_COND_INITIALIZER;
 #endif
 #ifdef __MINGW32__
 static HANDLE           dev_handle        = INVALID_HANDLE_VALUE;
+static volatile bool    dev_write_failed  = FALSE;  // Writer saw error
 #else
 static int              dev_fd            = -1;
 static int              got_terminfo      = 0;
@@ -1207,6 +1209,7 @@ top:
                                 0,
                                 NULL);
     } while (dev_handle == INVALID_HANDLE_VALUE);
+    dev_write_failed = FALSE;
 
     if (running == 0)
         return;
@@ -1310,6 +1313,7 @@ th_serial_reader(void *arg)
     while (running) {
 #ifdef __MINGW32__
         DWORD len;
+        uint  idle = 0;
         while (ReadFile(dev_handle, buf, sizeof (buf), &len, NULL))
 #else
         ssize_t len;
@@ -1317,6 +1321,24 @@ th_serial_reader(void *arg)
 #endif
         {
             if (len == 0) {
+#ifdef __MINGW32__
+                /*
+                 * After its USB device is removed (for example, when
+                 * Kicksmash reboots), Windows may keep completing reads
+                 * on the stale handle with no data rather than failing
+                 * them. Detect that the port is gone by a failed write
+                 * or by a periodic port status check, then reopen it.
+                 */
+                if (dev_write_failed)
+                    break;
+                if (++idle >= 25) {
+                    DWORD   errors;
+                    COMSTAT stat;
+                    idle = 0;
+                    if (!ClearCommError(dev_handle, &errors, &stat))
+                        break;
+                }
+#endif
 #if defined(USE_NON_BLOCKING_TTY) || defined(__MINGW32__)
                 /* No input available */
                 time_delay_msec(10);
@@ -1417,8 +1439,10 @@ dev_write_all(const char *buf, uint len)
         DWORD count;
         if (dev_handle == INVALID_HANDLE_VALUE)
             return ((done > 0) ? (int) done : -1);
-        if (WriteFile(dev_handle, buf + done, len - done, &count, NULL) == 0)
+        if (WriteFile(dev_handle, buf + done, len - done, &count, NULL) == 0) {
+            dev_write_failed = TRUE;  // Reader thread will reopen device
             return ((done > 0) ? (int) done : -1);
+        }
 #else
         ssize_t count;
         if (dev_fd == -1)
@@ -2972,6 +2996,20 @@ run_terminal_mode(void)
 #ifdef USE_NON_BLOCKING_TTY
     int              enable     = 1;
 #endif
+
+    if (terminal_cmd != NULL) {
+        /*
+         * A previous hostsmash operation (such as --fwwrite) may have left
+         * Kicksmash in "prom service" mode, where it discards text until
+         * it receives CR, LF, or ^C. The command would then be lost. Send
+         * CR first and wait for the command prompt, without displaying it.
+         */
+        terminal_mode = FALSE;
+        send_ll_str("\r");
+        (void) wait_for_text("CMD>", 500);
+        discard_input(50);
+        terminal_mode = TRUE;
+    }
 
 #ifdef __MINGW32__
     HANDLE ihandle = GetStdHandle(STD_INPUT_HANDLE);
@@ -5801,6 +5839,15 @@ fw_select_dfu(void)
     uint       first = 0;
     uint       cur;
 
+    /*
+     * On Windows, a DFU device which has no driver is invisible to libusb.
+     * Install the WinUSB driver for any such device, then look again.
+     */
+    if (dfu_install_drivers()) {
+        time_delay_msec(2000);
+        count = dfu_list(list, ARRAY_SIZE(list));
+    }
+
     for (cur = 0; cur < count; cur++) {
         if (!dfu_id_match(&list[cur], select_serial))
             continue;
@@ -6033,6 +6080,15 @@ fw_reconnect(const char *serial, const char *usbpath,
             !fw_serial_use(&port)) {
             continue;
         }
+        /*
+         * Kicksmash enables USB before its command line is running, so
+         * input sent right after it boots is queued. Its command line
+         * then prints a prompt for each queued newline. Let it settle,
+         * so that a late prompt isn't taken as the KS_CMD_ID reply.
+         */
+        send_ll_str("\n");
+        (void) wait_for_text("CMD>", 1000);
+        discard_input(200);
         rc = fw_ks_identify(id);
         if (rc == 0)
             break;
@@ -6509,6 +6565,12 @@ main(int argc, char * const *argv)
     (void) sigaction(SIGPIPE, &sa, NULL);
 #endif
 
+#ifdef __MINGW32__
+    /* Elevated copy of hostsmash run to install a Windows driver */
+    rc = windrv_internal_main(argc, argv);
+    if (rc >= 0)
+        exit(rc);
+#endif
     device_name[0] = '\0';
 
     while ((ch = getopt_long(argc, argv, short_opts, long_opts,
@@ -6782,6 +6844,24 @@ errx(EXIT_FAILURE, "how did we get here?");
         }
     }
 
+#ifdef __MINGW32__
+    /*
+     * A Kicksmash running firmware without an Interface Association
+     * Descriptor has no working COM port unless a driver was installed
+     * for it. Install Windows' built-in USB serial driver if needed.
+     */
+    if (windrv_fix_kicksmash()) {
+        uint wait;
+        for (wait = 0; wait < 50; wait++) {
+            ks_port_t ports[KS_PORTS_MAX];
+            if (ks_port_list(ports, ARRAY_SIZE(ports)) > 0)
+                break;
+            time_delay_msec(100);  // Allow time for the COM port to appear
+        }
+        if (device_name[0] != '\0')
+            printf("Note: the Kicksmash COM port may have changed\n");
+    }
+#endif
     if (device_name[0] == '\0')
         find_mx_programmer();
 

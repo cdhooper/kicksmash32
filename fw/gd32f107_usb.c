@@ -128,9 +128,73 @@ dwc_rx_fifo_pop(usbd_device *const usbd_dev, int is_header)
 
 static void dwc_flush_txfifo(usbd_device *usbd_dev, uint8_t ep);
 
+#define GD32_USB_WAIT_LOOPS 100000  // Register wait limit (several ms)
+
+/*
+ * gd32_dwc_out_eps_disable() disables all enabled OUT endpoints (other
+ *                            than EP0) using the sequence required by the
+ *                            DWC OTG core: global OUT NAK must be in effect
+ *                            before an OUT endpoint disable can complete.
+ *
+ * libopencm3's dwc_endpoints_reset() only sets SNAK and EPDIS, and does
+ * not wait. On the GD32F107, the disable then never completes, and EPDIS
+ * remains pending. When dwc_ep_setup() later re-arms the endpoint at
+ * SET_CONFIGURATION, it stays NAKing forever: the host can no longer send
+ * any data to Kicksmash. This happens when the host resets the device
+ * (for example, when Windows re-enumerates it after a driver change or a
+ * device remove and re-scan) after the CDC endpoint was armed. Only a
+ * power cycle used to recover from it.
+ *
+ * Global OUT NAK becomes effective only when its status entry is popped
+ * from the RX FIFO, so the RX FIFO is drained here while waiting. Any
+ * received data is discarded; the RX FIFO is flushed afterward anyway.
+ */
+static void
+gd32_dwc_out_eps_disable(usbd_device *const usbd_dev)
+{
+    uint32_t loops;
+    uint32_t enabled = 0;
+    size_t   ep;
+
+    for (ep = 1U; ep < ENDPOINT_COUNT; ep++)
+        if (REBASE(OTG_DOEPCTL(ep)) & OTG_DOEPCTL0_EPENA)
+            enabled |= (1U << ep);
+    if (enabled == 0)
+        return;
+
+    /* Set global OUT NAK, and wait for it to take effect */
+    REBASE(OTG_DCTL) |= OTG_DCTL_SGONAK;
+    for (loops = 0; loops < GD32_USB_WAIT_LOOPS; loops++) {
+        if (REBASE(OTG_GINTSTS) & OTG_GINTSTS_GONAKEFF)
+            break;
+        if (REBASE(OTG_GINTSTS) & OTG_GINTSTS_RXFLVL) {
+            /* Pop a status entry and discard any data which follows it */
+            uint32_t sts = REBASE(OTG_GRXSTSP);
+            uint32_t words = (((sts & OTG_GRXSTSP_BCNT_MASK) >> 4U) + 3) / 4;
+            while (words-- > 0)
+                (void) REBASE(OTG_FIFO(0));
+        }
+    }
+
+    /* Disable each enabled OUT endpoint and wait for it to complete */
+    for (ep = 1U; ep < ENDPOINT_COUNT; ep++) {
+        if ((enabled & (1U << ep)) == 0)
+            continue;
+        REBASE(OTG_DOEPCTL(ep)) |= OTG_DOEPCTL0_SNAK | OTG_DOEPCTL0_EPDIS;
+        for (loops = 0; loops < GD32_USB_WAIT_LOOPS; loops++)
+            if (REBASE(OTG_DOEPINT(ep)) & OTG_DOEPINTX_EPDISD)
+                break;
+        REBASE(OTG_DOEPINT(ep)) = OTG_DOEPINTX_EPDISD;
+    }
+
+    /* Clear global OUT NAK */
+    REBASE(OTG_DCTL) |= OTG_DCTL_CGONAK;
+}
+
 static void
 gd32_dwc_endpoints_reset(usbd_device *const usbd_dev)
 {
+    gd32_dwc_out_eps_disable(usbd_dev);
     dwc_rx_fifo_reset();
     dwc_endpoints_reset(usbd_dev);
 }

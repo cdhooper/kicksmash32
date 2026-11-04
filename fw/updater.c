@@ -16,6 +16,8 @@ typedef unsigned int uint;
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/dfu.h>
+#include <libopencm3/usb/bos.h>
+#include <libopencm3/usb/microsoft.h>
 #include <libopencm3/stm32/usart.h>
 #include "clock.h"
 #include "timer.h"
@@ -201,14 +203,14 @@ static struct {
 const struct usb_device_descriptor dev = {
     .bLength = USB_DT_DEVICE_SIZE,
     .bDescriptorType = USB_DT_DEVICE,
-    .bcdUSB = 0x0200,
+    .bcdUSB = 0x0201,   // 2.01 = host will read the BOS descriptor
     .bDeviceClass = 0,
     .bDeviceSubClass = 0,
     .bDeviceProtocol = 0,
     .bMaxPacketSize0 = 64,
     .idVendor = 0x0483,
     .idProduct = 0xDF11,
-    .bcdDevice = 0x0200,
+    .bcdDevice = 0x0201,
     .iManufacturer = 1,
     .iProduct = 2,
     .iSerialNumber = 3,
@@ -263,6 +265,90 @@ const struct usb_config_descriptor config = {
 
     .interface = ifaces,
 };
+
+/*
+ * Microsoft OS 2.0 descriptors
+ * ----------------------------
+ * These cause Windows 8.1 and newer to automatically bind the WinUSB
+ * driver to the updater, so that libusb (hostsmash --fwwrite) can
+ * access it without the user first installing a driver with Zadig.
+ * Windows only reads the BOS descriptor when bcdUSB is at least 2.01.
+ * It then fetches the descriptor set below using a vendor request with
+ * bRequest = MS_OS_VENDOR_CODE and wIndex = 7 (MS_OS_20_DESCRIPTOR_INDEX).
+ *
+ * The descriptor set has no configuration or function subsets because
+ * the updater is not a composite device, so the features apply to the
+ * whole device.
+ */
+#define MS_OS_VENDOR_CODE      0x01
+#define MS_OS_WINDOWS_VERSION  0x06030000  // Windows 8.1
+#define MS_OS_SET_LEN          162         // sizeof (ms_os_20_desc_set)
+#define LE16(x) ((x) & 0xff), (((x) >> 8) & 0xff)
+#define LE32(x) LE16((x) & 0xffff), LE16((x) >> 16)
+#define U16(c)  (c), 0                     // UTF-16LE ASCII character
+
+static const microsoft_os_descriptor_set_information ms_os_set_info = {
+    .dwWindowsVersion = MS_OS_WINDOWS_VERSION,
+    .wMSOSDescriptorSetTotalLength = MS_OS_SET_LEN,
+    .bMS_VendorCode = MS_OS_VENDOR_CODE,
+    .bAltEnumCode = 0,
+};
+
+static const usb_platform_device_capability_descriptor ms_os_platform = {
+    .device_capability_descriptor = {
+        .bLength = USB_DCT_PLATFORM_SIZE +
+                   MICROSOFT_OS_DESCRIPTOR_SET_INFORMATION_SIZE,
+        .bDescriptorType = USB_DT_DEVICE_CAPABILITY,
+        .bDevCapabilityType = USB_DCT_PLATFORM,
+    },
+    .bReserved = 0,
+    .PlatformCapabilityUUID = MICROSOFT_OS_DESCRIPTOR_PLATFORM_CAPABILITY_ID,
+    .CapabilityData = &ms_os_set_info,
+};
+
+static const usb_bos_descriptor bos = {
+    .bLength = USB_DT_BOS_SIZE,
+    .bDescriptorType = USB_DT_BOS,
+    .wTotalLength = 0,  // Computed by libopencm3
+    .bNumDeviceCaps = 1,
+    .device_capability_descriptors = &ms_os_platform,
+};
+
+static const uint8_t ms_os_20_desc_set[] = {
+    /* Descriptor set header */
+    LE16(10),                       // wLength
+    LE16(MICROSOFT_OS_SET_HEADER),  // wDescriptorType
+    LE32(MS_OS_WINDOWS_VERSION),    // dwWindowsVersion
+    LE16(MS_OS_SET_LEN),            // wTotalLength
+
+    /* Compatible ID: bind the WinUSB driver */
+    LE16(20),                                   // wLength
+    LE16(MICROSOFT_OS_FEATURE_COMPATIBLE_ID),   // wDescriptorType
+    'W', 'I', 'N', 'U', 'S', 'B', 0, 0,         // CompatibleID
+    0, 0, 0, 0, 0, 0, 0, 0,                     // SubCompatibleID
+
+    /* Registry property: DeviceInterfaceGUIDs (REG_MULTI_SZ) */
+    LE16(10 + 42 + 80),                         // wLength
+    LE16(MICROSOFT_OS_FEATURE_REG_PROPERTY),    // wDescriptorType
+    LE16(REG_MULTI_SZ),                         // wPropertyDataType
+    LE16(42),                                   // wPropertyNameLength
+    U16('D'), U16('e'), U16('v'), U16('i'), U16('c'), U16('e'),
+    U16('I'), U16('n'), U16('t'), U16('e'), U16('r'), U16('f'),
+    U16('a'), U16('c'), U16('e'), U16('G'), U16('U'), U16('I'),
+    U16('D'), U16('s'), U16(0),
+    LE16(80),                                   // wPropertyDataLength
+    /* {B53EAB80-04C3-4486-AAFB-7393460808A0} = Kicksmash updater */
+    U16('{'), U16('B'), U16('5'), U16('3'), U16('E'), U16('A'),
+    U16('B'), U16('8'), U16('0'), U16('-'), U16('0'), U16('4'),
+    U16('C'), U16('3'), U16('-'), U16('4'), U16('4'), U16('8'),
+    U16('6'), U16('-'), U16('A'), U16('A'), U16('F'), U16('B'),
+    U16('-'), U16('7'), U16('3'), U16('9'), U16('3'), U16('4'),
+    U16('6'), U16('0'), U16('8'), U16('0'), U16('8'), U16('A'),
+    U16('0'), U16('}'), U16(0), U16(0),
+};
+/* Compile error here means MS_OS_SET_LEN does not match ms_os_20_desc_set */
+typedef char ms_os_set_len_check[(sizeof (ms_os_20_desc_set) ==
+                                  MS_OS_SET_LEN) ? 1 : -1];
 
 static const char *usb_strings[] = {
     "eebugs",           // Manufacturer
@@ -525,10 +611,46 @@ usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *req,
     return (USBD_REQ_NOTSUPP);
 }
 
+/*
+ * ms_os_control_request() returns the Microsoft OS 2.0 descriptor set
+ *                         when Windows requests it.
+ */
+static enum usbd_request_return_codes
+ms_os_control_request(usbd_device *usbd_dev, struct usb_setup_data *req,
+                      uint8_t **buf, uint16_t *len,
+                      usbd_control_complete_callback *complete)
+{
+    (void) usbd_dev;
+    (void) complete;
+
+    if ((req->bRequest != MS_OS_VENDOR_CODE) ||
+        (req->wIndex != MICROSOFT_GET_DESCRIPTOR_SET) ||
+        ((req->bmRequestType & USB_REQ_TYPE_DIRECTION) == 0)) {
+        return (USBD_REQ_NEXT_CALLBACK);
+    }
+    *buf = (uint8_t *) ms_os_20_desc_set;
+    if (*len > sizeof (ms_os_20_desc_set))
+        *len = sizeof (ms_os_20_desc_set);
+    return (USBD_REQ_HANDLED);
+}
+
+static void
+ms_os_register(usbd_device *usbd_dev)
+{
+    usbd_register_control_callback(
+                usbd_dev,
+                USB_REQ_TYPE_VENDOR | USB_REQ_TYPE_DEVICE,
+                USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT,
+                ms_os_control_request);
+}
+
 static void
 usbdfu_set_config(usbd_device *usbd_dev, uint16_t wValue)
 {
     (void) wValue;
+
+    /* SET_CONFIGURATION clears all control callbacks */
+    ms_os_register(usbd_dev);
 
     usbd_register_control_callback(
                 usbd_dev,
@@ -659,6 +781,8 @@ main(void)
     usbd_dev = usbd_init(driver, &dev, &config, usb_strings,
                          4, usbd_control_buffer, sizeof (usbd_control_buffer));
     usbd_register_set_config_callback(usbd_dev, usbdfu_set_config);
+    usbd_register_bos_descriptor(usbd_dev, &bos);
+    ms_os_register(usbd_dev);  // Windows requests this before SET_CONFIG
 
     while (1) {
         set_powerled((run_count & 0x000000ff) ? 0 : 1);  // flicker
