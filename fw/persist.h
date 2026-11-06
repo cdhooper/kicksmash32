@@ -35,6 +35,6 @@ typedef struct {
 
 SRAM_PERSIST extern sram_persist_t persist;
 
-void persist_init(void);
+unsigned int persist_init(void);
 
 #endif /* _PERSIST_H */

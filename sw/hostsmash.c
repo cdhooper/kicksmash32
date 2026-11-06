@@ -335,7 +335,7 @@ static uint             ic_delay          = 0;  // Pacing delay (ms)
 static char             device_name[PATH_MAX];
 static char            *host_device_name  = device_name;
 static bool             terminal_mode     = FALSE;
-static bool             force_yes         = FALSE;
+static uint             force_yes         = 0;
 static uint             swapmode          = SWAPMODE_AUTO;
 static uint             kicksmash_mode    = KICKSMASH_MODE_AUTO;
 static char            *terminal_cmd      = NULL;
@@ -2352,6 +2352,130 @@ unrecognized:
 }
 
 /*
+ * kickstart_get_version() identifies a Kickstart ROM image and extracts
+ *                         the version and revision from the ROM header.
+ *                         The image may be in any byte order which
+ *                         detect_byte_order() recognizes.
+ *
+ * @param  [in]  buf      - The ROM image (before swapping for Kicksmash).
+ * @param  [in]  len      - Length of the image.
+ * @param  [out] version  - ROM version (16-bit value at ROM offset 0xc).
+ * @param  [out] revision - ROM revision (16-bit value at ROM offset 0xe).
+ *
+ * @return       true     - The image is Kickstart; version returned.
+ * @return       false    - The image is not recognized as Kickstart.
+ */
+static bool
+kickstart_get_version(uint8_t *buf, uint len, uint *version, uint *revision)
+{
+    uint8_t  hdr[16];
+    uint32_t entry;
+    uint     pos;
+
+    if (len < sizeof (hdr))
+        return (false);
+
+    /* Convert the header to normal (unswapped) byte order */
+    switch (detect_byte_order(buf)) {
+        case 0123:
+            memcpy(hdr, buf, sizeof (hdr));
+            break;
+        case 1032:
+            for (pos = 0; pos < sizeof (hdr); pos += 2) {
+                hdr[pos + 0] = buf[pos + 1];
+                hdr[pos + 1] = buf[pos + 0];
+            }
+            break;
+        case 2301:
+            for (pos = 0; pos < sizeof (hdr); pos += 4) {
+                hdr[pos + 0] = buf[pos + 2];
+                hdr[pos + 1] = buf[pos + 3];
+                hdr[pos + 2] = buf[pos + 0];
+                hdr[pos + 3] = buf[pos + 1];
+            }
+            break;
+        case 3210:
+            for (pos = 0; pos < sizeof (hdr); pos += 4) {
+                hdr[pos + 0] = buf[pos + 3];
+                hdr[pos + 1] = buf[pos + 2];
+                hdr[pos + 2] = buf[pos + 1];
+                hdr[pos + 3] = buf[pos + 0];
+            }
+            break;
+        default:
+            return (false);
+    }
+
+    /*
+     * Kickstart begins with 0x1111 (256K) or 0x1114 (512K), followed by
+     * a JMP to the cold start entry point.
+     */
+    if ((hdr[0] != 0x11) || ((hdr[1] != 0x11) && (hdr[1] != 0x14)) ||
+        (hdr[2] != 0x4e) || (hdr[3] != 0xf9)) {
+        return (false);
+    }
+    entry = ((uint32_t) hdr[4] << 24) | (hdr[5] << 16) | (hdr[6] << 8) |
+            hdr[7];
+    if ((entry != 0x00f800d2) && (entry != 0x00fc00d2))
+        return (false);  // Not Kickstart (DiagROM, AROS, etc)
+
+    *version  = (hdr[12] << 8) | hdr[13];
+    *revision = (hdr[14] << 8) | hdr[15];
+    if ((*version == 0) || (*version == 0xffff))
+        return (false);  // No version (such as the ROM Switcher)
+    return (true);
+}
+
+/*
+ * Kickstart release by ROM version and revision (ROM offsets 0xc and 0xe).
+ * Entries are searched in order. A revision range covers all builds of
+ * that release. Add entries here for ROMs which are not recognized.
+ */
+static const struct {
+    uint16_t    ver;
+    uint16_t    rev_min;
+    uint16_t    rev_max;
+    const char *release;
+} kickstart_releases[] = {
+    { 33,   0, 0xffff, "1.2" },     // 33.166, 33.180
+    { 34,   0, 0xffff, "1.3" },     // 34.5
+    { 36,   0,     36, "1.4" },     // 36.16 (1.4 Beta)
+    { 36,  27, 0xffff, "2.0" },     // 36.207 (2.02) and 2.0 betas
+    { 37,   0,    298, "2.04" },    // 37.175
+    { 37, 299, 0xffff, "2.05" },    // 37.299, 37.300, 37.350
+    { 39,   0, 0xffff, "3.0" },     // 39.106
+    { 40,   0, 0xffff, "3.1" },     // 40.55 - 40.70
+    { 46,   0,    159, "3.1.4" },   // 46.143
+    { 46, 160,    160, "3.1.4.1" }, // 46.160
+    { 47,   0,     96, "3.2" },     // 47.96
+    { 47, 102,    102, "3.2.1" },   // 47.102
+    { 47, 110,    110, "3.2.2" },   // 47.110
+    { 47, 111,    111, "3.2.2.1" }, // 47.111
+    { 47, 115,    115, "3.2.3" },   // 47.115
+    { 48,   0, 0xffff, "3.3" },     // 48.x
+};
+
+/*
+ * kickstart_release() returns the Kickstart release (for example "3.1")
+ *                     for the specified ROM version and revision, or
+ *                     NULL if the release is not known.
+ */
+static const char *
+kickstart_release(uint version, uint revision)
+{
+    uint cur;
+
+    for (cur = 0; cur < ARRAY_SIZE(kickstart_releases); cur++) {
+        if ((kickstart_releases[cur].ver == version) &&
+            (revision >= kickstart_releases[cur].rev_min) &&
+            (revision <= kickstart_releases[cur].rev_max)) {
+            return (kickstart_releases[cur].release);
+        }
+    }
+    return (NULL);
+}
+
+/*
  * eeprom_erase() sends a command to the programmer to erase a sector,
  *                a range of sectors, or the entire EEPROM.
  *
@@ -2918,6 +3042,423 @@ reset_amiga(int hold)
     if (send_cmd(cmd))
         return (1);
     return (0);
+}
+
+/*
+ * bank_name_get() acquires the name of the specified ROM bank from the
+ *                 output of the Kicksmash "prom bank show" command.
+ *
+ * @param  [in]  bank    - The bank number.
+ * @param  [out] name    - Buffer to receive the bank name.
+ * @param  [in]  namelen - Size of the name buffer.
+ *
+ * @return       0 - Success.
+ * @return       1 - Failure.
+ */
+static int
+bank_name_get(uint bank, char *name, size_t namelen)
+{
+    const size_t name_col = 6;   // "%-5u " precedes the name
+    const size_t name_max = 15;  // "%-15s" (bi_name[] is 15 chars + NIL)
+    char   cmd_output[2048];
+    char  *line;
+    char  *next;
+    int    rxcount;
+
+    if (send_cmd("prom bank show"))
+        return (1);
+    if (recv_output(cmd_output, sizeof (cmd_output) - 1, &rxcount, 200))
+        return (1);
+    cmd_output[rxcount] = '\0';
+
+    for (line = cmd_output; line != NULL; line = next) {
+        size_t len;
+        char  *end;
+
+        next = strchr(line, '\n');
+        if (next != NULL)
+            *(next++) = '\0';
+        if (!isdigit((unsigned char) line[0]) ||
+            (strtoul(line, &end, 10) != bank) || (*end != ' '))
+            continue;
+
+        len = strcspn(line, "\r");
+        if (len <= name_col) {
+            len = 0;
+        } else {
+            line += name_col;
+            len -= name_col;
+            if (len > name_max)
+                len = name_max;
+            while ((len > 0) && (line[len - 1] == ' '))
+                len--;
+        }
+        if (len >= namelen)
+            len = namelen - 1;
+        memcpy(name, line, len);
+        name[len] = '\0';
+        return (0);
+    }
+    warnx("Failed to get bank %u name", bank);
+    return (1);
+}
+
+/*
+ * bank_name_is_kickstart() returns true if the bank name has the form
+ *                          automatically assigned by hostsmash, such as
+ *                          "KS 3.1" or "KS 3.1.4".
+ */
+static bool
+bank_name_is_kickstart(const char *name)
+{
+    if ((strncmp(name, "KS ", 3) != 0) || !isdigit((unsigned char) name[3]))
+        return (false);
+    for (name += 3; *name != '\0'; name++)
+        if (!isdigit((unsigned char) *name) && (*name != '.'))
+            return (false);
+    return (true);
+}
+
+/* Special keys returned by edit_getkey() */
+#define EDIT_KEY_EOF    -1
+#define EDIT_KEY_NONE   0x100
+#define EDIT_KEY_LEFT   0x101
+#define EDIT_KEY_RIGHT  0x102
+#define EDIT_KEY_HOME   0x103
+#define EDIT_KEY_END    0x104
+#define EDIT_KEY_DELETE 0x105
+
+#ifdef __MINGW32__
+/*
+ * edit_getkey() waits for a keystroke from the Windows console.
+ *
+ * @param  [in]  ihandle - Console input handle.
+ *
+ * @return       ASCII character, EDIT_KEY_* special key, or EDIT_KEY_EOF.
+ */
+static int
+edit_getkey(HANDLE ihandle)
+{
+    INPUT_RECORD rec;
+    DWORD        count;
+
+    while (1) {
+        if ((ReadConsoleInput(ihandle, &rec, 1, &count) == 0) || (count == 0))
+            return (EDIT_KEY_EOF);
+        if ((rec.EventType != KEY_EVENT) || !rec.Event.KeyEvent.bKeyDown)
+            continue;
+        if (rec.Event.KeyEvent.uChar.AsciiChar != 0)
+            return ((uint8_t) rec.Event.KeyEvent.uChar.AsciiChar);
+        switch (rec.Event.KeyEvent.wVirtualKeyCode) {
+            case VK_LEFT:
+                return (EDIT_KEY_LEFT);
+            case VK_RIGHT:
+                return (EDIT_KEY_RIGHT);
+            case VK_HOME:
+                return (EDIT_KEY_HOME);
+            case VK_END:
+                return (EDIT_KEY_END);
+            case VK_DELETE:
+                return (EDIT_KEY_DELETE);
+            default:
+                break;  // Shift, Ctrl, etc.
+        }
+    }
+}
+#else
+/*
+ * edit_getkey() waits for a keystroke from a raw mode terminal, decoding
+ *               ANSI cursor key sequences.
+ *
+ * @return       ASCII character, EDIT_KEY_* special key, or EDIT_KEY_EOF.
+ */
+static int
+edit_getkey(void)
+{
+    uint8_t ch;
+    uint8_t seq;
+    uint    num = 0;
+
+    if (read(0, &ch, 1) != 1)
+        return (EDIT_KEY_EOF);
+    if (ch != 0x1b)
+        return (ch);
+
+    /* ESC [ <key> or ESC O <key> or ESC [ <num> ~ */
+    if (read(0, &seq, 1) != 1)
+        return (EDIT_KEY_EOF);
+    if ((seq != '[') && (seq != 'O'))
+        return (EDIT_KEY_NONE);
+    while (1) {
+        if (read(0, &ch, 1) != 1)
+            return (EDIT_KEY_EOF);
+        if (isdigit(ch)) {
+            num = num * 10 + ch - '0';
+            continue;
+        }
+        if (ch == ';') {
+            num = 0;  // Modified key such as ESC [ 1 ; 5 C
+            continue;
+        }
+        break;
+    }
+    switch (ch) {
+        case 'C':
+            return (EDIT_KEY_RIGHT);
+        case 'D':
+            return (EDIT_KEY_LEFT);
+        case 'H':
+            return (EDIT_KEY_HOME);
+        case 'F':
+            return (EDIT_KEY_END);
+        case '~':
+            switch (num) {
+                case 1:
+                case 7:
+                    return (EDIT_KEY_HOME);
+                case 4:
+                case 8:
+                    return (EDIT_KEY_END);
+                case 3:
+                    return (EDIT_KEY_DELETE);
+            }
+            break;
+    }
+    return (EDIT_KEY_NONE);  // Unsupported key (such as cursor up)
+}
+#endif
+
+/*
+ * edit_redraw() redisplays the line being edited, then positions the
+ *               cursor. It uses only CR, BS, and spaces, so it works on
+ *               any terminal or console.
+ */
+static void
+edit_redraw(const char *prompt, const char *buf, size_t len, size_t pos,
+            size_t prev_len)
+{
+    size_t pad = (prev_len > len) ? (prev_len - len) : 0;
+
+    printf("\r%s%.*s%*s", prompt, (int) len, buf, (int) pad, "");
+    for (pad += len - pos; pad > 0; pad--)
+        putchar('\b');
+    fflush(stdout);
+}
+
+/*
+ * edit_line() lets the user edit a line of text, beginning with the
+ *             provided text. Return accepts the line and ^C cancels.
+ *             When input is not interactive, a line is read instead,
+ *             where an empty line accepts the provided text.
+ *
+ * @param  [in]  prompt - Prompt to display before the text.
+ * @param  [io]  buf    - Initial text, replaced by the edited text.
+ * @param  [in]  maxlen - Maximum length of text (buf must hold maxlen + 1).
+ *
+ * @return       0 - Text accepted.
+ * @return       1 - Edit cancelled.
+ */
+static int
+edit_line(const char *prompt, char *buf, size_t maxlen)
+{
+    size_t len = strlen(buf);
+    size_t pos;
+    size_t prev_len;
+    int    ch;
+    int    rc = 1;
+#ifdef __MINGW32__
+    HANDLE ihandle = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD  saved_mode;
+    DWORD  mode;
+    bool   interactive = (ihandle != INVALID_HANDLE_VALUE) &&
+                         (GetFileType(ihandle) == FILE_TYPE_CHAR) &&
+                         GetConsoleMode(ihandle, &saved_mode);
+#else
+    bool   interactive = isatty(0) && (tcgetattr(0, &saved_term) == 0);
+#endif
+
+    if (len > maxlen)
+        buf[len = maxlen] = '\0';
+
+    if (!interactive) {
+        char line[256];
+
+        printf("%s[%s] ", prompt, buf);
+        fflush(stdout);
+        if (fgets(line, sizeof (line), stdin) == NULL) {
+            printf("\n");
+            return (1);
+        }
+        line[strcspn(line, "\r\n")] = '\0';
+        if (line[0] != '\0') {
+            line[maxlen] = '\0';
+            strcpy(buf, line);
+        }
+        return (0);
+    }
+
+#ifdef __MINGW32__
+    /* Raw input: no line editing or echo, and ^C is delivered as a key */
+    mode = saved_mode & ~(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT |
+                          ENABLE_ECHO_INPUT);
+    SetConsoleMode(ihandle, mode);
+#else
+    {
+        /* Raw input, but keep output processing so \n is still CR LF */
+        struct termios term = saved_term;
+        cfmakeraw(&term);
+        term.c_oflag |= OPOST;
+        got_terminfo = 1;  // Restore terminal if hostsmash exits
+        tcsetattr(0, TCSANOW, &term);
+    }
+#endif
+
+    pos = len;
+    edit_redraw(prompt, buf, len, pos, len);
+    while (1) {
+        prev_len = len;
+#ifdef __MINGW32__
+        ch = edit_getkey(ihandle);
+#else
+        ch = edit_getkey();
+#endif
+        if ((ch == '\r') || (ch == '\n')) {
+            rc = 0;
+            break;
+        }
+        if ((ch == 0x03) || (ch == EDIT_KEY_EOF)) {  // ^C
+            printf("^C");
+            break;
+        }
+        switch (ch) {
+            case 0x08:  // ^H Backspace
+            case 0x7f:  // DEL Backspace
+                if (pos > 0) {
+                    memmove(buf + pos - 1, buf + pos, len - pos + 1);
+                    pos--;
+                    len--;
+                }
+                break;
+            case 0x04:  // ^D
+            case EDIT_KEY_DELETE:
+                if (pos < len) {
+                    memmove(buf + pos, buf + pos + 1, len - pos);
+                    len--;
+                }
+                break;
+            case 0x02:  // ^B
+            case EDIT_KEY_LEFT:
+                if (pos > 0)
+                    pos--;
+                break;
+            case 0x06:  // ^F
+            case EDIT_KEY_RIGHT:
+                if (pos < len)
+                    pos++;
+                break;
+            case 0x01:  // ^A
+            case EDIT_KEY_HOME:
+                pos = 0;
+                break;
+            case 0x05:  // ^E
+            case EDIT_KEY_END:
+                pos = len;
+                break;
+            case 0x0b:  // ^K Erase to end of line
+                buf[len = pos] = '\0';
+                break;
+            case 0x15:  // ^U Erase line
+                buf[len = pos = 0] = '\0';
+                break;
+            default:
+                if ((ch >= ' ') && (ch < 0x7f) && (len < maxlen)) {
+                    memmove(buf + pos + 1, buf + pos, len - pos + 1);
+                    buf[pos++] = ch;
+                    len++;
+                }
+                break;
+        }
+        edit_redraw(prompt, buf, len, pos, prev_len);
+    }
+    printf("\n");
+    fflush(stdout);
+
+#ifdef __MINGW32__
+    SetConsoleMode(ihandle, saved_mode);
+#else
+    tcsetattr(0, TCSANOW, &saved_term);
+    got_terminfo = 0;
+#endif
+    return (rc);
+}
+
+/*
+ * bank_name_offer_kickstart() lets the user edit and save the bank name
+ *                             after a Kickstart ROM has been written to
+ *                             the bank. If the current name is blank or
+ *                             names a Kickstart release (such as "KS 3.1"),
+ *                             a name for the new release is proposed.
+ *                             Otherwise the current name is offered.
+ *
+ * @param  [in]  bank    - The bank number.
+ * @param  [in]  release - Kickstart release (such as "3.1" or "47.115").
+ */
+static void
+bank_name_offer_kickstart(uint bank, const char *release)
+{
+    const size_t name_max = 15;  // bi_name[] is 15 chars + NIL
+    char   cur[32];
+    char   name[32];
+    char   prompt[32];
+    char   cmd[64];
+    char  *src;
+    char  *dst;
+
+    if (bank_name_get(bank, cur, sizeof (cur)))
+        return;
+
+    if ((cur[0] == '\0') || bank_name_is_kickstart(cur))
+        snprintf(name, sizeof (name), "KS %s", release);
+    else
+        strcpy(name, cur);
+    name[name_max] = '\0';
+
+    snprintf(prompt, sizeof (prompt), "Bank %u name: ", bank);
+    if (force_yes > 1) {
+        printf("%s%s\n", prompt, name);
+    } else {
+        printf("Edit the bank name, then press Return to save "
+               "or ^C to cancel\n");
+        if (edit_line(prompt, name, name_max)) {
+            printf("Bank name not changed\n");
+            return;
+        }
+    }
+
+    /* Trim spaces and collapse runs, as Kicksmash would when merging args */
+    for (src = dst = name; *src != '\0'; src++)
+        if ((*src != ' ') || ((dst > name) && (src[1] != ' ') &&
+                              (src[1] != '\0')))
+            *(dst++) = *src;
+    *dst = '\0';
+
+    /* Kicksmash deletes the bank name when given "-" */
+    if (strcmp(name, "-") == 0)
+        name[0] = '\0';
+
+    if (strcmp(cur, name) == 0)
+        return;  // Unchanged
+
+    snprintf(cmd, sizeof (cmd), "prom bank name %u %s", bank,
+             (name[0] == '\0') ? "-" : name);
+    if (send_cmd(cmd))
+        return;
+    discard_input(100);  // Discard the command prompt
+
+    if ((bank_name_get(bank, cur, sizeof (cur)) == 0) &&
+        (strcmp(cur, name) != 0)) {
+        warnx("Bank %u name is \"%s\" (expected \"%s\")", bank, cur, name);
+    }
 }
 
 #ifdef __MINGW32__
@@ -6321,6 +6862,11 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len_specified,
     int rc;
     uint len = len_specified;
     uint8_t *filebuf = NULL;
+    uint ks_ver;
+    uint ks_rev;
+    uint name_bank = 0;
+    const char *ks_release = NULL;  // Kickstart release being written
+    char ks_relbuf[16];
 
     if (mode == MODE_UNKNOWN) {
         warnx("You must specify one of: -e -i -r -t or -w");
@@ -6450,6 +6996,18 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len_specified,
         rc = execute_swapmode(filebuf, len, SWAP_TO_ROM);
         if (rc != 0)
             goto run_finish;
+
+        /* Identify Kickstart from the image as it will be in the ROM */
+        if ((mode & MODE_WRITE) &&
+            kickstart_get_version(filebuf, len, &ks_ver, &ks_rev)) {
+            ks_release = kickstart_release(ks_ver, ks_rev);
+            if (ks_release == NULL) {
+                /* Unknown release: use the ROM version.revision instead */
+                snprintf(ks_relbuf, sizeof (ks_relbuf), "%u.%u",
+                         ks_ver, ks_rev);
+                ks_release = ks_relbuf;
+            }
+        }
     }
 
     /* Length might have changed due to merged ROMs -- do erase now */
@@ -6472,6 +7030,9 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len_specified,
 
         if (bank != BANK_NOT_SPECIFIED)
             baseaddr += bank * EEPROM_BANK_SIZE_DEFAULT;
+        name_bank = baseaddr / EEPROM_BANK_SIZE_DEFAULT;
+        if ((baseaddr % EEPROM_BANK_SIZE_DEFAULT) != 0)
+            ks_release = NULL;  // Not at the start of a bank
 
         do {
             if ((mode & MODE_WRITE) &&
@@ -6492,6 +7053,9 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len_specified,
         } while (fill);
 
         free(filebuf);
+
+        if ((rc == 0) && (ks_release != NULL) && !fill)
+            bank_name_offer_kickstart(name_bank, ks_release);
     }
 run_finish:
     if (amiga_was_put_in_reset) {
@@ -6757,7 +7321,7 @@ errx(EXIT_FAILURE, "how did we get here?");
                 mode |= MODE_VERSION;
                 break;
             case 'y':
-                force_yes = TRUE;
+                force_yes++;
                 break;
             case 'h':
             case '?':

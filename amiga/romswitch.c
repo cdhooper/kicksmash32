@@ -1929,7 +1929,7 @@ event_loop(void)
                              gadget_cancel_w, gadget_cancel_h);
                     }
                     switch (icode) {
-                        case RAWKEY_ESC + 0x80: // key up ESC
+                        case RAWKEY_ESC: // key down ESC
                             if (esc_trigger) {
                                 ColdReboot();
                             } else {
@@ -1946,16 +1946,6 @@ event_loop(void)
                                                    IEQUALIFIER_CONTROL)) == 0) {
                                 break;  // Left Amiga or Right Amiga not held
                             }
-                            SetAPen(rp, 3);
-                            sbox(gadget_cancel_x, gadget_cancel_y,
-                                 gadget_cancel_w, gadget_cancel_h);
-                            break;
-                        case 0x33 + 0x80:     // key up C
-                            if ((msg->Qualifier & (IEQUALIFIER_LCOMMAND |
-                                                   IEQUALIFIER_RCOMMAND |
-                                                   IEQUALIFIER_CONTROL)) == 0) {
-                                break;  // Left Amiga or Right Amiga not held
-                            }
                             ColdReboot();
                             break;
                         case 0x21:            // key down S
@@ -1966,21 +1956,6 @@ event_loop(void)
                             }
                             if (disabled_save)
                                 break;
-                            SetAPen(rp, 3);
-                            sbox(gadget_save_x, gadget_save_y,
-                                 gadget_save_w, gadget_save_h);
-                            break;
-                        case 0x21 + 0x80:     // key up S
-                            if ((msg->Qualifier & (IEQUALIFIER_LCOMMAND |
-                                                   IEQUALIFIER_RCOMMAND |
-                                                   IEQUALIFIER_CONTROL)) == 0) {
-                                break;  // Left Amiga or Right Amiga not held
-                            }
-                            if (disabled_save)
-                                break;
-                            SetAPen(rp, 0);
-                            sbox(gadget_save_x, gadget_save_y,
-                                 gadget_save_w, gadget_save_h);
                             goto id_save;
                         case RAWKEY_CRSRDOWN: // key down Cursor-Down
                         case 0x26:            // key down J
@@ -1999,33 +1974,6 @@ event_loop(void)
                             }
                             if (disabled_switch)
                                 break;
-                            /* FALLTHROUGH */
-#if 0
-                        case RAWKEY_ENTER:    // key down Enter (num keypd)
-                        case RAWKEY_RETURN:   // key down Return
-#endif
-                            if (disabled_switch)
-                                break;
-                            SetAPen(rp, 3);
-                            sbox(gadget_switch_x, gadget_switch_y,
-                                 gadget_switch_w, gadget_switch_h);
-                            break;
-                        case 0x13 + 0x80:          // key up R
-                            if ((msg->Qualifier & (IEQUALIFIER_LCOMMAND |
-                                                   IEQUALIFIER_RCOMMAND |
-                                                   IEQUALIFIER_CONTROL)) == 0) {
-                                break;  // Left Amiga or Right Amiga not held
-                            }
-                            /* FALLTHROUGH */
-#if 0
-                        case RAWKEY_ENTER + 0x80:  // key up Enter (num keypd)
-                        case RAWKEY_RETURN + 0x80: // key up Return
-#endif
-                            if (disabled_switch)
-                                break;
-                            SetAPen(rp, 0);
-                            sbox(gadget_switch_x, gadget_switch_y,
-                                 gadget_switch_w, gadget_switch_h);
 #ifdef STANDALONE
                             serial_report(bank_switchto, "Reboot",
                                           info.bi_name[bank_switchto]);

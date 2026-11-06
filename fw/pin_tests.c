@@ -796,6 +796,7 @@ pin_test_flash_data(uint verbose)
 
     /* Set Flash to drive data lines */
     gpio_setv(FLASH_OE_PORT, FLASH_OE_PIN, 0);
+    timer_delay_usec(1);
 
     data = gpio_get(FLASH_D0_PORT, 0xffff) |
            (gpio_get(FLASH_D16_PORT, 0xffff) << 16);

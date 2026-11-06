@@ -302,14 +302,26 @@ Erase sector(s) from 0x0 to 0x80000: yes
 Writing 0x080000 bytes to EEPROM starting at address 0x0
 0% ... 100%
 Wrote 0x80000 bytes to device
+...
+Edit the bank name, then press Return to save or ^C to cancel
+Bank 0 name: KS 3.2.3
 ```
+
+**Bank name.** When the image is a Kickstart ROM, hostsmash then offers a
+name for the bank. If the bank has no name, or has a name like `KS 3.1` from
+an earlier Kickstart, it proposes one for the new release, such as `KS 3.2.3`.
+Otherwise it offers the current name. You can edit the name (Backspace,
+cursor keys, typing), then press **Return** to save it, or **^C** to leave
+the bank name unchanged. To accept the proposed name without being asked,
+give `-y` twice (`-y -y`).
 
 **About auto-swap.** For a recognized A3000/A4000 ROM, hostsmash auto-detects
 the byte order and applies swap `3210` for you, so you do **not** need a `-s`
 flag. The banner reads `Auto swap mode: 32, Swapping 3210` -- note it says
 **`32`** (the 32-bit mode), not `A3000`. (Some older docs show `A3000` here;
 that text is stale.) This banner appears on **both** the write and the verify
-step. The `-y` answers the erase/write prompts automatically.
+step. The `-y` answers the erase/write prompts automatically, but not the
+bank name prompt.
 
 > **Model note:** the A3000T uses a swapped layout and needs `-s 1032`. See
 > [`WHICH.md`](WHICH.md) for which models need a swap flag. The A3000/A4000
@@ -331,8 +343,9 @@ Verify success
 
 ## Step 8: Name the bank and set the power-on default
 
-Give the bank a human-readable label (used by the ROM Switcher and
-`prom bank show`):
+The bank name is used by the ROM Switcher and `prom bank show`. If you saved
+a name at the end of step 7, you can skip this command. Otherwise, or to
+change it, give the bank a human-readable label:
 
 ```text
 hostsmash_win64.exe -d com5 -t "prom bank name 0 Kick3.2.3"

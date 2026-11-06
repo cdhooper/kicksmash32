@@ -70,13 +70,12 @@ main_poll(void)
 int
 main(void)
 {
-    uint persist_good = (persist.sp_magic == SP_MAGIC);
+    uint persist_good;
     reset_periphs();
-    persist_init();
+    persist_good = persist_init();
     reset_check();
     clock_init();
     timer_init();
-//  timer_delay_msec(500);  // Just for development purposes
     gpio_init();
     led_init();
     uart_init();

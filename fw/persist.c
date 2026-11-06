@@ -4,7 +4,7 @@
 
 SRAM_PERSIST sram_persist_t persist;
 
-void
+unsigned int
 persist_init(void)
 {
     if ((persist.sp_magic != SP_MAGIC) ||
@@ -12,5 +12,7 @@ persist_init(void)
         memset(&persist, 0, sizeof (persist));
         persist.sp_magic = SP_MAGIC;
         persist.sp_addr = (uintptr_t) &persist;
+        return (0);
     }
+    return (1);
 }
