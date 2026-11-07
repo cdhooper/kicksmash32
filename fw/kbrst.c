@@ -50,6 +50,9 @@ amiga_rapid_reset_check(void)
     uint pos;
     uint count = 0;
 
+    if (config.flags & CF_NO_RAPID_RESET)
+        return (0);
+
     /* Discard expired entries, keeping the rest in order */
     for (pos = 0; pos < (RAPID_RESET_COUNT - 1); pos++) {
         uint64_t expire = amiga_rapid_reset_expire[pos];

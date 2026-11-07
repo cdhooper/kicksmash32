@@ -1157,7 +1157,8 @@ smash_test_usb_msg_loopback(void)
     if ((msginfo.smi_state_usb &
          (MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_LOOPBACK)) !=
          (MSG_STATE_SERVICE_UP | MSG_STATE_HAVE_LOOPBACK)) {
-        printf("Unavailable\n");
+        if (flag_quiet == 0)
+            printf("Unavailable\n");
         if (worked_before)
             return (1);  // Then this is a failure
         else

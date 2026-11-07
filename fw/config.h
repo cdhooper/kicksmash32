@@ -17,6 +17,7 @@
 #define CF_OEWE_PIN_SHOW    0x00000001  // Show measured speed of OEWE pin test
 #define CF_POWER_OFF_OLD    0x00000002  // Old Amiga power off scheme
 #define CF_OE_GATE          0x00000004  // Has output enable OR gate
+#define CF_NO_RAPID_RESET   0x00000008  // Disable rapid reset -> long reset
 
 typedef struct {
     uint32_t    magic;      // Structure magic

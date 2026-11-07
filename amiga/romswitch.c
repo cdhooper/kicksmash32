@@ -772,20 +772,142 @@ bank_state_save(void)
     }
 }
 
+#ifdef ROMFS
+#define TEXT_TO_RAM __attribute__((section(".text_to_ram")))
+#else
+#define TEXT_TO_RAM
+#endif
+
+/*
+ * bank_reboot_core
+ * ----------------
+ * Request KickSmash to set the current bank and reset the Amiga. This
+ * function is copied to RAM by sm_msg_copy_to_ram() and must only be
+ * called through ebank_reboot_core, with the CPU in supervisor state,
+ * interrupts disabled, data cache disabled, and the MMU disabled.
+ *
+ * Once KickSmash accepts the command, it switches the ROM bank under the
+ * running CPU, so this code (and everything it calls) must not be in ROM.
+ * KickSmash should then reset the Amiga using KBRST. If that reset does
+ * not happen, this function resets the Amiga itself with the CPU RESET
+ * instruction, then jumps to the start of the (new) ROM, without calling
+ * any Kickstart ROM code.
+ *
+ * Returns the KickSmash error code if the command failed. On success,
+ * this function does not return.
+ */
+TEXT_TO_RAM __attribute__((noinline))
+static uint
+bank_reboot_core(uint16_t bank)
+{
+    uint tries = 5;
+    uint rc;
+    uint rlen;
+    uint count;
+
+    /* Only call RAM-resident code through its e* function pointer */
+    do {
+        rc = esend_cmd_core(KS_CMD_BANK_SET | KS_BANK_SETCURRENT |
+                            KS_BANK_REBOOT, &bank, sizeof (bank),
+                            NULL, 0, &rlen);
+        if ((rc != MSG_STATUS_BAD_CRC) &&
+            (rc != MSG_STATUS_NO_REPLY) &&
+            (rc != KS_STATUS_CRC)) {
+            break;
+        }
+    } while (--tries > 0);
+    if (rc != 0)
+        return (rc);
+
+    /*
+     * The ROM may now be a different bank. Disable all interrupts at the
+     * CPU and in Paula (INTENA). Interrupts are never re-enabled.
+     */
+    __asm volatile("or.w #0x0700,%%sr" ::: "cc");
+    *ADDR16(0x00dff09a) = 0x7fff;  // INTENA: clear all enables
+
+    /* Give KickSmash 1 second to reset the Amiga with KBRST */
+    for (count = 0; count < 1000; count++)
+        ecia_spin(CIA_USEC(1000));
+
+    /*
+     * KickSmash was not able to reset the Amiga. Push and disable CPU
+     * caches, so the reset sequence below executes from memory and stale
+     * cache lines are not used after reset.
+     */
+    if ((cpu_type == 68040) || (cpu_type == 68060)) {
+        __asm volatile("cpusha %%bc\n\t"
+                       "moveq #0,%%d0\n\t"
+                       "movec %%d0,%%cacr\n\t"
+                       "cinva %%bc"
+                       ::: "d0", "memory");
+    } else if ((cpu_type == 68020) || (cpu_type == 68030)) {
+        __asm volatile("move.l #0x0808,%%d0\n\t"  // Clear I and D caches,
+                       "movec %%d0,%%cacr"        // and disable them
+                       ::: "d0", "memory");
+    }
+
+    /*
+     * Software reset, as documented in the Amiga Hardware Reference
+     * Manual. RESET resets the custom chips and CIAs, which turns on the
+     * ROM overlay at address 0, so chip RAM is no longer visible. The
+     * "jmp (a0)" which follows must already have been fetched by the CPU,
+     * so RESET and JMP must be in the same longword. Rather than rely on
+     * the alignment of this code in memory, there are two copies of the
+     * sequence at offsets 2 and 8 from label 1, and the code jumps to
+     * whichever one is longword aligned. Address 2 in ROM holds the
+     * "JMP <entry>" instruction which starts Kickstart.
+     */
+    __asm volatile("move.l #2,%%a0\n\t"   // JMP instruction at start of ROM
+                   "lea 1f(%%pc),%%a1\n\t"
+                   "move.l %%a1,%%d0\n\t"
+                   "btst #1,%%d0\n\t"
+                   "bne.s 2f\n\t"         // label 1 + 2 is longword aligned
+                   "addq.l #6,%%a1\n\t"   // label 1 + 8 is longword aligned
+                   "2:\n\t"
+                   "addq.l #2,%%a1\n\t"
+                   "jmp (%%a1)\n\t"
+                   "1:\n\t"
+                   "nop\n\t"              // +0
+                   "reset\n\t"            // +2
+                   "jmp (%%a0)\n\t"       // +4
+                   "nop\n\t"              // +6
+                   "reset\n\t"            // +8
+                   "jmp (%%a0)"           // +10
+                   ::: "d0", "a0", "a1", "memory");
+    while (1)
+        ;
+}
+
+/* Points to the RAM copy of bank_reboot_core() */
+static uint (*ebank_reboot_core)(uint16_t bank) = bank_reboot_core;
+
 /*
  * bank_set_current_and_reboot
  * ---------------------------
- * Request KickSmash to set the current bank and force a reset.
+ * Request KickSmash to set the current bank and force a reset. The work
+ * is done by bank_reboot_core() in RAM, which does not return if
+ * KickSmash accepted the command.
  */
 static void
 bank_set_current_and_reboot(void)
 {
-    int rc;
-    uint rlen;
-    uint16_t argval = bank_switchto;
-    rc = send_cmd_retry(KS_CMD_BANK_SET | KS_BANK_SETCURRENT | KS_BANK_REBOOT,
-                        &argval, sizeof (argval), NULL, 0, &rlen);
-    update_status("FAIL set reboot %d", rc);
+    uint rc;
+
+    SUPERVISOR_STATE_ENTER();
+    INTERRUPTS_DISABLE();
+    CACHE_DISABLE_DATA();
+    MMU_DISABLE();
+
+    rc = ebank_reboot_core(bank_switchto);
+
+    CACHE_FLUSH();
+    MMU_RESTORE();
+    CACHE_RESTORE_STATE();
+    INTERRUPTS_ENABLE();
+    SUPERVISOR_STATE_EXIT();
+
+    update_status("FAIL set reboot %d", (int) rc);
 }
 
 
@@ -2234,6 +2356,10 @@ sm_msg_copy_to_ram(void)
     void lcia_spin(unsigned int ticks);
     ecia_spin      = (void *) (copy_to_ram_ptr +
                                (uintptr_t) lcia_spin - copy_to_ram_start);
+
+    ebank_reboot_core = (void *) (copy_to_ram_ptr +
+                                  (uintptr_t) bank_reboot_core -
+                                  copy_to_ram_start);
 }
 
 /*
