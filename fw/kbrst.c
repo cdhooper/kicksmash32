@@ -20,13 +20,6 @@
 #include "pin_tests.h"
 #include "m29f160xt.h"
 
-uint8_t         amiga_not_in_reset     = 0xff;
-static uint8_t  amiga_powered_off      = 0;
-static uint64_t amiga_reset_timer      = 0;  // Timer to take Amiga out of reset
-static uint64_t amiga_long_reset_timer = 0;  // Timer to detect long reset
-static uint64_t amiga_reboot_detect_timeout = 0;
-static uint8_t  amiga_long_reset_done  = 0;  // Long reset already handled
-
 /*
  * Some keyboard adapters (such as the Sum Amiga keyboard adapter) can't
  * hold the Amiga in reset long enough for a long reset. As an alternative,
@@ -35,40 +28,39 @@ static uint8_t  amiga_long_reset_done  = 0;  // Long reset already handled
  * resets, oldest first. A value of 0 is an unused entry.
  */
 #define RAPID_RESET_COUNT 3
-#define RAPID_RESET_MSEC  4000
-static uint64_t amiga_rapid_reset_expire[RAPID_RESET_COUNT - 1];
+#define RAPID_RESET_MSEC  2000
+static uint64_t amiga_rapid_reset_expire;    // Timer to reset rapid reset count
+static uint8_t  amiga_rapid_reset_count;     // Number of times reset triggered
+uint8_t         amiga_not_in_reset     = 0xff;  // Amiga is not in reset
+static uint8_t  amiga_powered_off      = 0;  // Amiga is off
+static uint64_t amiga_reset_timer      = 0;  // Timer to take Amiga out of reset
+static uint64_t amiga_long_reset_timer = 0;  // Timer to detect long reset
+static uint64_t amiga_reboot_detect_timeout = 0;
+static uint8_t  amiga_long_reset_done  = 0;  // Long reset already handled
+
 
 /*
  * amiga_rapid_reset_check
  * -----------------------
- * Record that the Amiga has entered reset. Returns 1 if this is the
- * third reset within RAPID_RESET_MSEC.
+ * Record that the Amiga has entered reset. Returns 1 if rapid reset was
+ * detected (third reset, spaced no more than RAPID_RESET_MSEC).
  */
 static uint
 amiga_rapid_reset_check(void)
 {
-    uint pos;
-    uint count = 0;
-
     if (config.flags & CF_NO_RAPID_RESET)
         return (0);
 
-    /* Discard expired entries, keeping the rest in order */
-    for (pos = 0; pos < (RAPID_RESET_COUNT - 1); pos++) {
-        uint64_t expire = amiga_rapid_reset_expire[pos];
-        if ((expire != 0) && !timer_tick_has_elapsed(expire))
-            amiga_rapid_reset_expire[count++] = expire;
+    if (timer_tick_has_elapsed(amiga_rapid_reset_expire)) {
+        amiga_rapid_reset_count = 1;
+    } else {
+        if (++amiga_rapid_reset_count == RAPID_RESET_COUNT) {
+            /* Enough recent resets: start counting again after this one */
+            amiga_rapid_reset_count = 0;
+            return (1);  // Generate rapid reset
+        }
     }
-
-    if (count == (RAPID_RESET_COUNT - 1)) {
-        /* Enough recent resets: start counting again after this one */
-        for (pos = 0; pos < (RAPID_RESET_COUNT - 1); pos++)
-            amiga_rapid_reset_expire[pos] = 0;
-        return (1);
-    }
-    amiga_rapid_reset_expire[count++] = timer_tick_plus_msec(RAPID_RESET_MSEC);
-    for (; count < (RAPID_RESET_COUNT - 1); count++)
-        amiga_rapid_reset_expire[count] = 0;
+    amiga_rapid_reset_expire = timer_tick_plus_msec(RAPID_RESET_MSEC);
     return (0);
 }
 
