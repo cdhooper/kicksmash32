@@ -36,12 +36,38 @@
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <net/if_arp.h>
+#include <arpa/inet.h>
+#include <time.h>
 
 #include "netif_backend.h"
 
 static unsigned  cfg_by_ext_prog = 0; // 0=netlink (default), 1=external ip
 static char      g_tap_name[IFNAMSIZ];
 static int       g_tap_fd = -1;
+static uint8_t   g_tap_mac[6];         // MAC of macvtap (= Amiga's MAC)
+
+/*
+ * Host <-> Amiga shim.
+ *
+ * Linux never delivers traffic between a macvlan/macvtap lower device
+ * (e.g. eth0) and its own macvlan/macvtap children, so the host which
+ * runs hostsmash cannot normally reach the Amiga. Bridge-mode macvlans
+ * on the same lower device can talk to each other, though. So a
+ * bridge-mode macvlan "shim" is created next to the macvtap, and once
+ * the Amiga's IPv4 address has been learned from the frames it sends,
+ * a /32 host route for that address is pointed at the shim. Traffic
+ * from the host to the Amiga then goes host -> shim -> macvtap, and
+ * the rest of the host's traffic is untouched.
+ *
+ * The shim carries no address of its own. It has arp_filter enabled so
+ * it only answers ARP for senders which are routed via the shim (that
+ * is, only the Amiga), and does not compete with the lower device in
+ * answering the rest of the LAN.
+ */
+static char      g_shim_name[IFNAMSIZ];
+static uint32_t  g_amiga_ip;           // Network byte order, 0 = unknown
+
+static void refresh_tap_mac(void);
 
 /* Called from hostsmash_netif.c if the user passes -e/--external. */
 void
@@ -129,66 +155,6 @@ nl_talk(int fd, struct nlmsghdr *nh, size_t maxlen)
         }
     }
     fprintf(stderr, "Error: netlink: no ACK received\n");
-    return (-1);
-}
-
-/*
- * nl_create_macvtap() creates a bridge-mode macvtap named @name on top
- *                     of @lower_ifindex. Returns 0 on success.
- */
-static int
-nl_create_macvtap(const char *name, int lower_ifindex)
-{
-    int fd = nl_open();
-    if (fd < 0)
-        return (-1);
-
-    char buf[1024];
-    memset(buf, 0, sizeof (buf));
-    struct nlmsghdr *nh = (struct nlmsghdr *)buf;
-    struct ifinfomsg *ifi = (struct ifinfomsg *)NLMSG_DATA(nh);
-
-    nh->nlmsg_len   = NLMSG_LENGTH(sizeof (*ifi));
-    nh->nlmsg_type  = RTM_NEWLINK;
-    nh->nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL;
-
-    ifi->ifi_family = AF_UNSPEC;
-
-    if (!rta_append(nh, sizeof (buf), IFLA_IFNAME, name, strlen(name) + 1))
-        goto overflow;
-
-    if (!rta_append(nh, sizeof (buf), IFLA_LINK, &lower_ifindex,
-                    sizeof (lower_ifindex)))
-        goto overflow;
-
-    struct rtattr *linkinfo;
-    linkinfo = rta_append(nh, sizeof (buf), IFLA_LINKINFO, NULL, 0);
-    if (!linkinfo)
-        goto overflow;
-
-    if (!rta_append(nh, sizeof (buf), IFLA_INFO_KIND, "macvtap",
-                    strlen("macvtap") + 1))
-        goto overflow;
-
-    struct rtattr *infodata;
-    infodata = rta_append(nh, sizeof (buf), IFLA_INFO_DATA, NULL, 0);
-    if (!infodata)
-        goto overflow;
-
-    uint32_t mode = MACVLAN_MODE_BRIDGE;
-    if (!rta_append(nh, sizeof (buf), IFLA_MACVLAN_MODE, &mode, sizeof (mode)))
-        goto overflow;
-
-    infodata->rta_len = (char *)nh + nh->nlmsg_len - (char *)infodata;
-    linkinfo->rta_len = (char *)nh + nh->nlmsg_len - (char *)linkinfo;
-
-    int rc = nl_talk(fd, nh, sizeof (buf));
-    close(fd);
-    return (rc);
-
-overflow:
-    fprintf(stderr, "Error: netlink message buffer overflow\n");
-    close(fd);
     return (-1);
 }
 
@@ -280,6 +246,292 @@ nl_delete_link(const char *name)
     return (rc);
 }
 
+/*
+ * nl_create_macvlan() creates a bridge-mode link of @kind ("macvtap" or
+ *                     "macvlan") named @name on top of @lower_ifindex.
+ *                     Returns 0 on success.
+ */
+static int
+nl_create_macvlan(const char *name, int lower_ifindex, const char *kind)
+{
+    int fd = nl_open();
+    if (fd < 0)
+        return (-1);
+
+    char buf[1024];
+    memset(buf, 0, sizeof (buf));
+    struct nlmsghdr *nh = (struct nlmsghdr *)buf;
+    struct ifinfomsg *ifi = (struct ifinfomsg *)NLMSG_DATA(nh);
+
+    nh->nlmsg_len   = NLMSG_LENGTH(sizeof (*ifi));
+    nh->nlmsg_type  = RTM_NEWLINK;
+    nh->nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL;
+
+    ifi->ifi_family = AF_UNSPEC;
+
+    if (!rta_append(nh, sizeof (buf), IFLA_IFNAME, name, strlen(name) + 1))
+        goto overflow;
+
+    if (!rta_append(nh, sizeof (buf), IFLA_LINK, &lower_ifindex,
+                    sizeof (lower_ifindex)))
+        goto overflow;
+
+    struct rtattr *linkinfo;
+    linkinfo = rta_append(nh, sizeof (buf), IFLA_LINKINFO, NULL, 0);
+    if (!linkinfo)
+        goto overflow;
+
+    if (!rta_append(nh, sizeof (buf), IFLA_INFO_KIND, kind, strlen(kind) + 1))
+        goto overflow;
+
+    struct rtattr *infodata;
+    infodata = rta_append(nh, sizeof (buf), IFLA_INFO_DATA, NULL, 0);
+    if (!infodata)
+        goto overflow;
+
+    uint32_t mode = MACVLAN_MODE_BRIDGE;
+    if (!rta_append(nh, sizeof (buf), IFLA_MACVLAN_MODE, &mode, sizeof (mode)))
+        goto overflow;
+
+    infodata->rta_len = (char *)nh + nh->nlmsg_len - (char *)infodata;
+    linkinfo->rta_len = (char *)nh + nh->nlmsg_len - (char *)linkinfo;
+
+    int rc = nl_talk(fd, nh, sizeof (buf));
+    close(fd);
+    return (rc);
+
+overflow:
+    fprintf(stderr, "Error: netlink message buffer overflow\n");
+    close(fd);
+    return (-1);
+}
+
+/*
+ * nl_route_host() adds/replaces (@add != 0) or deletes (@add == 0) a
+ *                 /32 route for @ip (network byte order) via @ifname.
+ */
+static int
+nl_route_host(uint32_t ip, const char *ifname, int add)
+{
+    int oif = (int)if_nametoindex(ifname);
+    if (oif == 0)
+        return (-1);
+
+    int fd = nl_open();
+    if (fd < 0)
+        return (-1);
+
+    char buf[256];
+    memset(buf, 0, sizeof (buf));
+    struct nlmsghdr *nh = (struct nlmsghdr *)buf;
+    struct rtmsg *rtm = (struct rtmsg *)NLMSG_DATA(nh);
+
+    nh->nlmsg_len   = NLMSG_LENGTH(sizeof (*rtm));
+    nh->nlmsg_type  = add ? RTM_NEWROUTE : RTM_DELROUTE;
+    nh->nlmsg_flags = NLM_F_REQUEST;
+    if (add)
+        nh->nlmsg_flags |= NLM_F_CREATE | NLM_F_REPLACE;
+
+    rtm->rtm_family   = AF_INET;
+    rtm->rtm_dst_len  = 32;
+    rtm->rtm_table    = RT_TABLE_MAIN;
+    rtm->rtm_protocol = RTPROT_STATIC;
+    rtm->rtm_scope    = RT_SCOPE_LINK;
+    rtm->rtm_type     = RTN_UNICAST;
+
+    rta_append(nh, sizeof (buf), RTA_DST, &ip, sizeof (ip));
+    rta_append(nh, sizeof (buf), RTA_OIF, &oif, sizeof (oif));
+
+    int rc = nl_talk(fd, nh, sizeof (buf));
+    close(fd);
+    return (rc);
+}
+
+static void
+write_sysctl(const char *path, const char *value)
+{
+    FILE *f = fopen(path, "w");
+    if (f == NULL) {
+        fprintf(stderr, "Warning: could not write %s: %s\n",
+                path, strerror(errno));
+        return;
+    }
+    fputs(value, f);
+    fclose(f);
+}
+
+/*
+ * create_shim() creates the host-side bridge-mode macvlan which lets
+ *               the host reach the Amiga. Failure is not fatal; the
+ *               Amiga is then just unreachable from this host, as
+ *               before.
+ */
+static void
+create_shim(const char *lower_dev, const char *tap_name)
+{
+    char name[IFNAMSIZ];
+    const char *suffix = tap_name + strcspn(tap_name, "0123456789");
+    snprintf(name, sizeof (name), "amiga-shim%s", suffix);
+
+    /* Remove a stale shim left over by a previous run which crashed */
+    if (cfg_by_ext_prog) {
+        char cmd[256];
+        snprintf(cmd, sizeof (cmd), "ip link delete %s 2>/dev/null", name);
+        if (system(cmd) != 0) { /* No stale shim */ }
+        snprintf(cmd, sizeof (cmd),
+                 "ip link add link %s name %s type macvlan mode bridge",
+                 lower_dev, name);
+        if (system(cmd) != 0)
+            goto fail;
+    } else {
+        int lower_ifindex = (int)if_nametoindex(lower_dev);
+        nl_delete_link(name);
+        if ((lower_ifindex == 0) ||
+            (nl_create_macvlan(name, lower_ifindex, "macvlan") < 0))
+            goto fail;
+    }
+    strcpy(g_shim_name, name);
+
+    char path[128];
+    snprintf(path, sizeof (path), "/proc/sys/net/ipv4/conf/%s/arp_filter",
+             name);
+    write_sysctl(path, "1");
+    snprintf(path, sizeof (path), "/proc/sys/net/ipv6/conf/%s/disable_ipv6",
+             name);
+    write_sysctl(path, "1");
+
+    if (cfg_by_ext_prog) {
+        char cmd[256];
+        snprintf(cmd, sizeof (cmd), "ip link set %s up", name);
+        if (system(cmd) != 0)
+            goto fail_delete;
+    } else if (if_set_flags(name, 1) < 0) {
+        goto fail_delete;
+    }
+    fprintf(stderr, "Created host shim %s on %s\n", name, lower_dev);
+    return;
+
+fail_delete:
+    nl_delete_link(name);
+    g_shim_name[0] = '\0';
+fail:
+    fprintf(stderr, "Warning: could not create host shim on %s; "
+            "this host will not be able to reach the Amiga\n", lower_dev);
+}
+
+static void
+delete_shim(void)
+{
+    if (g_shim_name[0] == '\0')
+        return;
+    /* Deleting the link also removes the route through it */
+    if (cfg_by_ext_prog) {
+        char cmd[256];
+        snprintf(cmd, sizeof (cmd), "ip link delete %s", g_shim_name);
+        if (system(cmd) != 0)
+            fprintf(stderr, "Warning: could not delete %s\n", g_shim_name);
+    } else {
+        nl_delete_link(g_shim_name);
+    }
+    g_shim_name[0] = '\0';
+    g_amiga_ip = 0;
+}
+
+static int
+shim_route(uint32_t ip, int add)
+{
+    if (cfg_by_ext_prog) {
+        char cmd[256];
+        struct in_addr a = { .s_addr = ip };
+        snprintf(cmd, sizeof (cmd), "ip route %s %s/32 dev %s",
+                 add ? "replace" : "delete", inet_ntoa(a), g_shim_name);
+        return (system(cmd) == 0 ? 0 : -1);
+    }
+    return (nl_route_host(ip, g_shim_name, add));
+}
+
+/*
+ * learn_amiga_ip() inspects a frame sent by the Amiga. If it carries
+ *                  a (new) IPv4 source address for the Amiga, the
+ *                  host route through the shim is pointed at it.
+ */
+static void
+learn_amiga_ip(const uint8_t *frame, size_t len)
+{
+    uint32_t ip;
+    static time_t last_refresh;
+
+    if ((g_shim_name[0] == '\0') || (len < 14))
+        return;
+
+    if (memcmp(frame + 6, g_tap_mac, 6) != 0) {
+        /*
+         * udev (MACAddressPolicy=persistent) or the Amiga side may
+         * change the macvtap's MAC after it was created, so re-read
+         * it, but at most once per second.
+         */
+        time_t now = time(NULL);
+        if (now == last_refresh)
+            return;
+        last_refresh = now;
+        refresh_tap_mac();
+        if (memcmp(frame + 6, g_tap_mac, 6) != 0)
+            return;
+    }
+
+    uint16_t ethertype = (frame[12] << 8) | frame[13];
+    if (ethertype == 0x0806) {
+        /* ARP: Ethernet/IPv4 sender protocol address */
+        if ((len < 42) || (frame[14] != 0x00) || (frame[15] != 0x01) ||
+            (frame[16] != 0x08) || (frame[17] != 0x00) ||
+            (frame[18] != 6) || (frame[19] != 4))
+            return;
+        memcpy(&ip, frame + 28, 4);
+    } else if (ethertype == 0x0800) {
+        if ((len < 34) || ((frame[14] >> 4) != 4))
+            return;
+        memcpy(&ip, frame + 26, 4);
+    } else {
+        return;
+    }
+
+    uint32_t hip = ntohl(ip);
+    if ((hip == 0) || (hip == 0xffffffff) ||
+        ((hip >> 24) == 127) || ((hip >> 28) == 0xe))
+        return;   // Unconfigured, broadcast, loopback, or multicast
+    if (ip == g_amiga_ip)
+        return;
+
+    struct in_addr a = { .s_addr = ip };
+    if (g_amiga_ip != 0)
+        shim_route(g_amiga_ip, 0);
+    if (shim_route(ip, 1) == 0) {
+        g_amiga_ip = ip;
+        fprintf(stderr, "Amiga IP is %s; host route via %s\n",
+                inet_ntoa(a), g_shim_name);
+    } else {
+        g_amiga_ip = 0;
+        fprintf(stderr, "Warning: could not add route for Amiga IP %s\n",
+                inet_ntoa(a));
+    }
+}
+
+/* Quietly refresh g_tap_mac from the macvtap interface */
+static void
+refresh_tap_mac(void)
+{
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof (ifr));
+    if ((g_tap_name[0] == '\0') || if_get_name(&ifr, g_tap_name))
+        return;
+    int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return;
+    if (ioctl(fd, SIOCGIFHWADDR, &ifr) == 0)
+        memcpy(g_tap_mac, ifr.ifr_hwaddr.sa_data, 6);
+    close(fd);
+}
+
 /* ------------------------------------------------------------------ */
 /* Macvtap allocation / teardown                                      */
 /* ------------------------------------------------------------------ */
@@ -318,7 +570,7 @@ allocate_macvtap(const char *lower_dev, char *dev_name_buffer,
             return (-1);
         }
 
-        if (nl_create_macvtap(name, lower_ifindex) < 0) {
+        if (nl_create_macvlan(name, lower_ifindex, "macvtap") < 0) {
             fprintf(stderr, "Error: failed to create macvtap %s on %s\n",
                     name, lower_dev);
             return (-1);
@@ -620,6 +872,9 @@ linux_open(const char *lower_dev, char *name_out, size_t name_out_sz)
     fprintf(stderr, "Created macvtap interface %s on %s (%s)\n",
             tap_name, lower_dev, cfg_by_ext_prog ? "external ip" : "netlink");
 
+    refresh_tap_mac();
+    create_shim(lower_dev, tap_name);
+
     /* Wait for network MAC to settle, matching original behavior. */
     sleep(1);
     return (0);
@@ -628,6 +883,7 @@ linux_open(const char *lower_dev, char *name_out, size_t name_out_sz)
 static void
 linux_close(void)
 {
+    delete_shim();
     if (g_tap_fd >= 0) {
         close(g_tap_fd);
         g_tap_fd = -1;
@@ -694,6 +950,8 @@ linux_write_frame(const uint8_t *buf, size_t len)
 {
     struct virtio_net_hdr vnet_hdr;
     memset(&vnet_hdr, 0, sizeof (vnet_hdr));
+    learn_amiga_ip(buf, len);
+
     struct iovec iov[2];
     iov[0].iov_base = &vnet_hdr;
     iov[0].iov_len  = sizeof (vnet_hdr);
@@ -712,6 +970,7 @@ static int
 linux_set_mac(const uint8_t mac[6])
 {
     set_mac_macvtap(mac);
+    refresh_tap_mac();
     return (0);
 }
 
