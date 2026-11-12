@@ -858,6 +858,17 @@ main(int argc, char *argv[])
     fds[1].fd = STDIN_FILENO;
     fds[1].events = POLLIN;
 
+    /*
+     * stdin must be unbuffered, because readiness is taken from poll()
+     * on the raw fd. A buffered fread() would pull every frame already
+     * waiting in the pipe into stdio's buffer, but only the first would
+     * be handled; poll() would then see an empty pipe and the rest would
+     * sit in the buffer until another frame happened to arrive. That
+     * stalls any burst of back-to-back frames from the Amiga, such as a
+     * TCP reply spanning several segments.
+     */
+    setvbuf(stdin, NULL, _IONBF, 0);
+
     g_be->get_mac(netif_hw_mac);
 
     uint16_t frame_len;
