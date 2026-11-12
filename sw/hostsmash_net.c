@@ -813,7 +813,7 @@ net_forward_thread(void *arg)
 
             node->hdr.hm_hdr.km_op    |= KM_OP_REPLY;
             node->hdr.hm_hdr.km_status = KM_STATUS_OK;
-            node->hdr.hm_length        = node->pktlen;
+            node->hdr.hm_length        = SWAP16(node->pktlen);
 
             ks_send_lock(KS_SEND_PRIO_NET);
             rc = send_msg_nowait(&node->hdr, sendlen, &status);
@@ -1359,7 +1359,7 @@ sm_nclose(hm_nopenhandle_t *hm, uint *status)
 uint
 sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
 {
-    uint     hm_length = hm->hm_length;
+    uint     hm_length = SWAP16(hm->hm_length);  // Amiga is big-endian
     uint8_t *ndata     = (uint8_t *)(hm + 1);
 
     netprintf("NWRITE(l=%u rl=%u)", hm_length, rxlen);
@@ -1369,8 +1369,11 @@ sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
         return (send_msg(hm, sizeof (*hm), status));
     }
     netif_capture = 1;
-    if (hm_length > rxlen)
-        hm_length = rxlen;
+    /* rxlen includes the message header; the frame follows it */
+    if (rxlen < sizeof (*hm))
+        hm_length = 0;
+    else if (hm_length > rxlen - sizeof (*hm))
+        hm_length = rxlen - sizeof (*hm);
     if (hm_length > 1522) // DEBUG (max ethernet non-Jumbo frame)
         hm_length = 1522;
 #ifdef DUMP_PACKET
@@ -1379,7 +1382,8 @@ sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
     netprintf("\n");
 #endif
 
-    netif_write(hm_length, hm_length, ndata);
+    if (hm_length != 0)
+        netif_write(hm_length, hm_length, ndata);
 
     *status = KS_STATUS_OK;  // No reply sent; not an error
     return (0);
