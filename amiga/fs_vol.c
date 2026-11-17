@@ -123,8 +123,15 @@ name_present_in_dos_devinfo(struct DosInfo *info, const char *name,
     return (present);
 }
 
+/*
+ * fsname
+ * ------
+ * Converts name (modified in place) into a valid DOS name which is not
+ * already present in the DOS list. The name buffer must have room for
+ * VOLNAME_MAXLEN + 12 bytes (a ".<count>" suffix may be appended).
+ */
 static void
-fsname(struct DosInfo *info, char *name, char *volumename, void *ignore)
+fsname(struct DosInfo *info, char *name, void *ignore)
 {
     int len;
     char *ptr;
@@ -156,23 +163,35 @@ fsname(struct DosInfo *info, char *name, char *volumename, void *ignore)
             sprintf(name + len, "%u", count++);
         } while (name_present_in_dos_devinfo(info, name, ignore));
     }
-    len += strlen(name + len);
-
-    strcpy(volumename + 1, name);
-    volumename[0] = len;
 }
+
+/* BSTR handler name; BPTRs require longword alignment */
+static const char smashfs_handler_bstr[] __attribute__((aligned(4))) =
+    "\7smashfs";
 
 static struct DosList *
 volnode_init(char *name, uint32_t access_time, LONG dl_type,
              struct MsgPort *msgport, void *ignore)
 {
-    uint namelen = strlen(name) + 5;
+    uint namelen;
     char *volumename;
+    char  dosname[VOLNAME_MAXLEN + 12];
     struct DosInfo *info;
     struct DosList *dosnode;
 
     info = (struct DosInfo *)
            BTOC(((struct RootNode *) DOSBase->dl_Root)->rn_Info);
+
+    /*
+     * Work on a private copy: the caller's name may point into a
+     * received message buffer, which must not be modified.
+     *
+     * Lock of volume list was done by the caller (see below).
+     */
+    strncpy(dosname, name, VOLNAME_MAXLEN);
+    dosname[VOLNAME_MAXLEN] = '\0';
+    fsname(info, dosname, ignore);
+    namelen = strlen(dosname);
 
     dosnode = (struct DosList *) AllocMem(sizeof (*dosnode),
                                           MEMF_PUBLIC | MEMF_CLEAR);
@@ -183,7 +202,7 @@ volnode_init(char *name, uint32_t access_time, LONG dl_type,
         return (NULL);
     }
 
-    volumename = (char *) AllocVec(namelen, MEMF_PUBLIC);
+    volumename = (char *) AllocVec(namelen + 2, MEMF_PUBLIC);
     if (volumename == NULL) {
         printf("volnode_init: unable to allocate %u bytes\n", namelen);
         FreeMem(dosnode, sizeof (*dosnode));
@@ -191,7 +210,8 @@ volnode_init(char *name, uint32_t access_time, LONG dl_type,
     }
 
     if (dl_type == DLT_DEVICE) {
-        dosnode->dol_misc.dol_handler.dol_Handler = CTOB("\7smashfs");
+        dosnode->dol_misc.dol_handler.dol_Handler =
+            CTOB(smashfs_handler_bstr);
         dosnode->dol_misc.dol_handler.dol_StackSize = 4096;
         dosnode->dol_misc.dol_handler.dol_Priority = 0;
         dosnode->dol_misc.dol_handler.dol_Startup = 0;  // FileSysStartupMsg
@@ -215,6 +235,8 @@ volnode_init(char *name, uint32_t access_time, LONG dl_type,
     dosnode->dol_Task     = msgport;
     dosnode->dol_Lock     = 0;
 
+    volumename[0] = namelen;
+    strcpy(volumename + 1, dosname);
     dosnode->dol_Name     = CTOB(volumename);
 
     /*
@@ -226,7 +248,6 @@ volnode_init(char *name, uint32_t access_time, LONG dl_type,
      * it's up to the caller to do the AttemptLockDosList().
      */
     // LockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
-        fsname(info, name, volumename, ignore);
         dosnode->dol_Next = info->di_DevInfo;
         info->di_DevInfo = (BPTR) CTOB(dosnode);
     // UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
@@ -247,6 +268,43 @@ volnode_new(char *name, uint32_t access_time, vollist_t *vol)
     vol->vl_volnode = (DeviceList_t *)
                       volnode_init(name, access_time, DLT_VOLUME,
                                    vol->vl_msgport, vol->vl_devnode);
+}
+
+/*
+ * volnode_readd
+ * -------------
+ * Puts back the DOS nodes of a volume which had previously dropped out of
+ * the DOS list, but whose nodes were kept because locks or files still
+ * reference them. Reusing the nodes (rather than allocating new ones)
+ * keeps existing locks valid. The caller must hold the DosList lock.
+ */
+static void
+volnode_readd(char *name, uint32_t access_time, vollist_t *vol)
+{
+    struct DosInfo *info;
+    DosList_t      *node;
+
+    info = (struct DosInfo *)
+           BTOC(((struct RootNode *) DOSBase->dl_Root)->rn_Info);
+
+    if ((node = vol->vl_devnode) == NULL) {
+        vol->vl_devnode = volnode_init(name, access_time, DLT_DEVICE,
+                                       vol->vl_msgport, NULL);
+    } else {
+        node->dol_Task = vol->vl_msgport;
+        node->dol_Next = info->di_DevInfo;
+        info->di_DevInfo = CTOB(node);
+    }
+
+    if ((node = (DosList_t *) vol->vl_volnode) == NULL) {
+        vol->vl_volnode = (DeviceList_t *)
+                          volnode_init(name, access_time, DLT_VOLUME,
+                                       vol->vl_msgport, vol->vl_devnode);
+    } else {
+        node->dol_Task = vol->vl_msgport;
+        node->dol_Next = info->di_DevInfo;
+        info->di_DevInfo = CTOB(node);
+    }
 }
 
 static void
@@ -319,7 +377,7 @@ volume_seen(char *name, uint32_t access_time, uint flags, int bootpri)
             if (cur->vl_in_dos_list == 0) {
                 /* Previously dropped out of volume list */
                 cur->vl_in_dos_list = 1;
-                volnode_new(name, access_time, cur);
+                volnode_readd(name, access_time, cur);
             }
             return;
         }
@@ -332,8 +390,19 @@ volume_seen(char *name, uint32_t access_time, uint flags, int bootpri)
     }
 
     msgport = CreatePort(NULL, 0);
+    if (msgport == NULL) {
+        printf("failed to create port for volume %s\n", name);
+        sm_fclose(handle);
+        return;
+    }
 
     cur = AllocMem(sizeof (vollist_t), MEMF_PUBLIC);
+    if (cur == NULL) {
+        printf("failed to allocate volume %s\n", name);
+        DeletePort(msgport);
+        sm_fclose(handle);
+        return;
+    }
     strcpy(cur->vl_name, name);
     cur->vl_next = vollist;
     cur->vl_seen = 1;

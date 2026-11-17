@@ -274,6 +274,8 @@ action_copy_dir(void)
     if (rc == 0) {
         printf("%x\n", handle);
         newlock = CreateLock(handle, pphandle, SHARED_LOCK);
+        if (newlock == NULL)
+            sm_fclose(handle);
         return (CTOB(newlock));
     }
     printf("FAIL %d\n", rc);
@@ -311,6 +313,8 @@ action_create_dir(void)
     }
     printf("  dir handle %x\n", handle);
     newlock = CreateLock(handle, phandle, SHARED_LOCK);
+    if (newlock == NULL)
+        sm_fclose(handle);
     return (CTOB(newlock));
 }
 
@@ -512,7 +516,8 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
 
     FillInfoBlock(fib, fattr, dent);
 
-    if (type == HM_TYPE_DIR) {
+    if ((type == HM_TYPE_DIR) || (type == HM_TYPE_VOLDIR) ||
+        (type == HM_TYPE_VOLUME)) {
         /* Directory pointer needs rewind for EXAMINE_NEXT */
         lock->fl_Flags |= FL_FLAG_NEEDS_REWIND;
     }
@@ -600,7 +605,7 @@ action_examine_next(void)
     if (entlen > 1024) {
         printf("Corrupt entlen=%x for %x\n", entlen, handle);
         gpack->dp_Res2 = ERROR_BAD_TEMPLATE;
-        sm_fclose(handle);
+        /* Handle belongs to the lock; it is closed by FREE_LOCK */
         return (DOSFALSE);
     }
 
@@ -627,7 +632,7 @@ action_end(void)
 {
     fh_private_t *fp  = (fh_private_t *) GARG1;  // Comes from fh_Arg1
 
-    printf("END %p %p %x\n", fp, fp->fp_lock, fp->fp_handle);
+    printf("END %p\n", fp);
     if (fp != NULL) {
         fs_lock_t *lock   = (fs_lock_t *) fp->fp_lock;
         handle_t   handle = fp->fp_handle;
@@ -691,6 +696,7 @@ action_findinput(void)
     fp = AllocMem(sizeof (*fp), MEMF_PUBLIC);
     if (fp == NULL) {
         sm_fclose(handle);
+        FreeLock(newlock);
         gpack->dp_Res2 = ERROR_NO_FREE_STORE;
         return (DOSFALSE);
     }
@@ -738,19 +744,18 @@ action_findoutput(void)
 
     printf("FINDOUTPUT p=%x %p '%s'\n", phandle, lock, name);
 
-    newlock = CreateLock(handle, phandle, EXCLUSIVE_LOCK);
-    if (newlock == NULL) {
-        *bname = cho;
-        return (DOSFALSE);
-    }
-
     rc = sm_fopen(phandle, name, hm_mode, &type, create_perms, &handle);
     *bname = cho;
 
     if (rc != 0) {
         printf("fopen failed with %d\n", rc);
-        FreeLock(newlock);
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
+        return (DOSFALSE);
+    }
+
+    newlock = CreateLock(handle, phandle, EXCLUSIVE_LOCK);
+    if (newlock == NULL) {
+        sm_fclose(handle);
         return (DOSFALSE);
     }
 
@@ -786,13 +791,11 @@ static ULONG
 action_free_lock(void)
 {
     fs_lock_t *lock = (fs_lock_t *) BTOC(GARG1);
-    handle_t   handle = lock->fl_Key;
-    printf("FREE_LOCK %p %x\n", lock, lock->fl_Key);
-    if (lock == NULL) {
-        GARG2 = ERROR_FILE_NOT_OBJECT;
-        return (DOSFALSE);
-    }
-    sm_fclose(handle);
+
+    printf("FREE_LOCK %p\n", lock);
+    if (lock == NULL)
+        return (DOSTRUE);  /* Freeing a NULL lock is a no-op */
+    sm_fclose(lock->fl_Key);
     FreeLock(lock);
     return (DOSTRUE);
 }
@@ -871,6 +874,8 @@ action_locate_object(void)
         return (DOSFALSE);
     }
     newlock = CreateLock(handle, phandle, GARG3);
+    if (newlock == NULL)
+        sm_fclose(handle);
     return (CTOB(newlock));
 }
 
@@ -887,7 +892,8 @@ action_make_link(void)
     uint       rc;
     uint       type;
 
-    printf("MAKE_LINK p=%x %p '%s' %s\n", phandle, lock, name,
+    printf("MAKE_LINK p=%x %p '%.*s' %s\n", phandle, lock,
+           (int) (uint8_t) *bname, name,
            (linktype == LINK_HARD) ? "hard" : "soft");
 
     if (linktype == LINK_SOFT) {
@@ -946,6 +952,10 @@ action_parent(void)
         return (DOSFALSE);
     }
 
+    if (*name == '\0') {
+        gpack->dp_Res2 = ERROR_OBJECT_NOT_FOUND;
+        return (DOSFALSE);
+    }
     ptr = name + strlen(name) - 1;
     if (*ptr == '/')
         ptr--;
@@ -972,7 +982,9 @@ action_parent(void)
         gpack->dp_Res2 = ERROR_DIR_NOT_FOUND;
         return (DOSFALSE);
     }
-    newlock = CreateLock(handle, phandle, 0);
+    newlock = CreateLock(handle, 0, SHARED_LOCK);
+    if (newlock == NULL)
+        sm_fclose(handle);
     return (CTOB(newlock));
 }
 
@@ -987,28 +999,29 @@ action_read(void)
     void         *data;
     uint          rlen;
     uint          count = 0;
-    uint          buflen = 16384;
 
     if (fp == NULL) {
         gpack->dp_Res2 = ERROR_REQUIRED_ARG_MISSING;
-        return (DOSFALSE);
+        return ((ULONG) -1);
     }
-    if (buflen > len)
-        buflen = len;
+    if (len <= 0)
+        return (0);
     handle = fp->fp_handle;
     printf("READ %x at pos=%llx len=%x\n", handle, fp->fp_pos_cur, len);
 
-    while (count < len) {
-        rc = sm_fread(handle, len, &data, &rlen, 0);
+    while (count < (uint) len) {
+        uint remain = (uint) len - count;
+        rc = sm_fread(handle, remain, &data, &rlen, 0);
         if ((rc != 0) && (rc != KM_STATUS_EOF))
             printf("sm_fread got %d\n", rc);
         if (rlen == 0) {
-            printf("Failed to read %x at pos=%llx, count=%x: %d\n",
-                   handle, fp->fp_pos_cur, count, rc);
+            if (rc != KM_STATUS_EOF)
+                printf("Failed to read %x at pos=%llx, count=%x: %d\n",
+                       handle, fp->fp_pos_cur, count, rc);
             break;
         }
-        if (rlen > len)
-            rlen = len;
+        if (rlen > remain)
+            rlen = remain;
         memcpy(buf, data, rlen);
         buf            += rlen;
         count          += rlen;
@@ -1018,15 +1031,12 @@ action_read(void)
         if (rc == KM_STATUS_EOF)
             break;
     }
-    if ((rc != 0) && (rc != KM_STATUS_EOF)) {
+    if ((rc != 0) && (rc != KM_STATUS_EOF) && (count == 0)) {
+        /* Error with nothing read; partial data is returned below */
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
-        return (DOSFALSE);
+        return ((ULONG) -1);
     }
-    if (count == 0) {
-        gpack->dp_Res2 = ERROR_SEEK_ERROR;
-        return (DOSFALSE);
-    }
-    return (count);
+    return (count);  /* 0 at end of file */
 }
 
 static ULONG
@@ -1043,7 +1053,7 @@ action_read_link(void)
     uint rc;
     uint rlen;
 
-    if ((lock == NULL) || (name == NULL) || (buf == NULL))  {
+    if ((lock == NULL) || (name == NULL) || (buf == NULL) || (buflen == 0)) {
         gpack->dp_Res2 = ERROR_REQUIRED_ARG_MISSING;
         return (DOSFALSE);
     }
@@ -1080,20 +1090,22 @@ action_rename_object(void)
     char      *sbname = (char *) BTOC(GARG2);
     fs_lock_t *dlock  = (fs_lock_t *) BTOC(GARG3);
     char      *dbname = (char *) BTOC(GARG4);
-    char      *sname  = sbname + 1;
-    char      *dname  = dbname + 1;
+    char      *sname;
+    char      *dname;
     handle_t   shandle;
     handle_t   dhandle;
     char       scho;
     char       dcho;
     uint       rc;
 
-    if ((sname == NULL) || (dname == NULL) ||
-        (*sname == '\0') || (*dname == '\0')) {
+    if ((sbname == NULL) || (dbname == NULL) ||
+        (*sbname == '\0') || (*dbname == '\0')) {
         gpack->dp_Res2 = ERROR_REQUIRED_ARG_MISSING;
         return (DOSFALSE);
     }
 
+    sname = sbname + 1;
+    dname = dbname + 1;
     shandle = (slock == NULL) ? gvol->vl_handle : slock->fl_Key;
     dhandle = (dlock == NULL) ? gvol->vl_handle : dlock->fl_Key;
 
@@ -1123,7 +1135,7 @@ static ULONG
 action_seek(void)
 {
     fh_private_t *fp = (fh_private_t *) GARG1;  // Comes from fh_Arg1
-    ULONG         offset = GARG2;
+    LONG          offset = (LONG) GARG2;  /* Signed: may seek backward */
     LONG          seek_mode = GARG3;
     uint64_t      prev_pos;
     uint64_t      new_pos;
@@ -1132,7 +1144,7 @@ action_seek(void)
 
     if (fp == NULL) {
         gpack->dp_Res2 = ERROR_REQUIRED_ARG_MISSING;
-        return (DOSFALSE);
+        return ((ULONG) -1);
     }
     handle = fp->fp_handle;
 
@@ -1144,11 +1156,13 @@ action_seek(void)
     else if (seek_mode > 0)
         seek_mode = OFFSET_END;
 
-    rc = sm_fseek(handle, seek_mode, offset, &new_pos, &prev_pos);
+    /* Sign-extend so the host sees negative offsets as negative */
+    rc = sm_fseek(handle, seek_mode, (uint64_t) (int64_t) offset,
+                  &new_pos, &prev_pos);
     if (rc != 0) {
-        printf("fseek(%x) to %llx failed: %d\n", handle, new_pos, rc);
+        printf("fseek(%x) to %d failed: %d\n", handle, offset, rc);
         gpack->dp_Res2 = ERROR_SEEK_ERROR;
-        return (DOSFALSE);
+        return ((ULONG) -1);
     }
     printf("  new_pos=%llx prev_pos=%llx\n", new_pos, prev_pos);
 
@@ -1223,9 +1237,10 @@ action_same_lock(void)
     name1_len = strlen(name2) + 1;
     name1 = AllocMem(name1_len, MEMF_PUBLIC);
     if (name1 == NULL) {
-        gpack->dp_Res2 = km_status_to_amiga_error(rc);
+        gpack->dp_Res2 = ERROR_NO_FREE_STORE;
         return (DOSFALSE);
     }
+    strcpy(name1, name2);  /* name2 buffer is reused by next sm_fpath() */
     rc = sm_fpath(handle2, &name2);
     if (rc != 0) {
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
@@ -1294,7 +1309,7 @@ action_set_date(void)
     *bname = cho;
 
     if (rc != 0) {
-        printf("failed set_protect with %x\n", rc);
+        printf("failed set_date with %x\n", rc);
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
@@ -1329,7 +1344,7 @@ action_set_dates(void)
     *bname = cho;
 
     if (rc != 0) {
-        printf("failed set_protect with %x\n", rc);
+        printf("failed set_dates with %x\n", rc);
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
@@ -1367,7 +1382,7 @@ action_set_owner(void)
     *bname = cho;
 
     if (rc != 0) {
-        printf("failed set_protect with %x\n", rc);
+        printf("failed set_owner with %x\n", rc);
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
@@ -1392,8 +1407,10 @@ action_write(void)
 
     if (fp == NULL) {
         gpack->dp_Res2 = ERROR_REQUIRED_ARG_MISSING;
-        return (DOSFALSE);
+        return ((ULONG) -1);
     }
+    if (len <= 0)
+        return (0);
     handle = fp->fp_handle;
     printf("WRITE %x buf=%p at pos=%llx len=%x\n",
            handle, buf, fp->fp_pos_cur, len);
@@ -1403,7 +1420,7 @@ action_write(void)
         printf("sm_fwrite(%x) got %d at pos=%llx, count=%x\n",
                handle, rc, fp->fp_pos_cur, count);
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
-        return (DOSFALSE);
+        return ((ULONG) -1);
     }
     count = len;
     fp->fp_pos_cur += len;

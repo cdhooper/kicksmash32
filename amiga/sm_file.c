@@ -594,8 +594,15 @@ sm_fseek(handle_t handle, int seek_mode, uint64_t offset,
     msg.hm_unused2       = 0;
 
     rc = host_msg(&msg, sizeof (msg), (void **) &rmsg, &rlen);
-    if (rc != KM_STATUS_OK)
+    if (rc != KM_STATUS_OK) {
+        /* rmsg is not valid without a successful reply */
         printf("Failed to seek: %s\n", smash_err(rc));
+        if (new_pos != NULL)
+            *new_pos = 0;
+        if (prev_pos != NULL)
+            *prev_pos = 0;
+        return (rc);
+    }
 
     if (new_pos != NULL)
         *new_pos = ((uint64_t) (rmsg->hm_off_hi) << 32) | rmsg->hm_off_lo;

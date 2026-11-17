@@ -212,7 +212,7 @@ main(int argc, char *argv[])
 show_usage:
                         printf("-d - debug output (-dd = serial debug))\n"
                                "-h - display this help text\n"
-                               "-t - limit runtime to 240 minutes\n"
+                               "-t - limit runtime to 240 seconds\n"
                                "-v - show smashfs version\n"
                                "");
                         rc = 1;
@@ -229,7 +229,13 @@ show_usage:
 
     grunning = 1;
     timer_open();
-    refresh_volume_list();
+    /*
+     * Blocking lock is safe here: no volume ports exist yet, so nobody
+     * holding the DosList lock can be waiting on a packet to us.
+     */
+    LockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
+        refresh_volume_list();
+    UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
     timer_restart(1000);
 
     handle_messages();

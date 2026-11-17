@@ -6901,7 +6901,6 @@ run_mode(uint mode, uint bank, uint baseaddr, uint len_specified,
         if (mode & MODE_CLOCK_SET)
             clock_ks_set(enter--);
 
-        // XXX: Also add regular clock set service to message mode
         return (clock_ks_show(enter));
     }
     if (mode & MODE_FWREAD)
