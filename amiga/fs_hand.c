@@ -79,12 +79,15 @@ refresh_volume_list(void)
             goto gvl_fail;
         }
         printf("vols:");
-        for (pos = 0; pos < rlen; ) {
+        for (pos = 0; pos + sizeof (*dent) <= rlen; ) {
             dent   = (hm_fdirent_t *)(((uintptr_t) data) + pos);
             entlen = dent->hmd_elen;
-            if ((entlen < 2) || (entlen > 256))
+            if ((entlen < 2) || (entlen > 256) ||
+                (pos + sizeof (*dent) + entlen > rlen))
                 break;
             dname = (char *) (dent + 1);
+            if (memchr(dname, '\0', entlen) == NULL)
+                break;  // Name not terminated within entry
             if (strlen(dname) < VOLNAME_MAXLEN) {
                 uint vol_flags   = dent->hmd_ino;
                 int  vol_bootpri = (int) dent->hmd_nlink;
@@ -113,6 +116,8 @@ handle_messages(void)
 
 //  printf("Volmasks=%08x Timermask=%08x\n", volume_msg_masks, timer_msg_mask);
     while (grunning || (gvolumes_inuse && (shutdown_timer != 0))) {
+        /* volume_seen() and volume_flush() add and delete volume ports */
+        waitmask = volume_msg_masks | timer_msg_mask | SIGBREAKF_CTRL_C;
         mask = Wait(waitmask);
         if (mask & timer_msg_mask) {
             uint timer_msec = 1000;
@@ -132,8 +137,6 @@ handle_messages(void)
                                                             LDF_WRITE);
                     if (dl != NULL) {
                         refresh_volume_list();
-                        waitmask = volume_msg_masks | timer_msg_mask |
-                                   SIGBREAKF_CTRL_C;
                         UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
                         do_refresh = 0;
                     } else {
@@ -229,6 +232,12 @@ show_usage:
 
     grunning = 1;
     timer_open();
+    if (timer_msg_mask == 0) {
+        /* Without the timer, volumes are never refreshed or shut down */
+        printf("smashfs: unable to open timer\n");
+        rc = 1;
+        goto go_exit;
+    }
     /*
      * Blocking lock is safe here: no volume ports exist yet, so nobody
      * holding the DosList lock can be waiting on a packet to us.

@@ -278,6 +278,43 @@ volnode_new(char *name, uint32_t access_time, vollist_t *vol)
  * reference them. Reusing the nodes (rather than allocating new ones)
  * keeps existing locks valid. The caller must hold the DosList lock.
  */
+/*
+ * volnode_rename
+ * --------------
+ * Gives a node which is not currently in the DOS list a name which does
+ * not collide with any node in the list (another volume may have taken
+ * its name while it was out of the list). The caller must hold the
+ * DosList lock.
+ */
+static void
+volnode_rename(struct DosInfo *info, DosList_t *node, const char *name,
+               void *ignore)
+{
+    char  dosname[VOLNAME_MAXLEN + 12];
+    char *oldname = (char *) BTOC(node->dol_Name);
+    char *newname;
+    uint  namelen;
+
+    strncpy(dosname, name, VOLNAME_MAXLEN);
+    dosname[VOLNAME_MAXLEN] = '\0';
+    fsname(info, dosname, ignore);
+    namelen = strlen(dosname);
+
+    if ((oldname != NULL) && ((uint8_t) oldname[0] == namelen) &&
+        (strncmp(oldname + 1, dosname, namelen) == 0))
+        return;  // Unchanged
+
+    newname = (char *) AllocVec(namelen + 2, MEMF_PUBLIC);
+    if (newname == NULL)
+        return;  // Keep the old name
+    newname[0] = namelen;
+    strcpy(newname + 1, dosname);
+    node->dol_Name = CTOB(newname);
+    if (oldname != NULL)
+        FreeVec(oldname);
+    printf("Volume renamed %s\n", dosname);
+}
+
 static void
 volnode_readd(char *name, uint32_t access_time, vollist_t *vol)
 {
@@ -291,6 +328,7 @@ volnode_readd(char *name, uint32_t access_time, vollist_t *vol)
         vol->vl_devnode = volnode_init(name, access_time, DLT_DEVICE,
                                        vol->vl_msgport, NULL);
     } else {
+        volnode_rename(info, node, name, NULL);
         node->dol_Task = vol->vl_msgport;
         node->dol_Next = info->di_DevInfo;
         info->di_DevInfo = CTOB(node);
@@ -301,6 +339,7 @@ volnode_readd(char *name, uint32_t access_time, vollist_t *vol)
                           volnode_init(name, access_time, DLT_VOLUME,
                                        vol->vl_msgport, vol->vl_devnode);
     } else {
+        volnode_rename(info, node, name, vol->vl_devnode);
         node->dol_Task = vol->vl_msgport;
         node->dol_Next = info->di_DevInfo;
         info->di_DevInfo = CTOB(node);

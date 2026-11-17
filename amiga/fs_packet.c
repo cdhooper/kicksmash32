@@ -213,7 +213,14 @@ CreateLock(handle_t handle, handle_t phandle, uint mode)
     return (lock);
 }
 
-void
+/*
+ * FreeLock
+ * --------
+ * Removes the lock from the volume's lock list and frees it.
+ * Returns 0 on success, or -1 if the lock was not found in the list
+ * (in which case it is not freed).
+ */
+int
 FreeLock(fs_lock_t *lock)
 {
     DeviceList_t *volnode = gvol->vl_volnode;
@@ -223,7 +230,7 @@ FreeLock(fs_lock_t *lock)
 #ifndef FAST
     if (lock == NULL) {
         printf("** ERROR - FreeLock called with NULL lock\n");
-        return;
+        return (-1);
     }
 #endif
 
@@ -251,11 +258,11 @@ FreeLock(fs_lock_t *lock)
 
     if (current == NULL) {
         printf("Did not find lock in global locklist\n");
-        gpack->dp_Res1 = DOSFALSE;
-    } else {
-        FreeMem(current, sizeof (fs_lock_t));
-        gvol->vl_use_count--;
+        return (-1);
     }
+    FreeMem(current, sizeof (fs_lock_t));
+    gvol->vl_use_count--;
+    return (0);
 }
 
 static ULONG
@@ -507,7 +514,9 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
     }
 
     entlen = dent->hmd_elen;
-    if (entlen > 1024) {
+    if ((rlen < sizeof (*dent)) || (entlen > 1024) ||
+        (rlen < sizeof (*dent) + entlen) ||
+        (memchr(dent + 1, '\0', entlen) == NULL)) {
         printf("Corrupt entlen=%x for %x\n", entlen, handle);
         gpack->dp_Res2 = ERROR_BAD_TEMPLATE;
         sm_fclose(handle);
@@ -541,16 +550,21 @@ action_disk_info(void)
 
     printf("DISK_INFO %x\n", handle);
     rc = sm_fread(handle, len, (void **) &dent, &rlen, HM_FLAG_SEEK0);
-    if (rc == 0) {
+    if ((rc == 0) && (rlen >= sizeof (*dent))) {
         uint entlen = dent->hmd_elen;
 
         if (entlen > 1024) {
-            printf("Corrupt entlen=%x for %.20s\n",
-                   entlen, (char *) (dent + 1));
+            printf("Corrupt entlen=%x\n", entlen);
+        } else if ((dent->hmd_blksize == 0) || (dent->hmd_size_lo == 0)) {
+            /* Callers divide by these; keep the defaults */
+            printf("Bad volume size %u blocks of %u bytes\n",
+                   dent->hmd_size_lo, dent->hmd_blksize);
         } else {
             numblks = dent->hmd_size_lo;
             numused = dent->hmd_blks;
             blksize = dent->hmd_blksize;
+            if (numused > numblks)
+                numused = numblks;
         }
     }
 
@@ -602,7 +616,9 @@ action_examine_next(void)
         return (DOSFALSE);
     }
     entlen = dent->hmd_elen;
-    if (entlen > 1024) {
+    if ((rlen < sizeof (*dent)) || (entlen > 1024) ||
+        (rlen < sizeof (*dent) + entlen) ||
+        (memchr(dent + 1, '\0', entlen) == NULL)) {
         printf("Corrupt entlen=%x for %x\n", entlen, handle);
         gpack->dp_Res2 = ERROR_BAD_TEMPLATE;
         /* Handle belongs to the lock; it is closed by FREE_LOCK */
@@ -676,9 +692,19 @@ action_findinput(void)
     rc = sm_fopen(phandle, name, hm_mode, &type, create_perms, &handle);
 
     if (rc != 0) {
-        /* Try again without write access */
-        hm_mode = HM_MODE_READ;
-        rc = sm_fopen(phandle, name, hm_mode, &type, create_perms, &handle);
+        /*
+         * Try again without write access. As with FFS, a write-protected
+         * file may still be opened; writes to it will then fail.
+         */
+        uint rc2 = sm_fopen(phandle, name, HM_MODE_READ, &type,
+                            create_perms, &handle);
+        /*
+         * If that also fails, report the first error: for FINDUPDATE it
+         * explains why the file could not be created (for example, a
+         * write-protected directory) rather than "object not found".
+         */
+        if ((rc2 == 0) || (gpack->dp_Type != ACTION_FINDUPDATE))
+            rc = rc2;
     }
     *bname = cho;
 
@@ -796,7 +822,10 @@ action_free_lock(void)
     if (lock == NULL)
         return (DOSTRUE);  /* Freeing a NULL lock is a no-op */
     sm_fclose(lock->fl_Key);
-    FreeLock(lock);
+    if (FreeLock(lock) != 0) {
+        gpack->dp_Res2 = ERROR_INVALID_LOCK;
+        return (DOSFALSE);
+    }
     return (DOSTRUE);
 }
 
