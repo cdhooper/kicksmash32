@@ -41,6 +41,7 @@ uint8_t host_interface_version = 0;
 #define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
 
 #define ROM_BASE         0x00f80000  /* Base address of Kickstart ROM */
+#define SM_ALIAS_GAP_TICKS 10        /* CIA ticks between messages (alias) */
 
 extern uint flag_debug;
 
@@ -135,6 +136,32 @@ send_cmd(uint16_t cmd, void *arg, uint16_t arglen,
          void *reply, uint replymax, uint *replyalen)
 {
     uint rc;
+
+#if !defined(ROMFS) && !defined(STANDALONE)
+    /*
+     * With the cache-inhibited ROM alias from sm_rom_alias_open(), the
+     * ROM accesses already bypass the data cache and the MMU remapping
+     * of the ROM, so only interrupts need to be disabled. The alias is
+     * checked with interrupts disabled, because sm_rom_alias_close()
+     * removes it by clearing sm_rom_base with interrupts disabled.
+     */
+    INTERRUPTS_DISABLE();
+    if (sm_rom_base != ROM_BASE) {
+        /*
+         * Kicksmash needs a few microseconds after finishing one message
+         * before it can capture the next. The cache and MMU switching of
+         * the other path took longer than that, but here back-to-back
+         * messages can follow each other within a microsecond, which
+         * makes every other one fail. 5 CIA ticks were enough on a
+         * 68060 A4000; use twice that.
+         */
+        cia_spin(SM_ALIAS_GAP_TICKS);
+        rc = send_cmd_core(cmd, arg, arglen, reply, replymax, replyalen);
+        INTERRUPTS_ENABLE();
+        return (rc);
+    }
+    INTERRUPTS_ENABLE();
+#endif
 
     SUPERVISOR_STATE_ENTER();
     INTERRUPTS_DISABLE();
