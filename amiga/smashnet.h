@@ -19,6 +19,7 @@
 #include <exec/io.h>
 #include <exec/ports.h>
 #include <exec/tasks.h>
+#include <exec/semaphores.h>
 #include <exec/memory.h>
 #include <exec/errors.h>
 #include <devices/timer.h>
@@ -159,6 +160,15 @@ struct SmashNetDevice {
     BOOL exclusive;
     UBYTE station_address[6];
     struct SmashNetOpener openers[SMASHNET_MAX_OPENERS];
+
+    /*
+     * Transmit buffer for CMD_WRITE: the KM_OP_NWRITE header followed by
+     * the frame. It is kept here rather than on the stack, because
+     * BeginIO() runs on the caller's stack, and Roadshow's processes have
+     * stacks of only 4000 bytes. tx_lock serializes its use.
+     */
+    struct SignalSemaphore tx_lock;
+    ULONG txbuf[(sizeof (hm_nreadwrite_t) + SMASHNET_RAW_MTU + 3) / 4];
 };
 
 extern struct ExecBase *SysBase;

@@ -1099,10 +1099,11 @@ device_begin_io(register struct SmashNetDevice *device __asm("a6"),
                 break;
             }
             /* Transmit to remote USB host */
-            uint8_t txbuf[SMASHNET_RAW_MTU + sizeof (hm_nreadwrite_t)];
+            uint8_t *txbuf = (uint8_t *) device->txbuf;
             ethhdr_t *hdr = (ethhdr_t *) (txbuf + sizeof (hm_nreadwrite_t));
             uint datalen;
 
+            ObtainSemaphore(&device->tx_lock);
             if (request->ios2_Req.io_Flags & SANA2IOF_RAW) {
                 datalen = request->ios2_DataLength;
                 if (opener == NULL || opener->copy_from_buff == NULL ||
@@ -1111,6 +1112,7 @@ device_begin_io(register struct SmashNetDevice *device __asm("a6"),
                                         datalen)) {
                     request_set_error(request, S2ERR_NO_RESOURCES,
                                       S2WERR_BUFF_ERROR);
+                    ReleaseSemaphore(&device->tx_lock);
                     break;
                 }
                 dbgpkt(device, "Tx", (uint8_t *) hdr, datalen);
@@ -1133,11 +1135,13 @@ device_begin_io(register struct SmashNetDevice *device __asm("a6"),
                                         request->ios2_DataLength)) {
                     request_set_error(request, S2ERR_NO_RESOURCES,
                                       S2WERR_BUFF_ERROR);
+                    ReleaseSemaphore(&device->tx_lock);
                     break;
                 }
 //              dbgpkt(device, "Tx", (uint8_t *) hdr, datalen);
                 sm_nwrite(NULL, txbuf, datalen, 1);
             }
+            ReleaseSemaphore(&device->tx_lock);
             break;
 
         case S2_DEVICEQUERY:
@@ -1602,6 +1606,17 @@ rx_task_entry(void)
 
     timer_mask = smashnet_signal_mask(timer_port->mp_SigBit);
 
+    /*
+     * Reach Kicksmash through a cache-inhibited MMU alias of the ROM if
+     * possible, so that transfers need not turn off the data cache and
+     * the MMU. Falls back to doing that if the alias can't be set up.
+     */
+    if (sm_rom_alias_open() != 0) {
+        queue_debug(context, "ROM alias on", NULL, (ULONG)-1, 0, 0);
+    } else {
+        queue_debug(context, "ROM alias off", NULL, (ULONG)-1, 0, 0);
+    }
+
 #ifdef SMASHNET_DEVICE
     /* Runs here, on this task's stack, not on ramlib's */
     if (context->device != NULL) {
@@ -1688,6 +1703,9 @@ rx_task_entry(void)
     }
     sm_nreadtag_free();  /* Before host_msg_exit(), which drops msg_sem */
     host_msg_exit();
+#endif
+    sm_rom_alias_close();
+#ifdef SMASHNET_DEVICE
     smashnet_drain_debug(context);
 #endif
 
@@ -1858,6 +1876,7 @@ smashnet_device_setup(struct SmashNetDevice *device,
     NewList(&device->read_queue);
     NewList(&device->orphan_queue);
     NewList(&device->event_queue);
+    InitSemaphore(&device->tx_lock);
 
 #ifdef SMASHNET_DEVICE
     /*
