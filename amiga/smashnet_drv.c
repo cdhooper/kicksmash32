@@ -42,6 +42,18 @@
 struct ExecBase   *SysBase;
 struct DosLibrary *DOSBase;  // Never opened: printf() must not use dos.library
 
+/*
+ * clib2's __mulsi3() and __udivsi3() multiply and divide by calling
+ * utility.library through __UtilityBase, which startup code normally
+ * opens. Those helpers are used for any 32-bit multiplication or division
+ * the compiler does not do inline, including libgcc's 64-bit division
+ * which printf() uses to format numbers. With __UtilityBase left NULL,
+ * the first such call jumps to an address just below 0 and the CPU runs
+ * through low memory until it traps (seen as gurus 80000004, 80000006
+ * or 8000000B in the receive task).
+ */
+extern struct Library *__UtilityBase;
+
 void *
 malloc(size_t size)
 {
@@ -89,6 +101,10 @@ drv_init(register struct SmashNetDevice *device __asm("d0"),
     SysBase = *(struct ExecBase **)4UL;
 #pragma GCC diagnostic pop
     DPUTCHAR('A');
+    __UtilityBase = OpenLibrary("utility.library", 37);
+    if (__UtilityBase == NULL) {
+        goto fail;
+    }
     cpu_control_init();  /* cpu_type */
 
     context = smashnet_context_alloc();
@@ -113,6 +129,10 @@ drv_init(register struct SmashNetDevice *device __asm("d0"),
 
 fail:
     DPUTCHAR('F');
+    if (__UtilityBase != NULL) {
+        CloseLibrary(__UtilityBase);
+        __UtilityBase = NULL;
+    }
     /* Exec does not free the device base when init fails */
     smashnet_free_device_memory(device);
     return (0);

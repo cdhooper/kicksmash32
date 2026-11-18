@@ -620,6 +620,8 @@ device_expunge(register struct SmashNetDevice *device __asm("a6"))
     smashnet_free_device_memory(device);
 #ifdef SMASHNET_DEVICE
     smashnet_context_free(context);  /* Driver owns its context */
+    CloseLibrary(__UtilityBase);     /* Opened by drv_init() */
+    __UtilityBase = NULL;
 #endif
     Permit();
     return (seglist);
