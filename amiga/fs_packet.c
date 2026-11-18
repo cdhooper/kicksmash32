@@ -132,7 +132,15 @@ km_status_to_amiga_error(uint status)
         case KM_STATUS_OK:
             return (0);
         case KM_STATUS_FAIL:
-            return (ERROR_FILE_NOT_OBJECT);
+            /* Host general failure: mostly a path which can't be resolved */
+            return (ERROR_OBJECT_NOT_FOUND);
+        case KM_STATUS_UNAVAIL:  // File service not available
+        case KS_STATUS_NODATA:   // No reply from host
+            return (ERROR_DEVICE_NOT_MOUNTED);
+        case MSG_STATUS_NO_MEM:
+            return (ERROR_NO_FREE_STORE);
+        case MSG_STATUS_BAD_LENGTH:  // Name too long for a message
+            return (ERROR_INVALID_COMPONENT_NAME);
         case KM_STATUS_EOF:
             return (ERROR_NO_MORE_ENTRIES);
         case KM_STATUS_UNKCMD:
@@ -156,7 +164,9 @@ km_status_to_amiga_error(uint status)
         case KM_STATUS_LAST_ENTRY:
             return (ERROR_NO_MORE_ENTRIES);
         default:
-            return (ERROR_BAD_NUMBER);
+            /* Communication failure (CRC, timeout, bad reply, ...) */
+            printf("Status %x mapped to read/write error\n", status);
+            return (ABORT_DISK_ERROR);
     }
 }
 
@@ -381,9 +391,18 @@ action_create_dir(void)
 
     printf("CREATE_DIR p=%x %p '%s'\n", phandle, lock, name);
     rc = sm_fcreate(phandle, name, "", HM_TYPE_DIR, 0);
-    if (rc == 0)
+    if (rc == 0) {
         rc = fs_open(phandle, name, HM_MODE_READDIR, EXCLUSIVE_LOCK,
                      &type, 0, &handle);
+        if (rc != 0) {
+            /*
+             * Without a lock to return, the packet must fail: remove the
+             * new directory so that the failure leaves nothing behind.
+             */
+            printf("  open of new dir failed %d; removing it\n", rc);
+            (void) sm_fdelete(phandle, name);
+        }
+    }
     *bname = cho;
 
     if (rc != 0) {
@@ -437,6 +456,27 @@ action_die(void)
     printf("DIE\n");
     grunning = 0;
     return (DOSTRUE);
+}
+
+/*
+ * dirent_valid
+ * ------------
+ * Returns non-zero if a directory entry reply of rlen bytes holds a
+ * complete entry with a NIL-terminated name. The entry length is only
+ * read once the reply is known to contain the entry header.
+ */
+static int
+dirent_valid(hm_fdirent_t *dent, uint rlen)
+{
+    uint entlen;
+
+    if (rlen < sizeof (*dent))
+        return (0);
+    entlen = dent->hmd_elen;
+    if ((entlen > 1024) || (rlen < sizeof (*dent) + entlen) ||
+        (memchr(dent + 1, '\0', entlen) == NULL))
+        return (0);
+    return (1);
 }
 
 static void
@@ -520,7 +560,21 @@ FillInfoBlock(FileInfoBlock_t *fib, fileattr_t *fattr, hm_fdirent_t *dent)
         fib->fib_Size = 0xffffffff;
     else
         fib->fib_Size = dent->hmd_size_lo;
-    fib->fib_NumBlocks = dent->hmd_blks;
+    if (dent->hmd_type == HM_TYPE_VOLUME) {
+        /* Volume entry: hmd_blks is already in units of hmd_blksize */
+        fib->fib_NumBlocks = dent->hmd_blks;
+    } else {
+        /*
+         * Count blocks of the size the host reports for the filesystem,
+         * which is also what ACTION_INFO reports as id_BytesPerBlock.
+         * The host's own count (hmd_blks) is in 512-byte units on UNIX.
+         */
+        uint64_t size = ((uint64_t) dent->hmd_size_hi << 32) |
+                        dent->hmd_size_lo;
+        uint     bsize = (dent->hmd_blksize != 0) ? dent->hmd_blksize : 512;
+        uint64_t blks = (size + bsize - 1) / bsize;
+        fib->fib_NumBlocks = (blks > 0xffffffff) ? 0xffffffff : (ULONG) blks;
+    }
 
     fib->fib_Comment[0] = 0;
     fib->fib_Comment[1] = '\0';
@@ -570,7 +624,6 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
     uint type;
     uint rc;
     uint rlen;
-    uint entlen;
     uint len = DIRENT_READ_LEN;
     handle_t lhandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
 
@@ -592,11 +645,8 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
         return (DOSFALSE);
     }
 
-    entlen = dent->hmd_elen;
-    if ((rlen < sizeof (*dent)) || (entlen > 1024) ||
-        (rlen < sizeof (*dent) + entlen) ||
-        (memchr(dent + 1, '\0', entlen) == NULL)) {
-        printf("Corrupt entlen=%x for %x\n", entlen, handle);
+    if (!dirent_valid(dent, rlen)) {
+        printf("Corrupt dirent rlen=%x for %x\n", rlen, handle);
         gpack->dp_Res2 = ERROR_BAD_TEMPLATE;
         sm_fclose(handle);
         return (DOSFALSE);
@@ -604,7 +654,10 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
 
     FillInfoBlock(fib, fattr, dent);
 
-    if ((lock != NULL) && hm_type_is_dir(type)) {
+    if (lock == NULL) {
+        /* Root scan for a NULL lock needs rewind for EXAMINE_NEXT */
+        gvol->vl_root_rewind = 1;
+    } else if (hm_type_is_dir(type)) {
         /* Directory pointer needs rewind for EXAMINE_NEXT */
         lock->fl_Flags |= FL_FLAG_NEEDS_REWIND;
     }
@@ -676,46 +729,62 @@ action_examine_next(void)
     handle_t         handle;
     uint             rc;
     uint             rlen;
-    uint             entlen;
     uint             read_flag = 0;
     uint             len = DIRENT_READ_LEN;
 
     printf("EXAMINE_NEXT %p %x\n", lock, (lock == NULL) ? 0 : lock->fl_Key);
-    if (lock == NULL) {
-        /*
-         * A NULL lock is the volume root, but the volume's handle can't
-         * be used to scan it (it is opened for stat only), and there is
-         * no lock to hold the scan position.
-         */
-        gpack->dp_Res2 = ERROR_INVALID_LOCK;
-        return (DOSFALSE);
-    }
-    handle = lock->fl_Key;
     if ((gpack->dp_Type == ACTION_EX_NEXT) && (GARG3 != 0))
         fattr = (fileattr_t *) GARG3;
 
-    if ((lock->fl_Flags & FL_FLAG_IS_DIR) == 0) {
-        /* Not a directory: don't read file content as directory entries */
-        gpack->dp_Res2 = ERROR_NO_MORE_ENTRIES;
-        return (DOSFALSE);
-    }
-
-    if (lock->fl_Flags & FL_FLAG_NEEDS_REWIND) {
-        lock->fl_Flags &= ~FL_FLAG_NEEDS_REWIND;
-        read_flag |= HM_FLAG_SEEK0;
+    if (lock == NULL) {
+        /*
+         * A NULL lock is the volume root. The volume's own handle is
+         * opened for stat only, so the root is scanned through a
+         * separate handle which the volume keeps (one scan at a time,
+         * as there is no lock to hold the position).
+         */
+        if (gvol->vl_root_scan == 0) {
+            uint type;
+            rc = sm_fopen(gvol->vl_handle, "", HM_MODE_READ, &type, 0,
+                          &gvol->vl_root_scan);
+            if (rc != 0) {
+                gvol->vl_root_scan = 0;
+                gpack->dp_Res2 = km_status_to_amiga_error(rc);
+                return (DOSFALSE);
+            }
+            gvol->vl_root_rewind = 1;
+        }
+        handle = gvol->vl_root_scan;
+        if (gvol->vl_root_rewind) {
+            gvol->vl_root_rewind = 0;
+            read_flag |= HM_FLAG_SEEK0;
+        }
+    } else {
+        handle = lock->fl_Key;
+        if ((lock->fl_Flags & FL_FLAG_IS_DIR) == 0) {
+            /* Not a directory: don't read file content as dir entries */
+            gpack->dp_Res2 = ERROR_NO_MORE_ENTRIES;
+            return (DOSFALSE);
+        }
+        if (lock->fl_Flags & FL_FLAG_NEEDS_REWIND) {
+            lock->fl_Flags &= ~FL_FLAG_NEEDS_REWIND;
+            read_flag |= HM_FLAG_SEEK0;
+        }
     }
 
     rc = sm_fread(handle, len, (void **) &dent, &rlen, read_flag);
     if (rc != 0) {
         printf("dir read err %x\n", rc);
+        if ((lock == NULL) && (rc != KM_STATUS_EOF)) {
+            /* Possibly stale (host restart): reopen on the next scan */
+            sm_fclose(gvol->vl_root_scan);
+            gvol->vl_root_scan = 0;
+        }
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
-    entlen = dent->hmd_elen;
-    if ((rlen < sizeof (*dent)) || (entlen > 1024) ||
-        (rlen < sizeof (*dent) + entlen) ||
-        (memchr(dent + 1, '\0', entlen) == NULL)) {
-        printf("Corrupt entlen=%x for %x\n", entlen, handle);
+    if (!dirent_valid(dent, rlen)) {
+        printf("Corrupt dirent rlen=%x for %x\n", rlen, handle);
         gpack->dp_Res2 = ERROR_BAD_TEMPLATE;
         /* Handle belongs to the lock; it is closed by FREE_LOCK */
         return (DOSFALSE);
@@ -1014,8 +1083,7 @@ action_locate_object(void)
     *bname = cho;
     if (rc != 0) {
         printf("failed open with %x\n", rc);
-        gpack->dp_Res2 = (rc == KM_STATUS_FAIL) ? ERROR_OBJECT_NOT_FOUND :
-                                                  km_status_to_amiga_error(rc);
+        gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
     newlock = CreateLock(handle, phandle, access, type);
@@ -1086,11 +1154,15 @@ action_parent(void)
     handle_t handle;
     handle_t phandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
     char    *name;
-    char    *ptr;
+    char    *colon;
     uint     type;
     uint     rc;
 
     printf("PARENT\n");
+    if (lock == NULL) {
+        /* NULL lock is the volume root, which has no parent */
+        return (0);
+    }
 
     rc = sm_fpath(phandle, &name);
     if (rc != 0) {
@@ -1098,32 +1170,27 @@ action_parent(void)
         return (DOSFALSE);
     }
 
-    if (*name == '\0') {
+    /*
+     * The path is "Volume:" at the root, or "Volume:dir/name" otherwise.
+     * A host file name may itself contain ':' or end with '/', so only
+     * the first ':' separates the volume, and it must end the path (with
+     * an optional trailing '/') for the lock to be at the root.
+     */
+    colon = strchr(name, ':');
+    if (colon == NULL) {
+        printf("  unexpected path '%s'\n", name);
         gpack->dp_Res2 = ERROR_OBJECT_NOT_FOUND;
         return (DOSFALSE);
     }
-    ptr = name + strlen(name) - 1;
-    if (*ptr == '/')
-        ptr--;
-    if (*ptr == ':') {
+    if ((colon[1] == '\0') || ((colon[1] == '/') && (colon[2] == '\0'))) {
         /* At root of volume */
         gpack->dp_Res2 = 0;
         return (0);
     }
-    while (ptr > name) {
-        if (*ptr == ':') {
-            /* Volume root is parent */
-            break;
-        }
-        if (*ptr == '/') {
-            *ptr = '\0';
-            break;
-        }
-        *(ptr--) = '\0';
-    }
-    printf("  parent=%s\n", name);
-    rc = fs_open(gvol->vl_handle, name, HM_MODE_READ, SHARED_LOCK, &type, 0,
-                 &handle);
+
+    /* The host resolves "/" relative to a handle as its parent directory */
+    printf("  parent of %s\n", name);
+    rc = fs_open(phandle, "/", HM_MODE_READ, SHARED_LOCK, &type, 0, &handle);
     if (rc != 0) {
         printf("failed parent open with %x\n", rc);
         gpack->dp_Res2 = ERROR_DIR_NOT_FOUND;
@@ -1408,8 +1475,9 @@ lock_same:
         /* Same handle path */
         gpack->dp_Res2 = LOCK_SAME;
         return (DOSTRUE);
-    } else if ((lock1 != NULL) && (lock2 != NULL) &&
-                (lock1->fl_Volume == lock2->fl_Volume))  {
+    } else if (((lock1 == NULL) ? CTOB(gvol->vl_volnode) : lock1->fl_Volume) ==
+               ((lock2 == NULL) ? CTOB(gvol->vl_volnode) : lock2->fl_Volume)) {
+        /* A NULL lock is the root of this handler's volume */
         /* Same volume, different handle */
         gpack->dp_Res2 = LOCK_SAME_VOLUME;
         return (DOSFALSE);

@@ -32,6 +32,8 @@ typedef struct vollist {
     int8_t        vl_bootpri;
     ULONG         vl_msg_mask;
     handle_t      vl_handle;
+    handle_t      vl_root_scan;    // Root dir scan for NULL lock (0=none)
+    uint8_t       vl_root_rewind;  // vl_root_scan must rewind before read
     DosList_t    *vl_devnode;
     DeviceList_t *vl_volnode;
     MsgPort_t    *vl_msgport;

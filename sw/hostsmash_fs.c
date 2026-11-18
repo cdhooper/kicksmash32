@@ -1561,7 +1561,8 @@ get_fs_size(const char *path, uint64_t *used, uint *blksize)
     struct statvfs buf;
     statvfs(path, &buf);
     *used = buf.f_blocks - buf.f_bavail;
-    *blksize = buf.f_bsize;
+    /* f_blocks and f_bavail are in units of f_frsize (fragment size) */
+    *blksize = (buf.f_frsize != 0) ? buf.f_frsize : buf.f_bsize;
 #ifdef DEBUG_STATVFS
     fsprintf("statvfs path='%s' blks=%u used=%u blksize=%u\n",
              path, (uint) buf.f_blocks, (uint) *used, (uint) *blksize);
@@ -1793,6 +1794,15 @@ dir_read_common:
                     d_type = DT_REG;
                     dp->d_ino = 0;
                     strcpy(d_name, sname);
+                    {
+                        /*
+                         * A handle opened as "dir/." is named "dir/":
+                         * report the name without the trailing slash.
+                         */
+                        size_t dlen = strlen(d_name);
+                        if ((dlen > 1) && (d_name[dlen - 1] == '/'))
+                            d_name[dlen - 1] = '\0';
+                    }
                 }
             } else {
                 uint skip = 0;

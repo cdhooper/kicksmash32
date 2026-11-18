@@ -37,28 +37,37 @@ vollist_t *gvol;  // current volume being handled
 ULONG      volume_msg_masks = 0;
 
 /*
- * streqv()
- *      Perform a case-insensitive compare of filenames.
+ * name_tolower()
+ *      Lower-case a character as AmigaDOS compares names: ASCII letters and
+ *      ISO-8859-1 accented letters (except the multiplication and division
+ *      signs, which share the letters' bit pattern).
+ */
+static uint8_t
+name_tolower(uint8_t ch)
+{
+    if (((ch >= 'A') && (ch <= 'Z')) ||
+        ((ch >= 0xc0) && (ch <= 0xde) && (ch != 0xd7)))
+        return (ch + 0x20);
+    return (ch);
+}
+
+/*
+ * bstreqv()
+ *      Case-insensitive compare of a DOS node's BSTR name with a C string.
+ *      The BSTR length is used, as a BSTR need not be NIL-terminated.
  */
 static int
-streqv(const char *str1, const char *str2)
+bstreqv(const char *bstr, const char *str)
 {
-#define NO_STRNICMP
-#ifdef NO_STRNICMP
-    while (*str1 != '\0') {
-        if ((*str1 != *str2) && ((*str1 | 32) != (*str2 | 32)))
-            return (0);
-        str1++;
-        str2++;
-    }
+    uint len = (uint8_t) bstr[0];
+    uint pos;
 
-    if (*str2 == '\0')
-        return (1);
-    else
-        return (0);
-#else
-    return (strnicmp(str1, str2, DIRNAMELEN) == 0);
-#endif
+    for (pos = 0; pos < len; pos++) {
+        if ((str[pos] == '\0') ||
+            (name_tolower(bstr[pos + 1]) != name_tolower(str[pos])))
+            return (0);
+    }
+    return (str[len] == '\0');
 }
 
 /*
@@ -114,7 +123,8 @@ name_present_in_dos_devinfo(struct DosInfo *info, const char *name,
          tmp != NULL;
          tmp = (struct DeviceList *) BTOC(tmp->dl_Next)) {
         if ((tmp != ignore) &&
-            (streqv(((char *) BTOC(tmp->dl_Name)) + 1, name))) {
+            (tmp->dl_Name != 0) &&
+            bstreqv((char *) BTOC(tmp->dl_Name), name)) {
             present = 1;
             break;
         }
@@ -450,6 +460,8 @@ volume_seen(char *name, uint32_t access_time, uint flags, int bootpri)
     cur->vl_msgport = msgport;
     cur->vl_msg_mask = BIT(msgport->mp_SigBit);
     cur->vl_handle = handle;
+    cur->vl_root_scan = 0;
+    cur->vl_root_rewind = 1;
     cur->vl_flags = flags;
     cur->vl_bootpri = bootpri;
     volnode_new(name, access_time, cur);
@@ -510,8 +522,11 @@ volume_flush(void)
                     vollist = next;
                 else
                     prev->vl_next = next;
-                if (sm_fservice())
+                if (sm_fservice()) {
                     sm_fclose(cur->vl_handle);
+                    if (cur->vl_root_scan != 0)
+                        sm_fclose(cur->vl_root_scan);
+                }
                 volume_msg_masks &= ~BIT(cur->vl_msgport->mp_SigBit);
                 Forbid();
                     /* No new packet can arrive between these two steps */
@@ -561,6 +576,9 @@ volume_reopen_handles(void)
     uint       rc;
 
     for (cur = vollist; cur != NULL; cur = cur->vl_next) {
+        /* The root scan handle is also stale; reopen it when next used */
+        cur->vl_root_scan = 0;
+        cur->vl_root_rewind = 1;
         rc = sm_fopen(0, cur->vl_name, HM_MODE_READDIR, &type, 0, &handle);
         if (rc == 0) {
             printf("Reopened %s: handle %x -> %x\n",
@@ -603,8 +621,11 @@ volume_abandon(void)
             cur->vl_in_dos_list = 0;
             volnode_remove(cur);
         }
-        if (sm_fservice())
+        if (sm_fservice()) {
             sm_fclose(cur->vl_handle);
+            if (cur->vl_root_scan != 0)
+                sm_fclose(cur->vl_root_scan);
+        }
 
         mp = cur->vl_msgport;
         Forbid();
