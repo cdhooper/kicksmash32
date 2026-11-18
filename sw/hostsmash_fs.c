@@ -1457,10 +1457,8 @@ could_not_stat:
         fsprintf("O_CREAT %s oflags=%x mode=%x\n", host_path, oflags, mode);
         fd = open(host_path, oflags, mode);
     } else {
+        /* Files are only created when HM_MODE_CREATE is requested */
         fd = open(host_path, oflags);
-        if ((fd == -1) && (oflags & HM_MODE_WRITE)) {
-            fd = open(host_path, oflags | O_CREAT, 0777);
-        }
     }
     if (fd == -1) {
         fsprintf("File open %s fail: %d\n", host_path, errno);
@@ -2719,27 +2717,27 @@ reply_setdate_fail:
     times.modtime = statbuf.st_mtime;  // last modification time
 
     switch (which) {
-        case 0: // Set the modify date/time
-            times.modtime = (((uint64_t) utcsec) << 32) | nsec;
+        case 0: // Set the modify date/time (resolution is 1 second)
+            times.modtime = utcsec;
             break;
         case 1: // Get the modify date/time
-            hm->hm_time    = SWAP32((uint32_t) (statbuf.st_ctime >> 32));
-            hm->hm_time_ns = SWAP32((uint32_t) statbuf.st_ctime);
+            hm->hm_time    = SWAP32(get_localtime(statbuf.st_mtime));
+            hm->hm_time_ns = 0;
             goto reply_setdate_good;
         case 2: // Set the change date/time
             /* Not sure how to set this one */
             hm->hm_hdr.km_status = KM_STATUS_INVALID;
             goto reply_setdate_fail;
         case 3: // Get the change date/time
-            hm->hm_time    = SWAP32((uint32_t) (statbuf.st_ctime >> 32));
-            hm->hm_time_ns = SWAP32((uint32_t) statbuf.st_ctime);
+            hm->hm_time    = SWAP32(get_localtime(statbuf.st_ctime));
+            hm->hm_time_ns = 0;
             goto reply_setdate_good;
-        case 4: // Set the access date/time
-            times.actime = (((uint64_t) utcsec) << 32) | nsec;
+        case 4: // Set the access date/time (resolution is 1 second)
+            times.actime = utcsec;
             break;
         case 5: // Get the access date/time
-            hm->hm_time    = SWAP32((uint32_t) (statbuf.st_atime >> 32));
-            hm->hm_time_ns = SWAP32((uint32_t) statbuf.st_atime);
+            hm->hm_time    = SWAP32(get_localtime(statbuf.st_atime));
+            hm->hm_time_ns = 0;
             goto reply_setdate_good;
         default:
             hm->hm_hdr.km_status = KM_STATUS_INVALID;
@@ -2755,7 +2753,7 @@ reply_setdate_fail:
     /* MacOS */
     struct timeval times[2];
     timespec_to_timeval(&times[0], &statbuf.st_atimespec);  // last access time
-    timespec_to_timeval(&times[1], &statbuf.st_ctimespec);  // last modify time
+    timespec_to_timeval(&times[1], &statbuf.st_mtimespec);  // last modify time
 
     switch (which) {
         case 0: // Set the modify date/time
@@ -2763,15 +2761,15 @@ reply_setdate_fail:
             times[1].tv_usec = nsec / 1000;
             break;
         case 1: // Get the modify date/time
-            hm->hm_time    = SWAP32(statbuf.st_ctimespec.tv_sec);
-            hm->hm_time_ns = SWAP32(statbuf.st_ctimespec.tv_nsec);
+            hm->hm_time    = SWAP32(get_localtime(statbuf.st_mtimespec.tv_sec));
+            hm->hm_time_ns = SWAP32(statbuf.st_mtimespec.tv_nsec);
             goto reply_setdate_good;
         case 2: // Set the change date/time
             /* Not sure how to set this one */
             hm->hm_hdr.km_status = KM_STATUS_INVALID;
             goto reply_setdate_fail;
         case 3: // Get the change date/time
-            hm->hm_time    = SWAP32(statbuf.st_ctimespec.tv_sec);
+            hm->hm_time    = SWAP32(get_localtime(statbuf.st_ctimespec.tv_sec));
             hm->hm_time_ns = SWAP32(statbuf.st_ctimespec.tv_nsec);
             goto reply_setdate_good;
         case 4: // Set the access date/time
@@ -2779,7 +2777,7 @@ reply_setdate_fail:
             times[0].tv_usec = nsec / 1000;
             break;
         case 5: // Get the access date/time
-            hm->hm_time    = SWAP32(statbuf.st_atimespec.tv_sec);
+            hm->hm_time    = SWAP32(get_localtime(statbuf.st_atimespec.tv_sec));
             hm->hm_time_ns = SWAP32(statbuf.st_atimespec.tv_nsec);
             goto reply_setdate_good;
         default:
@@ -2795,7 +2793,7 @@ reply_setdate_fail:
     /* Linux */
     struct timespec times[2];
     times[0] = statbuf.st_atim;  // last access time
-    times[1] = statbuf.st_ctim;  // last modification time
+    times[1] = statbuf.st_mtim;  // last modification time
 
     switch (which) {
         case 0: // Set the modify date/time
@@ -2803,15 +2801,15 @@ reply_setdate_fail:
             times[1].tv_nsec = nsec;
             break;
         case 1: // Get the modify date/time
-            hm->hm_time    = SWAP32(statbuf.st_ctim.tv_sec);
-            hm->hm_time_ns = SWAP32(statbuf.st_ctim.tv_nsec);
+            hm->hm_time    = SWAP32(get_localtime(statbuf.st_mtim.tv_sec));
+            hm->hm_time_ns = SWAP32(statbuf.st_mtim.tv_nsec);
             goto reply_setdate_good;
         case 2: // Set the change date/time
             /* Not sure how to set this one */
             hm->hm_hdr.km_status = KM_STATUS_INVALID;
             goto reply_setdate_fail;
         case 3: // Get the change date/time
-            hm->hm_time    = SWAP32(statbuf.st_ctim.tv_sec);
+            hm->hm_time    = SWAP32(get_localtime(statbuf.st_ctim.tv_sec));
             hm->hm_time_ns = SWAP32(statbuf.st_ctim.tv_nsec);
             goto reply_setdate_good;
         case 4: // Set the access date/time
@@ -2819,7 +2817,7 @@ reply_setdate_fail:
             times[0].tv_nsec = nsec;
             break;
         case 5: // Get the access date/time
-            hm->hm_time    = SWAP32(statbuf.st_atim.tv_sec);
+            hm->hm_time    = SWAP32(get_localtime(statbuf.st_atim.tv_sec));
             hm->hm_time_ns = SWAP32(statbuf.st_atim.tv_nsec);
             goto reply_setdate_good;
         default:

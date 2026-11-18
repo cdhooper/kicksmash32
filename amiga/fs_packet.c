@@ -191,6 +191,36 @@ fs_open(handle_t phandle, const char *name, uint mode, LONG lockmode,
     return (sm_fopen(phandle, name, mode, type, create_perms, handle));
 }
 
+/*
+ * strip_volume
+ * ------------
+ * DOS passes names to the handler as the application gave them, so a
+ * name may begin with a device, volume, or assign name ("Work:dir/file").
+ * As with other handlers, the prefix is stripped and the remainder is
+ * relative to the lock DOS passed: for a device or volume, DOS passes no
+ * lock (the volume root); for an assign, it passes the lock of the
+ * assigned directory. The prefix must not be sent to the host, which
+ * can't resolve it: DOS names are case-insensitive, fsname() may have
+ * renamed the volume (spaces, duplicates), and assigns are unknown to
+ * the host.
+ *
+ * A name beginning with ":" (root of the volume) is left unchanged, as
+ * the host resolves that relative to the volume of the parent handle.
+ */
+static char *
+strip_volume(char *name)
+{
+    char *ptr;
+
+    for (ptr = name; *ptr != '\0'; ptr++) {
+        if (*ptr == '/')
+            break;  // A colon after a slash is not a volume separator
+        if (*ptr == ':')
+            return ((ptr == name) ? name : ptr + 1);
+    }
+    return (name);
+}
+
 /* Returns non-zero if the HM_TYPE_* is a directory (which can be scanned) */
 static int
 hm_type_is_dir(uint type)
@@ -347,6 +377,7 @@ action_create_dir(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
 
     printf("CREATE_DIR p=%x %p '%s'\n", phandle, lock, name);
     rc = sm_fcreate(phandle, name, "", HM_TYPE_DIR, 0);
@@ -386,6 +417,7 @@ action_delete_object(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
 
     printf("DELETEOBJECT p=%x %p '%s'\n", phandle, lock, name);
 
@@ -523,7 +555,8 @@ FillInfoBlock(FileInfoBlock_t *fib, fileattr_t *fattr, hm_fdirent_t *dent)
 /*
  * examine_common() will fill in a FileInfoBlock structure for the
  * specified file (the lock).  It will optionally fill the fattr
- * structure as well, if non-NULL.
+ * structure as well, if non-NULL. A NULL lock refers to the root of
+ * the volume.
  *
  * RES1 = Success (DOSTRUE) / Failure (DOSFALSE)
  * RES2 = Failure code when RES1 == DOSFALSE
@@ -539,13 +572,14 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
     uint rlen;
     uint entlen;
     uint len = DIRENT_READ_LEN;
+    handle_t lhandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
 
     /*
      * Follow symlinks: the host already follows them for everything else
      * done with the lock, so Examine describes the same object (the link
      * target). As with FFS, only directory scans report soft links.
      */
-    rc = sm_fopen(lock->fl_Key, "", HM_MODE_READDIR, &type, 0, &handle);
+    rc = sm_fopen(lhandle, "", HM_MODE_READDIR, &type, 0, &handle);
     if (rc != 0) {
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
@@ -570,8 +604,7 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
 
     FillInfoBlock(fib, fattr, dent);
 
-    if ((type == HM_TYPE_DIR) || (type == HM_TYPE_VOLDIR) ||
-        (type == HM_TYPE_VOLUME)) {
+    if ((lock != NULL) && hm_type_is_dir(type)) {
         /* Directory pointer needs rewind for EXAMINE_NEXT */
         lock->fl_Flags |= FL_FLAG_NEEDS_REWIND;
     }
@@ -640,14 +673,24 @@ action_examine_next(void)
     FileInfoBlock_t *fib   = (FileInfoBlock_t *) BTOC(GARG2);
     fileattr_t      *fattr = NULL;
     hm_fdirent_t    *dent;
-    handle_t         handle = lock->fl_Key;
+    handle_t         handle;
     uint             rc;
     uint             rlen;
     uint             entlen;
     uint             read_flag = 0;
     uint             len = DIRENT_READ_LEN;
 
-    printf("EXAMINE_NEXT %p %x\n", lock, lock->fl_Key);
+    printf("EXAMINE_NEXT %p %x\n", lock, (lock == NULL) ? 0 : lock->fl_Key);
+    if (lock == NULL) {
+        /*
+         * A NULL lock is the volume root, but the volume's handle can't
+         * be used to scan it (it is opened for stat only), and there is
+         * no lock to hold the scan position.
+         */
+        gpack->dp_Res2 = ERROR_INVALID_LOCK;
+        return (DOSFALSE);
+    }
+    handle = lock->fl_Key;
     if ((gpack->dp_Type == ACTION_EX_NEXT) && (GARG3 != 0))
         fattr = (fileattr_t *) GARG3;
 
@@ -689,7 +732,8 @@ action_examine_object(void)
     FileInfoBlock_t *fib   = (FileInfoBlock_t *) BTOC(GARG2);
     fileattr_t      *fattr = NULL;
 
-    printf("EXAMINE_OBJECT %p %x\n", lock, lock->fl_Key);
+    printf("EXAMINE_OBJECT %p %x\n", lock,
+           (lock == NULL) ? gvol->vl_handle : lock->fl_Key);
     if ((gpack->dp_Type == ACTION_EX_OBJECT) && (GARG3 != 0))
         fattr = (fileattr_t *) GARG3;
 
@@ -734,6 +778,7 @@ action_findinput(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
 
     if (gpack->dp_Type == ACTION_FINDUPDATE) {
         hm_mode = HM_MODE_READ | HM_MODE_WRITE | HM_MODE_CREATE;
@@ -829,6 +874,7 @@ action_findoutput(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
 
     printf("FINDOUTPUT p=%x %p '%s'\n", phandle, lock, name);
 
@@ -942,6 +988,7 @@ action_locate_object(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
 
     printf("LOCATE_OBJECT lock=%p phandle=%x name='%s' for %s\n",
            lock, phandle, name,
@@ -1016,6 +1063,7 @@ action_make_link(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
 
     type = (linktype == LINK_SOFT) ? HM_TYPE_LINK : HM_TYPE_HLINK;
     rc = sm_fcreate(phandle, name, target, type, 0);
@@ -1157,6 +1205,7 @@ action_read_link(void)
         return (DOSFALSE);
     }
     phandle = lock->fl_Key;
+    name = strip_volume(name);
 
     printf("ACTION_READ_LINK %x '%s' %p %ul\n", phandle, name, buf, buflen);
 
@@ -1215,6 +1264,8 @@ action_rename_object(void)
     dcho = *dbname;
     *sbname = '\0';
     *dbname = '\0';
+    sname = strip_volume(sname);
+    dname = strip_volume(dname);
 
     printf("RENAMEOBJECT p=%x %p '%s' -> %p '%s'\n",
            shandle, slock, sname, dlock, dname);
@@ -1289,6 +1340,7 @@ action_set_protect(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
 
     printf("SET_PROTECT lock=%p phandle=%x name='%s' prot=%x\n",
            lock, phandle, name, prot);
@@ -1399,6 +1451,7 @@ action_set_date(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
     printf("SET_DATE %s %p %u.%u\n", name, ds, sec, nsec);
     printf("  Days %u\n", ds->ds_Days);
     printf("  Min %u\n", ds->ds_Minute);
@@ -1434,6 +1487,7 @@ action_set_dates(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
     printf("SET_DATES %s %p %u.%u\n", name, ds, sec, nsec);
     printf("  Days %u\n", ds->ds_Days);
     printf("  Min %u\n", ds->ds_Minute);
@@ -1472,6 +1526,7 @@ action_set_owner(void)
     bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
+    name = strip_volume(name);
     printf("SET_OWNER %s %x\n", name, owner);
 
     oid = owner >> 16;
