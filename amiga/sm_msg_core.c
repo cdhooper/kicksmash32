@@ -31,6 +31,19 @@
 #define CIAA_TBHI        ADDR8(0x00bfe701)
 #define ROM_BASE         0x00f80000  /* Base address of Kickstart ROM */
 
+#if defined(ROMFS) || defined(STANDALONE)
+#define SM_ROM_BASE      ROM_BASE
+#else
+/*
+ * Address through which Kicksmash is accessed. This is the Kickstart ROM
+ * address, unless sm_rom_alias_open() has set up a cache-inhibited MMU
+ * alias of the ROM, in which case it is the alias address. See
+ * sm_rom_alias.c.
+ */
+uintptr_t sm_rom_base = ROM_BASE;
+#define SM_ROM_BASE      sm_rom_base
+#endif
+
 #define ARRAY_SIZE(x) ((sizeof (x) / sizeof ((x)[0])))
 
 uint smash_cmd_shift = 2;
@@ -226,6 +239,7 @@ TEXT_TO_RAM
 static void
 rom_wait_recover(uint32_t romval)
 {
+    const uintptr_t rom_base = SM_ROM_BASE;
     uint     pos;
     uint32_t last = 0;
     uint32_t cur;
@@ -236,8 +250,8 @@ rom_wait_recover(uint32_t romval)
 
     /* Wait until Kickstart ROM data is consistent for 5 ms */
     for (pos = 0; pos < 100; pos++) {
-        cur = *VADDR32(ROM_BASE + 0x15554); // remote addr 0x5555 or 0xaaaa
-        if ((last != cur) || (*VADDR32(ROM_BASE) != romval)) {
+        cur = *VADDR32(rom_base + 0x15554); // remote addr 0x5555 or 0xaaaa
+        if ((last != cur) || (*VADDR32(rom_base) != romval)) {
             if (timeout++ > 200000)
                 break;  // Give up after 2 seconds
             pos = 0;
@@ -256,8 +270,9 @@ TEXT_TO_RAM
 static void
 rom_wait_normal(uint32_t romval)
 {
+    const uintptr_t rom_base = SM_ROM_BASE;
     uint timeout = 0;
-    while (*VADDR32(ROM_BASE) != romval) {
+    while (*VADDR32(rom_base) != romval) {
         if (timeout++ > 1000)
             break;  // Took too long. Oh well!
         cia_spin(2);
@@ -271,8 +286,10 @@ rom_wait_normal(uint32_t romval)
  * sequence of reads at the ROM address, followed by the CRC-protected
  * message.
  *
- * This function assumes interrupts and cache are already disabled
- * by the caller.
+ * This function assumes interrupts are already disabled by the caller,
+ * and that rom_base reaches the physical ROM without the data cache:
+ * either through the cache-inhibited alias set up by sm_rom_alias_open(),
+ * or with the data cache and MMU disabled by the caller.
  *
  * cmd is the message command to send.
  * arg is a pointer to optional data to send.
@@ -287,6 +304,7 @@ uint
 send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
               void *reply, uint replymax, uint *replyalen)
 {
+    const uintptr_t rom_base = SM_ROM_BASE;
     uint      pos;
     uint32_t  crc;
     uint32_t  replycrc = 0;
@@ -299,42 +317,42 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     uint16_t  val;
     uint32_t  val32 = 0;
     uint      replyround;
-    uint32_t  rombase_value = *VADDR32(ROM_BASE);
+    uint32_t  rombase_value = *VADDR32(rom_base);
     uint16_t  sm_magic[] = { 0x0204, 0x1017, 0x0119, 0x0117 };  // on stack
     //        Decimal        516     4119    281     279
 
 #if 1
     for (pos = 0; pos < ARRAY_SIZE(sm_magic); pos++)
-        (void) *VADDR32(ROM_BASE + (sm_magic[pos] << smash_cmd_shift));
+        (void) *VADDR32(rom_base + (sm_magic[pos] << smash_cmd_shift));
 #else
-    (void) *VADDR32(ROM_BASE + (sm_magic[0] << smash_cmd_shift));
-    (void) *VADDR32(ROM_BASE + (sm_magic[1] << smash_cmd_shift));
-    (void) *VADDR32(ROM_BASE + (sm_magic[2] << smash_cmd_shift));
-    (void) *VADDR32(ROM_BASE + (sm_magic[3] << smash_cmd_shift));
+    (void) *VADDR32(rom_base + (sm_magic[0] << smash_cmd_shift));
+    (void) *VADDR32(rom_base + (sm_magic[1] << smash_cmd_shift));
+    (void) *VADDR32(rom_base + (sm_magic[2] << smash_cmd_shift));
+    (void) *VADDR32(rom_base + (sm_magic[3] << smash_cmd_shift));
 #endif
 
-    (void) *VADDR32(ROM_BASE + (arglen << smash_cmd_shift));
+    (void) *VADDR32(rom_base + (arglen << smash_cmd_shift));
     crc = crc32(0, &arglen, sizeof (arglen));
     crc = crc32(crc, &cmd, sizeof (cmd));
     crc = crc32(crc, argbuf, arglen);
-    (void) *VADDR32(ROM_BASE + (cmd << smash_cmd_shift));
+    (void) *VADDR32(rom_base + (cmd << smash_cmd_shift));
 
     /* Send message payload */
     for (pos = 0; pos < (arglen + 1) / sizeof (uint16_t); pos++) {
-        (void) *VADDR32(ROM_BASE + (argbuf[pos] << smash_cmd_shift));
+        (void) *VADDR32(rom_base + (argbuf[pos] << smash_cmd_shift));
     }
     if (pos & 1) {
         /* Pad to 32-bit alignment */
-        (void) *VADDR32(ROM_BASE + (0xaaaa << smash_cmd_shift));
+        (void) *VADDR32(rom_base + (0xaaaa << smash_cmd_shift));
     }
 
     /* CRC high and low words */
-    (void) *VADDR32(ROM_BASE + ((crc >> 16) << smash_cmd_shift));
-    (void) *VADDR32(ROM_BASE + ((crc & 0xffff) << smash_cmd_shift));
+    (void) *VADDR32(rom_base + ((crc >> 16) << smash_cmd_shift));
+    (void) *VADDR32(rom_base + ((crc & 0xffff) << smash_cmd_shift));
 
     /* Extra read to kick off handling */
     cia_spin(2);
-    val32 = *VADDR32(ROM_BASE + 0x1554); // remote addr 0x0555 or 0x0aaa
+    val32 = *VADDR32(rom_base + 0x1554); // remote addr 0x0555 or 0x0aaa
 
     /*
      * Delay to prevent reads before Kicksmash has set up DMA hardware
@@ -369,7 +387,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         if (word & 1) {
             val = (uint16_t) val32;
         } else {
-            val32 = *VADDR32(ROM_BASE + 0x1110); // remote addr 0x0444 or 0x0888
+            val32 = *VADDR32(rom_base + 0x1110); // remote addr 0x0444 or 0x0888
 #undef SM_MSG_DEBUG
 #ifdef SM_MSG_DEBUG
             *VADDR32(0x77780 + word * 2) = val32;
@@ -453,7 +471,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
             if (word & 1) {
                 val = (uint16_t) val32;
             } else {
-                val32 = *VADDR32(ROM_BASE);
+                val32 = *VADDR32(rom_base);
                 val = val32 >> 16;
             }
 #ifdef SM_MSG_DEBUG
@@ -465,11 +483,11 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
     if (pos < replylen) {
         /* Discard data that doesn't fit */
         for (; pos < replylen; pos += 4)
-            val32 = *VADDR32(ROM_BASE);
+            val32 = *VADDR32(rom_base);
     }
 
     /* Read CRC */
-    replycrc = *VADDR32(ROM_BASE);
+    replycrc = *VADDR32(rom_base);
 
 #ifdef SM_MSG_DEBUG
     *(dptr++) = replycrc >> 16;

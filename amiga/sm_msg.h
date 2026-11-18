@@ -37,6 +37,7 @@ extern const uint32_t lcrc32_table[];
 extern void (*ecia_spin)(unsigned int ticks);
 #if !defined(ROMFS) && !defined(STANDALONE)
 extern uint smash_reply_wait;  // Extra CIA ticks to wait for a slow reply
+extern uintptr_t sm_rom_base;  // Kicksmash access address (ROM or alias)
 #endif
 extern uint (*esend_cmd_core)(uint16_t cmd, void *arg, uint16_t arglen,
                               void *reply, uint replymax, uint *replyalen);
