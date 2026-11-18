@@ -41,7 +41,8 @@ extern vollist_t *gvol;  // current volume being handled
 
 void volume_seen(char *name, uint32_t access_time, uint flags, int bootpri);
 void volume_flush(void);
-void volume_close(void);
+void volume_abandon(void);
+void volume_reopen_handles(void);
 void volume_message(uint mask);
 
 void unix_time_to_amiga_datestamp(uint sec, uint nsec, struct DateStamp *ds);

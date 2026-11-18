@@ -5,6 +5,17 @@
 
 typedef struct amiga_vol  amiga_vol_t;
 typedef struct handle_ent handle_ent_t;
+
+/* Identifies an object for Amiga lock emulation (see HM_MODE_LOCK) */
+typedef struct {
+#ifdef __MINGW32__
+    char         *lk_path;     // Resolved path (no usable inode numbers)
+#else
+    dev_t         lk_dev;
+    ino_t         lk_ino;
+#endif
+} lock_key_t;
+
 typedef struct handle_ent {
     handle_t      he_handle;   // Reference handle for Amiga interface
     char         *he_name;     // Name of file's path relative to parent
@@ -18,6 +29,8 @@ typedef struct handle_ent {
     amiga_vol_t  *he_avolume;  // Volume descriptor for this handle
     handle_ent_t *he_volume;   // Volume for this file
     handle_ent_t *he_next;     // Next in list of all handles
+    uint          he_lock;     // HM_MODE_LOCK, HM_MODE_LOCK_EX, or 0
+    lock_key_t    he_lock_key; // Object locked (valid if he_lock != 0)
 } handle_ent_t;
 
 typedef struct amiga_vol {

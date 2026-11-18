@@ -446,7 +446,9 @@ static const char *const km_status_s[] = {
     "NOTEMPTY",                         // KM_STATUS_NOTEMPTY
     "NOEXIST",                          // KM_STATUS_NOEXIST
     "EXIST",                            // KM_STATUS_EXIST
-    "UNAVAIL"                           // KM_STATUS_UNAVAIL
+    "UNAVAIL",                          // KM_STATUS_UNAVAIL
+    "INUSE",                            // KM_STATUS_INUSE
+    "STALE"                             // KM_STATUS_STALE
 };
 STATIC_ASSERT(ARRAY_SIZE(km_status_s) == KM_STATUS_LAST_ENTRY, km_status_t);
 

@@ -56,6 +56,14 @@ typedef struct FileHandle FileHandle_t;
 
 #define MAX_NAMELEN          255
 
+/*
+ * Request size which holds exactly one directory entry of any name length:
+ * name + NIL, comment NIL, and pad to even length. The host never packs a
+ * second entry into a request this small, and it truncates a symlink's
+ * comment (link target) to fit, so the reply never exceeds the request.
+ */
+#define DIRENT_READ_LEN      (sizeof (hm_fdirent_t) + MAX_NAMELEN + 3)
+
 /* DOS FileLock with SmashFS extensions */
 typedef struct fs_lock {
     BPTR            fl_Link;      /* next Dos Lock */
@@ -138,6 +146,12 @@ km_status_to_amiga_error(uint status)
             return (ERROR_OBJECT_NOT_FOUND);
         case KM_STATUS_EXIST:
             return (ERROR_OBJECT_EXISTS);
+        case KM_STATUS_INUSE:
+            return (ERROR_OBJECT_IN_USE);
+        case KM_STATUS_STALE:
+            /* Host restarted: check for that and reopen volume handles */
+            volume_refresh_soon();
+            return (ERROR_INVALID_LOCK);
         case KM_STATUS_LAST_ENTRY:
             return (ERROR_NO_MORE_ENTRIES);
         default:
@@ -145,45 +159,56 @@ km_status_to_amiga_error(uint status)
     }
 }
 
+/*
+ * fs_open
+ * -------
+ * sm_fopen() which also holds a shared (SHARED_LOCK) or exclusive
+ * (EXCLUSIVE_LOCK) lock on the object for as long as the handle is open,
+ * if the host enforces locks. The host refuses a conflicting lock with
+ * KM_STATUS_INUSE. With a host which does not support locks, no lock
+ * is enforced.
+ */
+static uint
+fs_open(handle_t phandle, const char *name, uint mode, LONG lockmode,
+        uint *type, uint create_perms, handle_t *handle)
+{
+    uint rc;
+
+    if (sm_host_locks) {
+        uint lockbits = (lockmode == EXCLUSIVE_LOCK) ? HM_MODE_LOCK_EX :
+                                                       HM_MODE_LOCK;
+        rc = sm_fopen(phandle, name, mode | lockbits, type, create_perms,
+                      handle);
+        if (rc != KM_STATUS_INVALID)
+            return (rc);
+        /*
+         * An older host may have replaced the one which advertised
+         * locks; it rejects lock bits in some open modes. Retry without.
+         * The next successful open reply updates sm_host_locks.
+         */
+    }
+    return (sm_fopen(phandle, name, mode, type, create_perms, handle));
+}
+
 fs_lock_t *
 CreateLock(handle_t handle, handle_t phandle, uint mode)
 {
-    int           access  = 0;
     fs_lock_t    *lock;
     DeviceList_t *volnode = gvol->vl_volnode;
 
+    /*
+     * Lock conflicts (shared vs exclusive) are enforced by the host when
+     * the handle is opened: see fs_open().
+     */
     if (volnode == NULL) {
         gpack->dp_Res2 = ERROR_DEVICE_NOT_MOUNTED;
         printf("device is not mounted\n");
         return (NULL);
     }
 
-    lock = (fs_lock_t *) BTOC(volnode->dl_LockList);
-    while (lock != NULL) {
-        if (lock->fl_Key == handle) {
-            access = lock->fl_Access;
-            break;
-        } else {
-            lock = (fs_lock_t *) BTOC(lock->fl_Link);
-        }
-    }
-
-    switch (mode) {
-        case EXCLUSIVE_LOCK:
-            if (access) {  /* somebody else has a lock on it... */
-                gpack->dp_Res2 = ERROR_OBJECT_IN_USE;
-                printf("exclusive: lock is already exclusive\n");
-                return (NULL);
-            }
-            break;
-        default:  /* C= said that if it's not EXCLUSIVE, it's SHARED */
-            if (access == EXCLUSIVE_LOCK) {
-                gpack->dp_Res2 = ERROR_OBJECT_IN_USE;
-                printf("shared: lock is already exclusive\n");
-                return (NULL);
-            }
-            break;
-    }
+    /* C= said that if it's not EXCLUSIVE, it's SHARED */
+    if (mode != EXCLUSIVE_LOCK)
+        mode = SHARED_LOCK;
 
     lock = (fs_lock_t *) AllocMem(sizeof (fs_lock_t), MEMF_PUBLIC);
     if (lock == NULL) {
@@ -277,7 +302,7 @@ action_copy_dir(void)
     handle_t   pphandle = (lock == NULL) ? 0 : lock->fl_PHandle;
 
     printf("COPY_DIR %x %x = ", phandle, pphandle);
-    rc = sm_fopen(phandle, "", 0, &type, 0, &handle);
+    rc = fs_open(phandle, "", 0, SHARED_LOCK, &type, 0, &handle);
     if (rc == 0) {
         printf("%x\n", handle);
         newlock = CreateLock(handle, pphandle, SHARED_LOCK);
@@ -311,7 +336,8 @@ action_create_dir(void)
     printf("CREATE_DIR p=%x %p '%s'\n", phandle, lock, name);
     rc = sm_fcreate(phandle, name, "", HM_TYPE_DIR, 0);
     if (rc == 0)
-        rc = sm_fopen(phandle, name, HM_MODE_READDIR, &type, 0, &handle);
+        rc = fs_open(phandle, name, HM_MODE_READDIR, EXCLUSIVE_LOCK,
+                     &type, 0, &handle);
     *bname = cho;
 
     if (rc != 0) {
@@ -319,7 +345,7 @@ action_create_dir(void)
         return (DOSFALSE);
     }
     printf("  dir handle %x\n", handle);
-    newlock = CreateLock(handle, phandle, SHARED_LOCK);
+    newlock = CreateLock(handle, phandle, EXCLUSIVE_LOCK);
     if (newlock == NULL)
         sm_fclose(handle);
     return (CTOB(newlock));
@@ -497,7 +523,7 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
     uint rc;
     uint rlen;
     uint entlen;
-    uint len = sizeof (*dent) + MAX_NAMELEN;  // Ent + max filename length
+    uint len = DIRENT_READ_LEN;
 
     rc = sm_fopen(lock->fl_Key, "", HM_MODE_READDIR | HM_MODE_NOFOLLOW,
                   &type, 0, &handle);
@@ -546,7 +572,7 @@ action_disk_info(void)
     uint numblks = 1 << 20;
     uint numused = 1 << 19;
     uint blksize = 1024;
-    uint len = sizeof (*dent) + MAX_NAMELEN;  // Ent + max filename length
+    uint len = DIRENT_READ_LEN;
 
     printf("DISK_INFO %x\n", handle);
     rc = sm_fread(handle, len, (void **) &dent, &rlen, HM_FLAG_SEEK0);
@@ -566,6 +592,8 @@ action_disk_info(void)
             if (numused > numblks)
                 numused = numblks;
         }
+    } else if (rc == KM_STATUS_STALE) {
+        volume_refresh_soon();  // Host restarted; reopen volume handle
     }
 
     if (gpack->dp_Type == ACTION_INFO)
@@ -598,7 +626,7 @@ action_examine_next(void)
     uint             rlen;
     uint             entlen;
     uint             read_flag = 0;
-    uint             len = sizeof (*dent) + MAX_NAMELEN;
+    uint             len = DIRENT_READ_LEN;
 
     printf("EXAMINE_NEXT %p %x\n", lock, lock->fl_Key);
     if ((gpack->dp_Type == ACTION_EX_NEXT) && (GARG3 != 0))
@@ -689,15 +717,16 @@ action_findinput(void)
     printf("FIND%s p=%x %p '%s'\n",
            (hm_mode & HM_MODE_WRITE) ? "UPDATE" : "INPUT", phandle, lock, name);
 
-    rc = sm_fopen(phandle, name, hm_mode, &type, create_perms, &handle);
+    rc = fs_open(phandle, name, hm_mode, SHARED_LOCK, &type, create_perms,
+                 &handle);
 
-    if (rc != 0) {
+    if ((rc != 0) && (rc != KM_STATUS_INUSE)) {
         /*
          * Try again without write access. As with FFS, a write-protected
          * file may still be opened; writes to it will then fail.
          */
-        uint rc2 = sm_fopen(phandle, name, HM_MODE_READ, &type,
-                            create_perms, &handle);
+        uint rc2 = fs_open(phandle, name, HM_MODE_READ, SHARED_LOCK, &type,
+                           create_perms, &handle);
         /*
          * If that also fails, report the first error: for FINDUPDATE it
          * explains why the file could not be created (for example, a
@@ -770,7 +799,8 @@ action_findoutput(void)
 
     printf("FINDOUTPUT p=%x %p '%s'\n", phandle, lock, name);
 
-    rc = sm_fopen(phandle, name, hm_mode, &type, create_perms, &handle);
+    rc = fs_open(phandle, name, hm_mode, EXCLUSIVE_LOCK, &type, create_perms,
+                 &handle);
     *bname = cho;
 
     if (rc != 0) {
@@ -891,15 +921,17 @@ action_locate_object(void)
     if (*name == '\0')
         name = ".";
 
-    rc = sm_fopen(phandle, name, mode, &type, 0, &handle);
-    if (rc != 0) {
+    rc = fs_open(phandle, name, mode, access, &type, 0, &handle);
+    if ((rc != 0) && (rc != KM_STATUS_INUSE)) {
         /* Attempt to open for stat */
-        rc = sm_fopen(phandle, name, mode | HM_MODE_READDIR, &type, 0, &handle);
+        rc = fs_open(phandle, name, mode | HM_MODE_READDIR, access, &type, 0,
+                     &handle);
     }
     *bname = cho;
     if (rc != 0) {
         printf("failed open with %x\n", rc);
-        gpack->dp_Res2 = ERROR_OBJECT_NOT_FOUND;
+        gpack->dp_Res2 = (rc == KM_STATUS_INUSE) ? ERROR_OBJECT_IN_USE :
+                                                   ERROR_OBJECT_NOT_FOUND;
         return (DOSFALSE);
     }
     newlock = CreateLock(handle, phandle, GARG3);
@@ -1005,7 +1037,8 @@ action_parent(void)
         *(ptr--) = '\0';
     }
     printf("  parent=%s\n", name);
-    rc = sm_fopen(gvol->vl_handle, name, HM_MODE_READ, &type, 0, &handle);
+    rc = fs_open(gvol->vl_handle, name, HM_MODE_READ, SHARED_LOCK, &type, 0,
+                 &handle);
     if (rc != 0) {
         printf("failed parent open with %x\n", rc);
         gpack->dp_Res2 = ERROR_DIR_NOT_FOUND;

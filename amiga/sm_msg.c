@@ -1221,7 +1221,9 @@ static const char *const km_status_s[] = {
     "NOTEMPTY",                         // 0x00000006 KM_STATUS_NOTEMPTY
     "NOEXIST",                          // 0x00000007 KM_STATUS_NOEXIST
     "EXIST",                            // 0x00000008 KM_STATUS_EXIST
-    "UNAVAIL"                           // 0x00000009 KM_STATUS_UNAVAIL
+    "UNAVAIL",                          // 0x00000009 KM_STATUS_UNAVAIL
+    "INUSE",                            // 0x0000000a KM_STATUS_INUSE
+    "STALE"                             // 0x0000000b KM_STATUS_STALE
 };
 STATIC_ASSERT(ARRAY_SIZE(km_status_s) == KM_STATUS_LAST_ENTRY);
 

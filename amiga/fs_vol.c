@@ -136,7 +136,7 @@ fsname(struct DosInfo *info, char *name, void *ignore)
     int len;
     char *ptr;
 
-    while ((*name == '/') || (*name == '/'))
+    while (*name == '/')
         name++;
     for (ptr = name; *ptr != '\0'; ptr++) {
         switch (*ptr) {
@@ -522,28 +522,83 @@ volume_flush(void)
 }
 
 /*
- * volume_close()
- *     Closes unclosed handles on all volumes
+ * volume_reopen_handles()
+ *     Called when hostsmash has restarted: every volume's host handle is
+ *     from the previous host and is no longer valid, so open it again.
+ *     A volume which can't be opened keeps its stale handle; operations
+ *     using it fail, and the volume is flushed if the host no longer
+ *     lists it.
  */
 void
-volume_close(void)
+volume_reopen_handles(void)
 {
-    vollist_t *cur  = vollist;
+    vollist_t *cur;
+    handle_t   handle;
+    uint       type;
+    uint       rc;
+
     for (cur = vollist; cur != NULL; cur = cur->vl_next) {
-        if (cur->vl_use_count != 0) {
-            // XXX: Need to close handles for all system locks
-            //      This information is not currently tracked
-            //
-            // Maybe walk the system lock list and compare lock->fl_Volume
-            // against cur->vl_volnode.
-            // Need to get file handle from locks
-            // lock->fl_Handle gives KS handle to close, but there
-            // might also be AmigaOS File Handles out there. I don't
-            // know how those work yet because they don't seem to be
-            // closed as expected.
-            cur->vl_use_count = 0;
+        rc = sm_fopen(0, cur->vl_name, HM_MODE_READDIR, &type, 0, &handle);
+        if (rc == 0) {
+            printf("Reopened %s: handle %x -> %x\n",
+                   cur->vl_name, cur->vl_handle, handle);
+            cur->vl_handle = handle;
+        } else {
+            printf("Reopen of %s failed: %d\n", cur->vl_name, rc);
         }
     }
+}
+
+/*
+ * volume_abandon()
+ *     Called at exit, with the DosList locked, for volumes which still have
+ *     outstanding locks or open files after the shutdown grace period.
+ *     Those locks and files point at the volume's DOS nodes and message
+ *     port, so those must never be freed. Each remaining volume is taken
+ *     out of the DOS list, its queued packets are rejected, and its port
+ *     is set to ignore further messages: a later packet (for example the
+ *     UnLock() of a stale lock) is then queued and never answered, instead
+ *     of signalling a task which no longer exists. The sending process
+ *     will wait forever, but the system will not crash.
+ *
+ *     The port, DOS nodes, and locks are deliberately leaked.
+ */
+void
+volume_abandon(void)
+{
+    vollist_t             *cur;
+    vollist_t             *next;
+    struct MsgPort        *mp;
+    struct StandardPacket *sp;
+    struct DosPacket      *pkt;
+
+    for (cur = vollist; cur != NULL; cur = next) {
+        next = cur->vl_next;
+        printf("Abandoning %s with use count %u\n",
+               cur->vl_name, cur->vl_use_count);
+        if (cur->vl_in_dos_list) {
+            cur->vl_in_dos_list = 0;
+            volnode_remove(cur);
+        }
+        if (sm_fservice())
+            sm_fclose(cur->vl_handle);
+
+        mp = cur->vl_msgport;
+        Forbid();
+            /* No new message can arrive between these two steps */
+            mp->mp_Flags   = PA_IGNORE;
+            mp->mp_SigTask = NULL;
+            while ((sp = (struct StandardPacket *) GetMsg(mp)) != NULL) {
+                pkt = (struct DosPacket *) (sp->sp_Msg.mn_Node.ln_Name);
+                ReplyPkt(pkt, DOSFALSE, ERROR_DEVICE_NOT_MOUNTED);
+            }
+        Permit();
+        /* The port's signal bit is released when this task exits */
+        volume_msg_masks &= ~cur->vl_msg_mask;
+        FreeMem(cur, sizeof (vollist_t));
+    }
+    vollist = NULL;
+    gvolumes_inuse = 0;
 }
 
 static void

@@ -34,6 +34,7 @@ uint sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid);
 uint sm_fsetprotect(handle_t parent_handle, const char *name, uint perms);
 
 extern uint8_t sm_file_active;
+extern uint8_t sm_host_locks;
 
 #define SEEK_OFFSET_BEGINNING (-1)
 #define SEEK_OFFSET_CURRENT   (0)

@@ -29,6 +29,7 @@
 #include "fs_timer.h"
 
 #define DIRBUF_SIZE 2000
+#define SHUTDOWN_MAX_SECS 60  // Max wait at exit for locks to be released
 
 const char *version = "\0$VER: smashfs "VERSION" ("BUILD_DATE") \xA9 Chris Hooper";
 
@@ -43,6 +44,43 @@ uint8_t sm_file_active = 0;
 uint8_t grunning = 0;
 uint8_t gvolumes_inuse = 0;
 static uint runtime_max = 0;
+static uint8_t do_refresh = 8;  // Non-zero: refresh volume list next tick
+
+/*
+ * volume_refresh_soon
+ * -------------------
+ * Requests a volume list refresh at the next timer tick. This is used
+ * when the host reports a stale handle, so that a hostsmash restart is
+ * detected (see check_host_epoch()) and volume handles are reopened.
+ */
+void
+volume_refresh_soon(void)
+{
+    do_refresh = 1;
+}
+
+/*
+ * check_host_epoch
+ * ----------------
+ * The host reports a value in Volume Directory entries which changes
+ * every time hostsmash is started (0 for hosts which predate this).
+ * A change means all handles from the previous host are invalid:
+ * reopen the volume handles. Locks and files opened earlier remain
+ * stale; the host refuses them with KM_STATUS_STALE.
+ */
+static void
+check_host_epoch(uint32_t epoch)
+{
+    static uint32_t prev_epoch;
+    static uint8_t  prev_valid = 0;
+
+    if (prev_valid && (epoch != prev_epoch)) {
+        printf("Host restarted (epoch %x -> %x)\n", prev_epoch, epoch);
+        volume_reopen_handles();
+    }
+    prev_epoch = epoch;
+    prev_valid = 1;
+}
 
 static void
 refresh_volume_list(void)
@@ -58,6 +96,7 @@ refresh_volume_list(void)
     uint8_t       *data;
     char          *dname;
     hm_fdirent_t  *dent;
+    uint8_t        epoch_checked = 0;
 
     if (sm_fservice() == 0) {
         volume_flush();
@@ -88,6 +127,11 @@ refresh_volume_list(void)
             dname = (char *) (dent + 1);
             if (memchr(dname, '\0', entlen) == NULL)
                 break;  // Name not terminated within entry
+            if (!epoch_checked) {
+                /* Before volume_seen(), which may use volume handles */
+                epoch_checked = 1;
+                check_host_epoch(dent->hmd_rdev);
+            }
             if (strlen(dname) < VOLNAME_MAXLEN) {
                 uint vol_flags   = dent->hmd_ino;
                 int  vol_bootpri = (int) dent->hmd_nlink;
@@ -111,11 +155,18 @@ handle_messages(void)
     ULONG waitmask = volume_msg_masks | timer_msg_mask | SIGBREAKF_CTRL_C;
     ULONG mask;
     uint  runtime = 0;
-    uint  shutdown_timer = 15;
-    static uint8_t do_refresh = 8;
+    uint  shutdown_timer = SHUTDOWN_MAX_SECS;
+    uint8_t done = 0;
 
 //  printf("Volmasks=%08x Timermask=%08x\n", volume_msg_masks, timer_msg_mask);
-    while (grunning || (gvolumes_inuse && (shutdown_timer != 0))) {
+    /*
+     * After a shutdown request (CTRL-C, ACTION_DIE, or runtime limit),
+     * packets which release locks and files continue to be handled while
+     * all others are rejected. This continues until no volume is in use,
+     * or until SHUTDOWN_MAX_SECS have elapsed, at which point remaining
+     * volumes are abandoned (see volume_abandon()).
+     */
+    while (!done) {
         /* volume_seen() and volume_flush() add and delete volume ports */
         waitmask = volume_msg_masks | timer_msg_mask | SIGBREAKF_CTRL_C;
         mask = Wait(waitmask);
@@ -144,25 +195,30 @@ handle_messages(void)
                     }
                 }
             } else {
-                if (shutdown_timer > 0) {
-                    /* To avoid deadlock, handlers never use LockDosList() */
-                    struct DosList *dl = AttemptLockDosList(LDF_DEVICES |
-                                                            LDF_VOLUMES |
-                                                            LDF_WRITE);
-                    if (dl != NULL) {
-                        volume_flush();
-                        UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
-                        shutdown_timer--;
-                        if (gvolumes_inuse)
-                            printf("shutdown in %u\n", shutdown_timer);
-                    } else {
-                        timer_msec = 1000 / TICKS_PER_SECOND;  // one tick
+                /* To avoid deadlock, handlers never use LockDosList() */
+                struct DosList *dl = AttemptLockDosList(LDF_DEVICES |
+                                                        LDF_VOLUMES |
+                                                        LDF_WRITE);
+                if (dl != NULL) {
+                    volume_flush();  // Frees volumes no longer in use
+                    if (gvolumes_inuse == 0) {
+                        done = 1;
+                    } else if (--shutdown_timer == 0) {
+                        volume_abandon();
+                        done = 1;
+                    } else if ((shutdown_timer % 10) == 0) {
+                        printf("%u volumes in use; shutdown in %u\n",
+                               gvolumes_inuse, shutdown_timer);
                     }
+                    UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
+                } else {
+                    timer_msec = 1000 / TICKS_PER_SECOND;  // one tick
                 }
             }
-            timer_restart(timer_msec);
+            if (!done)
+                timer_restart(timer_msec);
         }
-        if (mask & volume_msg_masks)
+        if ((mask & volume_msg_masks) && !done)
             volume_message(mask & volume_msg_masks);
 
         if (mask & SIGBREAKF_CTRL_C) {
@@ -247,12 +303,8 @@ show_usage:
     UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
     timer_restart(1000);
 
+    /* Returns after all volumes have been freed or abandoned */
     handle_messages();
-
-    LockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
-        volume_close();
-        volume_flush();
-    UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
 
     timer_close();
     printf("smashfs exit\n");

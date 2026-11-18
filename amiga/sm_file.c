@@ -23,6 +23,9 @@
 static uint     sm_mbuf_size = 0;
 static uint8_t *sm_mbuf      = NULL;
 
+/* Non-zero if the host enforces HM_MODE_LOCK (from the last open reply) */
+uint8_t         sm_host_locks = 0;
+
 /*
  * sm_fservice
  * -----------
@@ -127,6 +130,7 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
     rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
     if (rc == KM_STATUS_OK) {
         *handle = rdata->hm_handle;
+        sm_host_locks = (rdata->hm_mode & HM_MODE_LOCK) ? 1 : 0;
 
         if (hm_type != NULL)
             *hm_type = rdata->hm_type;

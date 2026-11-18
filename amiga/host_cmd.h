@@ -50,7 +50,9 @@
 #define KM_STATUS_NOEXIST     0x07  // Object does not exist
 #define KM_STATUS_EXIST       0x08  // Object already exists
 #define KM_STATUS_UNAVAIL     0x09  // Service not available
-#define KM_STATUS_LAST_ENTRY  0x0a  // Fake status: must always be last + 1
+#define KM_STATUS_INUSE       0x0a  // Object in use (locked)
+#define KM_STATUS_STALE       0x0b  // Handle unknown (host restarted?)
+#define KM_STATUS_LAST_ENTRY  0x0c  // Fake status: must always be last + 1
 
 #define HM_TYPE_ANY         0x0000  // Any type of file (for open)
 #define HM_TYPE_UNKNOWN     0x0000  // Unknown (for reported type)
@@ -78,6 +80,20 @@
 #define HM_MODE_NOFOLLOW    0x1000  // Do not follow symlink on READDIR
 #define HM_MODE_LINK        0x2000  // Symlink
 #define HM_MODE_READLINK    0x2001  // Read symlink (composite)
+#define HM_MODE_LOCK        0x4000  // Hold shared lock on object while open
+#define HM_MODE_LOCK_EX     0xc000  // Hold exclusive lock (composite)
+/*
+ * Lock modes: an open with HM_MODE_LOCK holds a shared lock on the object
+ * until closed. HM_MODE_LOCK_EX holds an exclusive lock. An open without
+ * either takes no lock and is never refused because of locks held by
+ * others. The host refuses with KM_STATUS_INUSE an exclusive lock on an
+ * object which has any lock, a shared lock on an object which has an
+ * exclusive lock, and a delete of an object which has any lock.
+ *
+ * A host which supports locks sets HM_MODE_LOCK in hm_mode of every
+ * successful KM_OP_FOPEN reply. Older hosts reply with hm_mode 0, and
+ * may reject the lock bits; they must not be sent to such a host.
+ */
 
 #define HM_FLAG_SEEK0       0x0001  // Seek the start of file before read
 
@@ -183,6 +199,8 @@ typedef struct {
     uint32_t     hmd_mode;    // Unix disk mode (permissions)
     uint32_t     hmd_nlink;   // Filesystem links to file
     uint32_t     hmd_rdev;    // Filesystem block and char devices
+                              // Volume entries: host epoch (changes when
+                              // hostsmash restarts; 0 if not supported)
     uint32_t     hmd_rsvd[2]; // Reserved space for future expansion
     /* Name and comment follows... */
 } hm_fdirent_t;               // KM_OP_FREAD

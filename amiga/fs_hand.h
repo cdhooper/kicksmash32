@@ -27,4 +27,6 @@
 extern uint8_t grunning;        // 1=running, 0=stopping
 extern uint8_t gvolumes_inuse;  // 0=no volumes
 
+void volume_refresh_soon(void);
+
 #endif /* _FS_HAND_H */
