@@ -91,6 +91,11 @@ struct MappingNode {
 #define MAPP_IO                 (1UL << 30)
 #define MAPP_WINDOW             (1UL << 31)
 
+/* GetMMUType() results, from mmu/mmubase.h */
+#define MUTYPE_68030            '3'
+#define MUTYPE_68040            '4'
+#define MUTYPE_68060            '6'
+
 #define MAPTAG_DUMMY            (TAG_USER + 0x03e00000)
 #define MAPTAG_DESTINATION      (MAPTAG_DUMMY + 1)
 #define MAPTAG_USERDATA         (MAPTAG_DUMMY + 3)
@@ -121,6 +126,8 @@ struct MappingNode {
 #define GetPageSize(ctx) \
     LP1(0x30, ULONG, GetPageSize, \
         struct MMUContext *, ctx, a0, , MMU_BASE_NAME)
+#define GetMMUType() \
+    LP0(0x36, char, GetMMUType, , MMU_BASE_NAME)
 #define LockMMUContext(ctx) \
     LP1NR(0x48, LockMMUContext, \
           struct MMUContext *, ctx, a0, , MMU_BASE_NAME)
@@ -152,15 +159,38 @@ static void               *alias_old_data[2];
 /*
  * mmu_enabled
  * -----------
- * Return non-zero if the MMU is translating addresses. mmu.library may
- * be installed without having enabled the MMU, and then a mapping would
- * have no effect.
+ * Return non-zero if the CPU has a working MMU and it is translating
+ * addresses. mmu.library may be installed without having enabled the
+ * MMU, and then a mapping would have no effect.
+ *
+ * TC is read only after mmu.library has confirmed an MMU of the type
+ * that matches cpu_type: an EC CPU has no MMU, and reading TC with an
+ * instruction for a different MMU type is not safe.
  */
 static int
 mmu_enabled(void)
 {
     uint32_t tc = 0;
-    APTR old_stack = SuperState();
+    char expected;
+    APTR old_stack;
+
+    switch (cpu_type) {
+        case 68030:
+            expected = MUTYPE_68030;
+            break;
+        case 68040:
+            expected = MUTYPE_68040;
+            break;
+        case 68060:
+            expected = MUTYPE_68060;
+            break;
+        default:
+            return (0);
+    }
+    if (GetMMUType() != expected)
+        return (0);
+
+    old_stack = SuperState();
 
     if (cpu_type == 68030)
         tc = mmu_get_tc_030() & BIT(31);
@@ -345,7 +375,8 @@ done:
  * sm_rom_alias_open
  * -----------------
  * Set up the cache-inhibited ROM alias and switch Kicksmash accesses to
- * it. If mmu.library is not loaded, the MMU is not enabled, no unused
+ * it. If mmu.library is not loaded or finds no working MMU (such as on
+ * an EC CPU), the MMU is not enabled, no unused
  * address range is found, or the alias does not reach Kicksmash, accesses stay at the ROM address and
  * send_cmd() keeps disabling the cache and MMU around each transfer.
  *

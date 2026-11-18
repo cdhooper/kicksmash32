@@ -172,6 +172,9 @@ struct SmashNetDevice {
 };
 
 extern struct ExecBase *SysBase;
+#ifdef SMASHNET_DEVICE
+extern struct Library *__UtilityBase;  /* See smashnet_drv.c */
+#endif
 
 extern uint    flag_debug;
 extern uint8_t flag_output;
