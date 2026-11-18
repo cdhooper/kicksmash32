@@ -467,6 +467,25 @@ volume_seen(char *name, uint32_t access_time, uint flags, int bootpri)
 #define AV_FLAG_BOOTABLE 0x01
 
 /*
+ * volume_port_reject()
+ *     Replies to every packet still queued on a volume's message port with
+ *     ERROR_DEVICE_NOT_MOUNTED. A process which found the volume's DOS
+ *     node just before it was removed may have queued a packet; without
+ *     a reply, that process would wait forever.
+ */
+static void
+volume_port_reject(struct MsgPort *mp)
+{
+    struct StandardPacket *sp;
+    struct DosPacket      *pkt;
+
+    while ((sp = (struct StandardPacket *) GetMsg(mp)) != NULL) {
+        pkt = (struct DosPacket *) (sp->sp_Msg.mn_Node.ln_Name);
+        ReplyPkt(pkt, DOSFALSE, ERROR_DEVICE_NOT_MOUNTED);
+    }
+}
+
+/*
  * volume_flush()
  *     Removes DOS nodes for any volumes which are no longer present.
  */
@@ -494,7 +513,11 @@ volume_flush(void)
                 if (sm_fservice())
                     sm_fclose(cur->vl_handle);
                 volume_msg_masks &= ~BIT(cur->vl_msgport->mp_SigBit);
-                DeletePort(cur->vl_msgport);
+                Forbid();
+                    /* No new packet can arrive between these two steps */
+                    volume_port_reject(cur->vl_msgport);
+                    DeletePort(cur->vl_msgport);
+                Permit();
 
                 if ((dlnode = cur->vl_volnode) != NULL) {
                     FreeVec(BTOC(dlnode->dl_Name));

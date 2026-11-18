@@ -232,6 +232,7 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
                rdata->hm_hdr.km_status,
                rdata->hm_hdr.km_tag, tag);
         rc = MSG_STATUS_BAD_DATA;
+        rcvlen = 0;  // Caller must not consume data from a failed read
         goto sm_read_fail;
     }
 
@@ -247,12 +248,20 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
         if (sm_mbuf == NULL) {
             printf("malloc(%u) failed\n", total_len);
             rc = MSG_STATUS_NO_MEM;
+            rcvlen = 0;
             goto sm_read_fail;
         }
         memcpy(sm_mbuf, (rdata + 1), rcvlen);
         rc = host_recv_msg_cont(tag, sm_mbuf + rcvlen, total_len - rcvlen);
-        if (rc != KM_STATUS_OK)
+        if (rc != KM_STATUS_OK) {
+            /*
+             * The host has already advanced past the whole reply, so
+             * returning only the partial data would silently drop the
+             * remainder.
+             */
+            rcvlen = 0;
             goto sm_read_fail;
+        }
         rcvlen = total_len;
         *data = (void *) sm_mbuf;
     }
@@ -646,7 +655,7 @@ sm_fsetdate(handle_t parent_handle, const char *name,
     uint rlen;
     uint namelen = strlen(name) + 1;
     hm_fsetdate_t *msg;
-    hm_fhandle_t  *rdata;
+    hm_fsetdate_t *rdata;
 
     if (namelen > 2000) {
         printf("Path \"%s\" too long\n", name);
@@ -674,10 +683,11 @@ sm_fsetdate(handle_t parent_handle, const char *name,
     if (rc != KM_STATUS_OK) {
         printf("Failed to set date %u.%u %s: %s\n",
                *sec, *nsec, name, smash_err(rc));
+    } else if (rlen >= sizeof (*rdata)) {
+        /* For the "get" operations, the host reply carries the time */
+        *sec  = rdata->hm_time;
+        *nsec = rdata->hm_time_ns;
     }
-
-    *sec  = msg->hm_time;
-    *nsec = msg->hm_time_ns;
     free(msg);
 
     return (rc);

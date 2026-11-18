@@ -53,6 +53,7 @@ typedef struct FileInfoBlock FileInfoBlock_t;
 typedef struct FileHandle FileHandle_t;
 
 #define FL_FLAG_NEEDS_REWIND 0x01 /* EXAMINE_NEXT should rewind dir handle */
+#define FL_FLAG_IS_DIR       0x02 /* Lock handle is a scannable directory */
 
 #define MAX_NAMELEN          255
 
@@ -190,8 +191,22 @@ fs_open(handle_t phandle, const char *name, uint mode, LONG lockmode,
     return (sm_fopen(phandle, name, mode, type, create_perms, handle));
 }
 
+/* Returns non-zero if the HM_TYPE_* is a directory (which can be scanned) */
+static int
+hm_type_is_dir(uint type)
+{
+    return ((type == HM_TYPE_DIR) || (type == HM_TYPE_VOLDIR) ||
+            (type == HM_TYPE_VOLUME));
+}
+
+/*
+ * CreateLock
+ * ----------
+ * Creates a DOS lock for the open host handle. type is the HM_TYPE_* of
+ * the object, which determines whether EXAMINE_NEXT may scan it.
+ */
 fs_lock_t *
-CreateLock(handle_t handle, handle_t phandle, uint mode)
+CreateLock(handle_t handle, handle_t phandle, uint mode, uint type)
 {
     fs_lock_t    *lock;
     DeviceList_t *volnode = gvol->vl_volnode;
@@ -221,7 +236,7 @@ CreateLock(handle_t handle, handle_t phandle, uint mode)
     lock->fl_Task       = gvol->vl_msgport;
     lock->fl_Volume     = CTOB(volnode);
     lock->fl_PHandle    = phandle;
-    lock->fl_Flags      = 0;
+    lock->fl_Flags      = hm_type_is_dir(type) ? FL_FLAG_IS_DIR : 0;
 
 #define CREATELOCK_DEBUG
 #ifdef CREATELOCK_DEBUG
@@ -305,7 +320,7 @@ action_copy_dir(void)
     rc = fs_open(phandle, "", 0, SHARED_LOCK, &type, 0, &handle);
     if (rc == 0) {
         printf("%x\n", handle);
-        newlock = CreateLock(handle, pphandle, SHARED_LOCK);
+        newlock = CreateLock(handle, pphandle, SHARED_LOCK, type);
         if (newlock == NULL)
             sm_fclose(handle);
         return (CTOB(newlock));
@@ -329,7 +344,7 @@ action_create_dir(void)
     uint       type;
 
     /* Temporarily NIL-terminate name */
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
 
@@ -345,7 +360,7 @@ action_create_dir(void)
         return (DOSFALSE);
     }
     printf("  dir handle %x\n", handle);
-    newlock = CreateLock(handle, phandle, EXCLUSIVE_LOCK);
+    newlock = CreateLock(handle, phandle, EXCLUSIVE_LOCK, HM_TYPE_DIR);
     if (newlock == NULL)
         sm_fclose(handle);
     return (CTOB(newlock));
@@ -368,7 +383,7 @@ action_delete_object(void)
     uint       rc;
 
     /* Temporarily NIL-terminate name */
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
 
@@ -525,8 +540,12 @@ examine_common(fs_lock_t *lock, FileInfoBlock_t *fib, fileattr_t *fattr)
     uint entlen;
     uint len = DIRENT_READ_LEN;
 
-    rc = sm_fopen(lock->fl_Key, "", HM_MODE_READDIR | HM_MODE_NOFOLLOW,
-                  &type, 0, &handle);
+    /*
+     * Follow symlinks: the host already follows them for everything else
+     * done with the lock, so Examine describes the same object (the link
+     * target). As with FFS, only directory scans report soft links.
+     */
+    rc = sm_fopen(lock->fl_Key, "", HM_MODE_READDIR, &type, 0, &handle);
     if (rc != 0) {
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
@@ -632,6 +651,12 @@ action_examine_next(void)
     if ((gpack->dp_Type == ACTION_EX_NEXT) && (GARG3 != 0))
         fattr = (fileattr_t *) GARG3;
 
+    if ((lock->fl_Flags & FL_FLAG_IS_DIR) == 0) {
+        /* Not a directory: don't read file content as directory entries */
+        gpack->dp_Res2 = ERROR_NO_MORE_ENTRIES;
+        return (DOSFALSE);
+    }
+
     if (lock->fl_Flags & FL_FLAG_NEEDS_REWIND) {
         lock->fl_Flags &= ~FL_FLAG_NEEDS_REWIND;
         read_flag |= HM_FLAG_SEEK0;
@@ -706,7 +731,7 @@ action_findinput(void)
     uint          create_perms = 0;
 
     /* Temporarily NIL-terminate name */
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
 
@@ -742,7 +767,15 @@ action_findinput(void)
         return (DOSFALSE);
     }
 
-    newlock = CreateLock(handle, phandle, SHARED_LOCK);
+    if (hm_type_is_dir(type)) {
+        /* As with FFS, a directory can't be opened as a file */
+        printf("  is a directory\n");
+        sm_fclose(handle);
+        gpack->dp_Res2 = ERROR_OBJECT_WRONG_TYPE;
+        return (DOSFALSE);
+    }
+
+    newlock = CreateLock(handle, phandle, SHARED_LOCK, type);
     if (newlock == NULL) {
         sm_fclose(handle);
         return (DOSFALSE);
@@ -793,7 +826,7 @@ action_findoutput(void)
     uint          create_perms = 0;
 
     /* Temporarily NIL-terminate name */
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
 
@@ -809,7 +842,7 @@ action_findoutput(void)
         return (DOSFALSE);
     }
 
-    newlock = CreateLock(handle, phandle, EXCLUSIVE_LOCK);
+    newlock = CreateLock(handle, phandle, EXCLUSIVE_LOCK, HM_TYPE_FILE);
     if (newlock == NULL) {
         sm_fclose(handle);
         return (DOSFALSE);
@@ -848,14 +881,22 @@ action_free_lock(void)
 {
     fs_lock_t *lock = (fs_lock_t *) BTOC(GARG1);
 
+    handle_t   handle;
+
     printf("FREE_LOCK %p\n", lock);
     if (lock == NULL)
         return (DOSTRUE);  /* Freeing a NULL lock is a no-op */
-    sm_fclose(lock->fl_Key);
+
+    /*
+     * Only close the handle of a lock known to this volume: an invalid
+     * lock's key could be the handle of some other open lock or file.
+     */
+    handle = lock->fl_Key;
     if (FreeLock(lock) != 0) {
         gpack->dp_Res2 = ERROR_INVALID_LOCK;
         return (DOSFALSE);
     }
+    sm_fclose(handle);
     return (DOSTRUE);
 }
 
@@ -892,14 +933,13 @@ action_locate_object(void)
     LONG       access = GARG3;
     char      *name   = bname + 1;
     char       cho;
-    uint       mode;
     uint       rc;
     uint       type;
     handle_t   phandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
     handle_t   handle;
 
     /* Temporarily NIL-terminate name */
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
 
@@ -908,33 +948,30 @@ action_locate_object(void)
            (access == ACCESS_READ) ? "read" :
            (access == ACCESS_WRITE) ? "write" : "unknown");
 
-    switch (access) {
-        default:  // Some programs give invalid access mode
-        case ACCESS_READ:
-            mode = HM_MODE_READ;
-            break;
-        case ACCESS_WRITE:
-            mode = HM_MODE_WRITE;
-            break;
-    }
-
     if (*name == '\0')
         name = ".";
 
-    rc = fs_open(phandle, name, mode, access, &type, 0, &handle);
+    /*
+     * The lock's handle is always opened for read, even for an exclusive
+     * lock: no I/O is done through it, and exclusivity is enforced by the
+     * host lock bits (see fs_open()). Opening for write would fail for
+     * directories and write-protected files, which FFS can lock
+     * exclusively.
+     */
+    rc = fs_open(phandle, name, HM_MODE_READ, access, &type, 0, &handle);
     if ((rc != 0) && (rc != KM_STATUS_INUSE)) {
-        /* Attempt to open for stat */
-        rc = fs_open(phandle, name, mode | HM_MODE_READDIR, access, &type, 0,
+        /* Attempt to open for stat (for example, a file without read perms) */
+        rc = fs_open(phandle, name, HM_MODE_READDIR, access, &type, 0,
                      &handle);
     }
     *bname = cho;
     if (rc != 0) {
         printf("failed open with %x\n", rc);
-        gpack->dp_Res2 = (rc == KM_STATUS_INUSE) ? ERROR_OBJECT_IN_USE :
-                                                   ERROR_OBJECT_NOT_FOUND;
+        gpack->dp_Res2 = (rc == KM_STATUS_FAIL) ? ERROR_OBJECT_NOT_FOUND :
+                                                  km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
-    newlock = CreateLock(handle, phandle, GARG3);
+    newlock = CreateLock(handle, phandle, access, type);
     if (newlock == NULL)
         sm_fclose(handle);
     return (CTOB(newlock));
@@ -976,7 +1013,7 @@ action_make_link(void)
     }
 
     /* Temporarily NIL-terminate name */
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
 
@@ -1044,7 +1081,7 @@ action_parent(void)
         gpack->dp_Res2 = ERROR_DIR_NOT_FOUND;
         return (DOSFALSE);
     }
-    newlock = CreateLock(handle, 0, SHARED_LOCK);
+    newlock = CreateLock(handle, 0, SHARED_LOCK, type);
     if (newlock == NULL)
         sm_fclose(handle);
     return (CTOB(newlock));
@@ -1172,8 +1209,8 @@ action_rename_object(void)
     dhandle = (dlock == NULL) ? gvol->vl_handle : dlock->fl_Key;
 
     /* Temporarily NIL-terminate names (careful: order matters here) */
-    sbname = sname + *sbname;
-    dbname = dname + *dbname;
+    sbname = sname + (uint8_t) *sbname;
+    dbname = dname + (uint8_t) *dbname;
     scho = *sbname;
     dcho = *dbname;
     *sbname = '\0';
@@ -1249,7 +1286,7 @@ action_set_protect(void)
     handle_t   phandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
 
     /* Temporarily NIL-terminate name */
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
 
@@ -1359,7 +1396,7 @@ action_set_date(void)
      * This is October 10, 2024 according to date +%j
      */
 
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
     printf("SET_DATE %s %p %u.%u\n", name, ds, sec, nsec);
@@ -1394,7 +1431,7 @@ action_set_dates(void)
 
     sec = amiga_datestamp_to_unix_time(ds, &nsec);
 
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
     printf("SET_DATES %s %p %u.%u\n", name, ds, sec, nsec);
@@ -1432,7 +1469,7 @@ action_set_owner(void)
     uint       oid;
     uint       gid;
 
-    bname = name + *bname;
+    bname = name + (uint8_t) *bname;
     cho = *bname;
     *bname = '\0';
     printf("SET_OWNER %s %x\n", name, owner);
