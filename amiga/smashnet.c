@@ -1099,10 +1099,11 @@ device_begin_io(register struct SmashNetDevice *device __asm("a6"),
                 break;
             }
             /* Transmit to remote USB host */
-            uint8_t txbuf[SMASHNET_RAW_MTU + sizeof (hm_nreadwrite_t)];
+            uint8_t *txbuf = (uint8_t *) device->txbuf;
             ethhdr_t *hdr = (ethhdr_t *) (txbuf + sizeof (hm_nreadwrite_t));
             uint datalen;
 
+            ObtainSemaphore(&device->tx_lock);
             if (request->ios2_Req.io_Flags & SANA2IOF_RAW) {
                 datalen = request->ios2_DataLength;
                 if (opener == NULL || opener->copy_from_buff == NULL ||
@@ -1111,6 +1112,7 @@ device_begin_io(register struct SmashNetDevice *device __asm("a6"),
                                         datalen)) {
                     request_set_error(request, S2ERR_NO_RESOURCES,
                                       S2WERR_BUFF_ERROR);
+                    ReleaseSemaphore(&device->tx_lock);
                     break;
                 }
                 dbgpkt(device, "Tx", (uint8_t *) hdr, datalen);
@@ -1133,11 +1135,13 @@ device_begin_io(register struct SmashNetDevice *device __asm("a6"),
                                         request->ios2_DataLength)) {
                     request_set_error(request, S2ERR_NO_RESOURCES,
                                       S2WERR_BUFF_ERROR);
+                    ReleaseSemaphore(&device->tx_lock);
                     break;
                 }
 //              dbgpkt(device, "Tx", (uint8_t *) hdr, datalen);
                 sm_nwrite(NULL, txbuf, datalen, 1);
             }
+            ReleaseSemaphore(&device->tx_lock);
             break;
 
         case S2_DEVICEQUERY:
@@ -1858,6 +1862,7 @@ smashnet_device_setup(struct SmashNetDevice *device,
     NewList(&device->read_queue);
     NewList(&device->orphan_queue);
     NewList(&device->event_queue);
+    InitSemaphore(&device->tx_lock);
 
 #ifdef SMASHNET_DEVICE
     /*
