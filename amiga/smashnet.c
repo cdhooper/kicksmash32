@@ -1606,6 +1606,17 @@ rx_task_entry(void)
 
     timer_mask = smashnet_signal_mask(timer_port->mp_SigBit);
 
+    /*
+     * Reach Kicksmash through a cache-inhibited MMU alias of the ROM if
+     * possible, so that transfers need not turn off the data cache and
+     * the MMU. Falls back to doing that if the alias can't be set up.
+     */
+    if (sm_rom_alias_open() != 0) {
+        queue_debug(context, "ROM alias on", NULL, (ULONG)-1, 0, 0);
+    } else {
+        queue_debug(context, "ROM alias off", NULL, (ULONG)-1, 0, 0);
+    }
+
 #ifdef SMASHNET_DEVICE
     /* Runs here, on this task's stack, not on ramlib's */
     if (context->device != NULL) {
@@ -1692,6 +1703,9 @@ rx_task_entry(void)
     }
     sm_nreadtag_free();  /* Before host_msg_exit(), which drops msg_sem */
     host_msg_exit();
+#endif
+    sm_rom_alias_close();
+#ifdef SMASHNET_DEVICE
     smashnet_drain_debug(context);
 #endif
 

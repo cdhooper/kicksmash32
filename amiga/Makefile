@@ -44,7 +44,7 @@ SWITCH_SRCS  := romswitch.c sm_msg.c cpu_control.c printf.c \
 #   smashnet         program which installs a transient smashnet.device
 #   smashnet.device  disk-loadable driver (-DSMASHNET_DEVICE, objs.drv/)
 NET_COMMON   := smashnet.c sm_msg.c cpu_control.c printf.c \
-		sm_msg_core.c sm_net.c $(CRC32_C)
+		sm_msg_core.c sm_net.c sm_rom_alias.c $(CRC32_C)
 NET_SRCS     := smashnet_prg.c $(NET_COMMON) fs_rom_end.c
 NETDRV_SRCS  := smashnet_drv.c $(NET_COMMON)
 NET_HDRS     := smashnet.h sana2.h
