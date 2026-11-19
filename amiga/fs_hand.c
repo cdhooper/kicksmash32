@@ -27,6 +27,7 @@
 #include "fs_hand.h"
 #include "fs_vol.h"
 #include "fs_timer.h"
+#include "fs_packet.h"
 
 #define DIRBUF_SIZE 2000
 #define SHUTDOWN_MAX_SECS 60  // Max wait at exit for locks to be released
@@ -307,6 +308,7 @@ show_usage:
     handle_messages();
 
     timer_close();
+    fs_packet_cleanup();
     printf("smashfs exit\n");
 go_exit:
     host_msg_exit();  // I don't know why atexit() doesn't work

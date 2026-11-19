@@ -1617,6 +1617,35 @@ action_undisk_info(void)
     return (DOSTRUE);
 }
 
+/*
+ * Private buffer for ACTION_WRITE data (see action_write()), with room for
+ * the hm_freadwrite_t message header in front of the data. It is allocated
+ * on first use and kept until the handler exits.
+ */
+#ifndef WRITE_BOUNCE_SIZE
+#define WRITE_BOUNCE_SIZE (64 * 1024)
+#endif
+#define WRITE_BOUNCE_MIN  (4 * 1024)   // Fallback if memory is short
+static uint8_t *write_bounce      = NULL;
+static uint     write_bounce_size = 0;
+
+static uint8_t *
+write_bounce_get(void)
+{
+    uint size;
+
+    if (write_bounce != NULL)
+        return (write_bounce);
+    for (size = WRITE_BOUNCE_SIZE; size >= WRITE_BOUNCE_MIN; size /= 4) {
+        write_bounce = AllocMem(size + sizeof (hm_freadwrite_t), MEMF_PUBLIC);
+        if (write_bounce != NULL) {
+            write_bounce_size = size;
+            break;
+        }
+    }
+    return (write_bounce);
+}
+
 static ULONG
 action_write(void)
 {
@@ -1637,19 +1666,51 @@ action_write(void)
     printf("WRITE %x buf=%p at pos=%llx len=%x\n",
            handle, buf, fp->fp_pos_cur, len);
 
-    rc = sm_fwrite(handle, buf, len, 0, 0);
-    if (rc != 0) {
-        printf("sm_fwrite(%x) got %d at pos=%llx, count=%x\n",
-               handle, rc, fp->fp_pos_cur, count);
-        gpack->dp_Res2 = km_status_to_amiga_error(rc);
+    /*
+     * The message layer temporarily writes message headers into the
+     * buffer being sent (sm_fwrite() and host_send_msg()). The caller's
+     * buffer must not be modified: it may be in ROM or write-protected
+     * memory, or be read by another task at the same time. Data is
+     * therefore copied into a private buffer which has room for the
+     * message header, and sent in chunks of up to that buffer's size.
+     */
+    if (write_bounce_get() == NULL) {
+        gpack->dp_Res2 = ERROR_NO_FREE_STORE;
         return ((ULONG) -1);
     }
-    count = len;
-    fp->fp_pos_cur += len;
-    if (fp->fp_pos_max < fp->fp_pos_cur)
-        fp->fp_pos_max = fp->fp_pos_cur;
+    while (count < (uint) len) {
+        uint chunk = (uint) len - count;
+        if (chunk > write_bounce_size)
+            chunk = write_bounce_size;
+        memcpy(write_bounce + sizeof (hm_freadwrite_t), buf + count, chunk);
+        rc = sm_fwrite(handle, write_bounce, chunk, 1, 0);
+        if (rc != 0) {
+            printf("sm_fwrite(%x) got %d at pos=%llx, count=%x\n",
+                   handle, rc, fp->fp_pos_cur, count);
+            gpack->dp_Res2 = km_status_to_amiga_error(rc);
+            return ((ULONG) -1);
+        }
+        count          += chunk;
+        fp->fp_pos_cur += chunk;
+        if (fp->fp_pos_max < fp->fp_pos_cur)
+            fp->fp_pos_max = fp->fp_pos_cur;
+    }
 
     return (count);
+}
+
+/*
+ * fs_packet_cleanup
+ * -----------------
+ * Releases resources held by packet handling, at handler exit.
+ */
+void
+fs_packet_cleanup(void)
+{
+    if (write_bounce != NULL) {
+        FreeMem(write_bounce, write_bounce_size + sizeof (hm_freadwrite_t));
+        write_bounce = NULL;
+    }
 }
 
 void

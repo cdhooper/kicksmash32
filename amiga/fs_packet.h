@@ -15,6 +15,7 @@
 #include "fs_vol.h"
 
 void handle_packet(void);
+void fs_packet_cleanup(void);
 
 extern struct DosPacket *gpack;  // current packet being processed
 
