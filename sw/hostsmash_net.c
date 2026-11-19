@@ -1384,8 +1384,12 @@ sm_nclose(hm_nopenhandle_t *hm, uint *status)
 uint
 sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
 {
-    uint     hm_length = SWAP16(hm->hm_length);  // Amiga is big-endian
+    uint     hm_length = 0;
     uint8_t *ndata     = (uint8_t *)(hm + 1);
+
+    /* rxlen includes the message header; the frame follows it */
+    if (rxlen >= sizeof (*hm))
+        hm_length = SWAP16(hm->hm_length);  // Amiga is big-endian
 
     netprintf("NWRITE(l=%u rl=%u)", hm_length, rxlen);
     if (netif_start()) {
@@ -1394,13 +1398,20 @@ sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
         return (send_msg(hm, sizeof (*hm), status));
     }
     netif_capture = 1;
-    /* rxlen includes the message header; the frame follows it */
-    if (rxlen < sizeof (*hm))
-        hm_length = 0;
-    else if (hm_length > rxlen - sizeof (*hm))
-        hm_length = rxlen - sizeof (*hm);
-    if (hm_length > 1522) // DEBUG (max ethernet non-Jumbo frame)
-        hm_length = 1522;
+
+    /*
+     * Drop, rather than truncate, a frame which is longer than the data
+     * actually received or than a maximum non-jumbo Ethernet frame.
+     * A truncated frame would go out with IP/TCP lengths that don't
+     * match its size, and the peer would see corrupt traffic.
+     */
+    if ((rxlen < sizeof (*hm)) || (hm_length > rxlen - sizeof (*hm)) ||
+        (hm_length > 1522)) {
+        printf("NWRITE: bad frame length %u (received %u), dropped\n",
+               hm_length, rxlen);
+        *status = KS_STATUS_OK;  // No reply sent; not an error
+        return (0);
+    }
 #ifdef DUMP_PACKET
     dump_packet(ndata, hm_length);
 #else
