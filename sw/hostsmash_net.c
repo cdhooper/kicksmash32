@@ -15,6 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <signal.h>
 #include <time.h>
 #include <pthread.h>
@@ -45,6 +46,7 @@ const char      *netif_arg;            // Arguments for the netif program
 static volatile uint netif_getmac = 0; // GETMAC pending from device
 static volatile uint netif_up = 0;     // Network interface is up
 static int       netif_write_fd = -1;  // Pipe end to write TO the gateway
+static pthread_mutex_t netif_write_lock = PTHREAD_MUTEX_INITIALIZER;
 static int       netif_read_fd = -1;   // Pipe end to read FROM the gateway
 static int       netif_capture = 0;    // Capture packets from net
 static uint8_t   netif_hw_mac[6];      // Cached MAC from lower level
@@ -561,22 +563,45 @@ udp_set_len(uint8_t *packet, uint packet_len)
 
 /*
  * netif_write() performs a packet write to the network pipe
+ *
+ * The length prefix and the frame are assembled into one buffer and
+ * written out as a unit while holding netif_write_lock. This function
+ * is called both from the main thread (NWRITE, SETMAC, netif_start)
+ * and from netif_read_thread() (GETMAC replies), so writing the prefix
+ * and frame separately would let another thread's message land between
+ * them, and the helper would lose frame sync for good.
  */
 static void
 netif_write(uint xmit_len, uint frame_len, uint8_t *frame)
 {
-    if (!netif_up || (netif_write_fd < 0))
-        return;
-
+    uint8_t  buf[sizeof (uint16_t) + NETIF_MAX_FRAME];
     uint16_t len_prefix = (uint16_t) xmit_len;
+    size_t   total;
+    size_t   done = 0;
 
-    int written;
-    written = write(netif_write_fd, &len_prefix, sizeof (len_prefix));
-    if (written < 0)
-        perror("write(tap_fd) len failed");
-    write(netif_write_fd, frame, frame_len);
-    if (written < 0)
-        perror("write(tap_fd) frame failed");
+    if (frame_len > NETIF_MAX_FRAME) {
+        printf("netif_write: frame too long (%u bytes), dropped\n",
+               frame_len);
+        return;
+    }
+    memcpy(buf, &len_prefix, sizeof (len_prefix));
+    memcpy(buf + sizeof (len_prefix), frame, frame_len);
+    total = sizeof (len_prefix) + frame_len;
+
+    pthread_mutex_lock(&netif_write_lock);
+    if (netif_up && (netif_write_fd >= 0)) {
+        while (done < total) {
+            ssize_t rc = write(netif_write_fd, buf + done, total - done);
+            if (rc < 0) {
+                if (errno == EINTR)
+                    continue;
+                perror("write to netif pipe failed");
+                break;
+            }
+            done += rc;
+        }
+    }
+    pthread_mutex_unlock(&netif_write_lock);
 }
 
 static void
