@@ -15,6 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <signal.h>
 #include <time.h>
 #include <pthread.h>
@@ -45,6 +46,7 @@ const char      *netif_arg;            // Arguments for the netif program
 static volatile uint netif_getmac = 0; // GETMAC pending from device
 static volatile uint netif_up = 0;     // Network interface is up
 static int       netif_write_fd = -1;  // Pipe end to write TO the gateway
+static pthread_mutex_t netif_write_lock = PTHREAD_MUTEX_INITIALIZER;
 static int       netif_read_fd = -1;   // Pipe end to read FROM the gateway
 static int       netif_capture = 0;    // Capture packets from net
 static uint8_t   netif_hw_mac[6];      // Cached MAC from lower level
@@ -561,22 +563,45 @@ udp_set_len(uint8_t *packet, uint packet_len)
 
 /*
  * netif_write() performs a packet write to the network pipe
+ *
+ * The length prefix and the frame are assembled into one buffer and
+ * written out as a unit while holding netif_write_lock. This function
+ * is called both from the main thread (NWRITE, SETMAC, netif_start)
+ * and from netif_read_thread() (GETMAC replies), so writing the prefix
+ * and frame separately would let another thread's message land between
+ * them, and the helper would lose frame sync for good.
  */
 static void
 netif_write(uint xmit_len, uint frame_len, uint8_t *frame)
 {
-    if (!netif_up || (netif_write_fd < 0))
-        return;
-
+    uint8_t  buf[sizeof (uint16_t) + NETIF_MAX_FRAME];
     uint16_t len_prefix = (uint16_t) xmit_len;
+    size_t   total;
+    size_t   done = 0;
 
-    int written;
-    written = write(netif_write_fd, &len_prefix, sizeof (len_prefix));
-    if (written < 0)
-        perror("write(tap_fd) len failed");
-    write(netif_write_fd, frame, frame_len);
-    if (written < 0)
-        perror("write(tap_fd) frame failed");
+    if (frame_len > NETIF_MAX_FRAME) {
+        printf("netif_write: frame too long (%u bytes), dropped\n",
+               frame_len);
+        return;
+    }
+    memcpy(buf, &len_prefix, sizeof (len_prefix));
+    memcpy(buf + sizeof (len_prefix), frame, frame_len);
+    total = sizeof (len_prefix) + frame_len;
+
+    pthread_mutex_lock(&netif_write_lock);
+    if (netif_up && (netif_write_fd >= 0)) {
+        while (done < total) {
+            ssize_t rc = write(netif_write_fd, buf + done, total - done);
+            if (rc < 0) {
+                if (errno == EINTR)
+                    continue;
+                perror("write to netif pipe failed");
+                break;
+            }
+            done += rc;
+        }
+    }
+    pthread_mutex_unlock(&netif_write_lock);
 }
 
 static void
@@ -678,6 +703,38 @@ netif_mark_down(void)
 }
 
 /*
+ * netif_read_full() reads exactly len bytes from the network pipe.
+ *                   If buf is NULL, the bytes are read and discarded.
+ *                   Returns 0 on success, -1 on EOF or read error.
+ */
+static int
+netif_read_full(uint8_t *buf, size_t len)
+{
+    uint8_t discard[256];
+
+    while (len > 0) {
+        uint8_t *dst = (buf != NULL) ? buf : discard;
+        size_t   want = len;
+        ssize_t  r;
+
+        if ((buf == NULL) && (want > sizeof (discard)))
+            want = sizeof (discard);
+        r = read(netif_read_fd, dst, want);
+        if (r < 0) {
+            if (errno == EINTR)
+                continue;
+            return (-1);
+        }
+        if (r == 0)
+            return (-1);
+        if (buf != NULL)
+            buf += r;
+        len -= r;
+    }
+    return (0);
+}
+
+/*
  * netif_read_thread() is a thread function which performs packet reads from
  *                     the network pipe and queues those packets for
  *                     processing.
@@ -686,56 +743,44 @@ static void *
 netif_read_thread(void *arg)
 {
     (void) arg;
-    uint8_t buf[2048]; // Oversized to fit maximum MTU frame
+    uint8_t  buf[NETIF_MAX_FRAME];
     uint16_t frame_len;
     uint     read_len;
 
     /* Loop until the pipeline hits EOF or thread is terminated */
     while (netif_up) {
         /* Read the 2-byte frame length prefix */
-        size_t bytes_read = 0;
-        while (bytes_read < sizeof (frame_len)) {
-            ssize_t r = read(netif_read_fd, ((char *)&frame_len) + bytes_read,
-                             sizeof (frame_len) - bytes_read);
-            if (r <= 0)
-                goto read_thread_exit;
-            bytes_read += r;
-        }
+        if (netif_read_full((uint8_t *)&frame_len, sizeof (frame_len)))
+            break;
 
-        if (frame_len <= sizeof (buf)) {
-            read_len = frame_len;
-
+        if ((frame_len >> 8) == 0xff) {
+            /* Special case: command */
+            read_len = frame_len & 0xff;
+            if (netif_read_full(buf, read_len))
+                break;
+            if (read_len > 0)
+                handle_cmd(buf, read_len);
+        } else if (frame_len <= sizeof (buf)) {
             /* Read the raw Ethernet frame payload */
-            bytes_read = 0;
-            while (bytes_read < read_len) {
-                ssize_t r = read(netif_read_fd, buf + bytes_read,
-                                 read_len - bytes_read);
-                if (r <= 0)
-                    goto read_thread_exit;
-                bytes_read += r;
-            }
+            read_len = frame_len;
+            if (netif_read_full(buf, read_len))
+                break;
 
             if (netif_capture) {
                 /* Send received packet to Amiga */
                 sm_queue_packet(buf, read_len);
             }
-        } else if ((frame_len >> 8) == 0xff) {
-            /* Special case: command */
-            read_len = frame_len & 0xff;
-
-            /* Read the command payload */
-            bytes_read = 0;
-            while (bytes_read < read_len) {
-                ssize_t r = read(netif_read_fd, buf + bytes_read,
-                                 read_len - bytes_read);
-                if (r <= 0)
-                    goto read_thread_exit;
-                bytes_read += r;
-            }
-            handle_cmd(buf, read_len);
+        } else {
+            /*
+             * Too large to buffer. Consume and discard the payload so
+             * that the next length prefix is read from the right place.
+             */
+            printf("netif: frame too long (%u bytes), dropped\n",
+                   frame_len);
+            if (netif_read_full(NULL, frame_len))
+                break;
         }
     }
-read_thread_exit:
     netif_mark_down();
     return (NULL);
 }
@@ -1359,8 +1404,12 @@ sm_nclose(hm_nopenhandle_t *hm, uint *status)
 uint
 sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
 {
-    uint     hm_length = SWAP16(hm->hm_length);  // Amiga is big-endian
+    uint     hm_length = 0;
     uint8_t *ndata     = (uint8_t *)(hm + 1);
+
+    /* rxlen includes the message header; the frame follows it */
+    if (rxlen >= sizeof (*hm))
+        hm_length = SWAP16(hm->hm_length);  // Amiga is big-endian
 
     netprintf("NWRITE(l=%u rl=%u)", hm_length, rxlen);
     if (netif_start()) {
@@ -1369,13 +1418,20 @@ sm_nwrite(hm_nreadwrite_t *hm, uint *status, uint rxlen)
         return (send_msg(hm, sizeof (*hm), status));
     }
     netif_capture = 1;
-    /* rxlen includes the message header; the frame follows it */
-    if (rxlen < sizeof (*hm))
-        hm_length = 0;
-    else if (hm_length > rxlen - sizeof (*hm))
-        hm_length = rxlen - sizeof (*hm);
-    if (hm_length > 1522) // DEBUG (max ethernet non-Jumbo frame)
-        hm_length = 1522;
+
+    /*
+     * Drop, rather than truncate, a frame which is longer than the data
+     * actually received or than a maximum non-jumbo Ethernet frame.
+     * A truncated frame would go out with IP/TCP lengths that don't
+     * match its size, and the peer would see corrupt traffic.
+     */
+    if ((rxlen < sizeof (*hm)) || (hm_length > rxlen - sizeof (*hm)) ||
+        (hm_length > 1522)) {
+        printf("NWRITE: bad frame length %u (received %u), dropped\n",
+               hm_length, rxlen);
+        *status = KS_STATUS_OK;  // No reply sent; not an error
+        return (0);
+    }
 #ifdef DUMP_PACKET
     dump_packet(ndata, hm_length);
 #else
