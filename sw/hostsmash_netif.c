@@ -603,6 +603,37 @@ get_timestamp_str(void)
     return (buf);
 }
 
+/*
+ * upstream_frame() handles one message received from hostsmash on stdin:
+ *                  either an Ethernet frame to transmit, or a command
+ *                  (length prefix 0xffXX).
+ */
+static void
+upstream_frame(uint16_t frame_len, const uint8_t *data, uint len)
+{
+    uint8_t buf[NETIF_MAX_FRAME];
+
+    /* Private copy: handle_cmd() builds its reply in place */
+    memcpy(buf, data, len);
+
+    if ((frame_len >> 8) == 0xff) {
+        if (g_debug)
+            fprintf(stderr, ">> %s send CMD l=%u\n",
+                    get_timestamp_str(), len);
+        if (len > 0)
+            handle_cmd(buf, len);
+    } else {
+        if (g_debug)
+            fprintf(stderr, ">> %s send %u\n", get_timestamp_str(), len);
+#ifdef DUMP_FULL_PACKET
+        dump_packet(buf, len);
+#endif
+        if (g_be->write_frame(buf, len) < 0) {
+            /* error already logged by the backend */
+        }
+    }
+}
+
 #ifdef __MINGW32__
 /*
  * Windows has no poll() that can wait on both an Npcap capture handle
@@ -670,40 +701,126 @@ win_capture_thread(LPVOID arg)
 static DWORD WINAPI
 win_stdin_thread(LPVOID arg)
 {
-    unsigned char buffer[2000];
+    unsigned char buffer[NETIF_MAX_FRAME];
     uint16_t frame_len;
 
     (void) arg;
     while (keep_running) {
+        uint read_len;
+
         /* Read the length prefix first */
         if (fread(&frame_len, sizeof (frame_len), 1, stdin) != 1)
             break;   /* EOF, broken pipe, or CancelSynchronousIo() */
 
-        if (frame_len <= sizeof (buffer)) {
-            if (g_debug)
-                fprintf(stderr, ">> %s send %u\n",
-                        get_timestamp_str(), frame_len);
-            size_t nread = fread(buffer, 1, frame_len, stdin);
-#ifdef DUMP_FULL_PACKET
-            dump_packet(buffer, frame_len);
-#endif
-            if (nread == frame_len)
-                g_be->write_frame(buffer, nread);
-        } else if ((frame_len >> 8) == 0xff) {
-            /* Special case: command */
-            uint   read_len = frame_len & 0xff;
-            if (g_debug)
-                fprintf(stderr, ">> %s send CMD l=%u\n",
-                        get_timestamp_str(), read_len);
-            size_t nread    = fread(buffer, 1, read_len, stdin);
-            if (nread == read_len)
-                handle_cmd(buffer, read_len);
+        if ((frame_len >> 8) == 0xff) {
+            read_len = frame_len & 0xff;   /* Special case: command */
+        } else if (frame_len <= sizeof (buffer)) {
+            read_len = frame_len;
+        } else {
+            /*
+             * Too large to buffer. Consume and discard the payload so
+             * that the next length prefix is read from the right place.
+             */
+            uint left = frame_len;
+            fprintf(stderr, "frame too long (%u bytes), dropped\n",
+                    frame_len);
+            while (left > 0) {
+                uint chunk = (left < sizeof (buffer)) ? left :
+                                                        sizeof (buffer);
+                if (fread(buffer, 1, chunk, stdin) != chunk)
+                    goto stdin_eof;
+                left -= chunk;
+            }
+            continue;
         }
+
+        if (fread(buffer, 1, read_len, stdin) != read_len)
+            break;
+        upstream_frame(frame_len, buffer, read_len);
     }
+stdin_eof:
     keep_running = 0;
     return (0);
 }
 #endif /* __MINGW32__ */
+
+#ifndef __MINGW32__
+/*
+ * stdin_read_frames() is called when poll() reports stdin readable. It
+ *                     does a single read() of whatever is available,
+ *                     which cannot block, appends it to a reassembly
+ *                     buffer, and handles every complete message found
+ *                     there. A partial message stays buffered until the
+ *                     rest arrives, so the poll loop is never held up
+ *                     waiting on the pipe, and back-to-back messages
+ *                     which arrive in one read are all handled at once.
+ *
+ * Returns 0 to keep going, or -1 on EOF or a read error.
+ */
+static int
+stdin_read_frames(void)
+{
+    static uint8_t in_buf[sizeof (uint16_t) + NETIF_MAX_FRAME];
+    static size_t  in_len;   // Bytes held in in_buf
+    static size_t  in_skip;  // Payload bytes of an oversized frame to drop
+    size_t         pos = 0;
+    ssize_t        r;
+
+    r = read(STDIN_FILENO, in_buf + in_len, sizeof (in_buf) - in_len);
+    if (r < 0) {
+        if ((errno == EINTR) || (errno == EAGAIN))
+            return (0);
+        perror("read from upstream failed");
+        return (-1);
+    }
+    if (r == 0)
+        return (-1);  /* hostsmash closed the pipe */
+    in_len += r;
+
+    while (pos < in_len) {
+        uint16_t frame_len;
+        size_t   need;
+
+        if (in_skip > 0) {
+            size_t n = in_len - pos;
+            if (n > in_skip)
+                n = in_skip;
+            pos     += n;
+            in_skip -= n;
+            continue;
+        }
+        if (in_len - pos < sizeof (frame_len))
+            break;
+        memcpy(&frame_len, in_buf + pos, sizeof (frame_len));
+
+        if ((frame_len >> 8) == 0xff) {
+            need = frame_len & 0xff;   /* Special case: command */
+        } else if (frame_len <= NETIF_MAX_FRAME) {
+            need = frame_len;
+        } else {
+            /*
+             * Too large to buffer. Drop the payload as it arrives so
+             * that the next length prefix is read from the right place.
+             */
+            fprintf(stderr, "frame too long (%u bytes), dropped\n",
+                    frame_len);
+            pos    += sizeof (frame_len);
+            in_skip = frame_len;
+            continue;
+        }
+        if (in_len - pos - sizeof (frame_len) < need)
+            break;  /* Incomplete; wait for the rest */
+
+        upstream_frame(frame_len, in_buf + pos + sizeof (frame_len), need);
+        pos += sizeof (frame_len) + need;
+    }
+
+    /* Keep any partial message at the start of the buffer */
+    memmove(in_buf, in_buf + pos, in_len - pos);
+    in_len -= pos;
+    return (0);
+}
+#endif /* ! __MINGW32__ */
 
 int
 main(int argc, char *argv[])
@@ -858,17 +975,6 @@ main(int argc, char *argv[])
     fds[1].fd = STDIN_FILENO;
     fds[1].events = POLLIN;
 
-    /*
-     * stdin must be unbuffered, because readiness is taken from poll()
-     * on the raw fd. A buffered fread() would pull every frame already
-     * waiting in the pipe into stdio's buffer, but only the first would
-     * be handled; poll() would then see an empty pipe and the rest would
-     * sit in the buffer until another frame happened to arrive. That
-     * stalls any burst of back-to-back frames from the Amiga, such as a
-     * TCP reply spanning several segments.
-     */
-    setvbuf(stdin, NULL, _IONBF, 0);
-
     g_be->get_mac(netif_hw_mac);
 
     uint16_t frame_len;
@@ -887,7 +993,12 @@ main(int argc, char *argv[])
             fprintf(stderr, "poll netif failed: %x\n", fds[0].revents);
             break;
         }
-        if (fds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        /*
+         * POLLHUP on stdin only means hostsmash closed its end; frames
+         * may still be queued in the pipe. Case B below keeps reading
+         * until read() returns EOF.
+         */
+        if (fds[1].revents & (POLLERR | POLLNVAL)) {
             fprintf(stderr, "poll upstream Tx failed: %x\n", fds[1].revents);
             break;
         }
@@ -917,38 +1028,11 @@ main(int argc, char *argv[])
             }
         }
 
-        /* Case B: Unprivileged program piped an Amiga frame via stdin */
-        if (fds[1].revents & POLLIN) {
-            /* Read the length prefix first */
-            if (fread(&frame_len, sizeof (frame_len), 1, stdin) == 1) {
-                if (frame_len <= sizeof (buffer)) {
-                    if (g_debug)
-                        fprintf(stderr, ">> %s send %u\n",
-                                get_timestamp_str(), frame_len);
-                    size_t nread = fread(buffer, 1, frame_len, stdin);
-#ifdef DUMP_FULL_PACKET
-                    dump_packet(buffer, frame_len);
-#endif
-                    if (nread == frame_len) {
-                        if (g_be->write_frame(buffer, nread) < 0) {
-                            /* error already logged by the backend */
-                        }
-                    }
-                } else if ((frame_len >> 8) == 0xff) {
-                    /* Special case: command */
-                    uint   read_len = frame_len & 0xff;
-                    if (g_debug)
-                        fprintf(stderr, ">> %s send CMD l=%u\n",
-                                get_timestamp_str(), read_len);
-                    size_t nread    = fread(buffer, 1, read_len, stdin);
-                    if (nread == read_len) {
-                        handle_cmd(buffer, read_len);
-                    }
-                }
-            } else {
-                /* If stdin hits EOF or breaks, drop out and clean up. */
+        /* Case B: Unprivileged program piped Amiga frames via stdin */
+        if (fds[1].revents & (POLLIN | POLLHUP)) {
+            /* If stdin hits EOF or breaks, drop out and clean up. */
+            if (stdin_read_frames())
                 break;
-            }
         }
     }
 
