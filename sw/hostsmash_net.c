@@ -703,6 +703,38 @@ netif_mark_down(void)
 }
 
 /*
+ * netif_read_full() reads exactly len bytes from the network pipe.
+ *                   If buf is NULL, the bytes are read and discarded.
+ *                   Returns 0 on success, -1 on EOF or read error.
+ */
+static int
+netif_read_full(uint8_t *buf, size_t len)
+{
+    uint8_t discard[256];
+
+    while (len > 0) {
+        uint8_t *dst = (buf != NULL) ? buf : discard;
+        size_t   want = len;
+        ssize_t  r;
+
+        if ((buf == NULL) && (want > sizeof (discard)))
+            want = sizeof (discard);
+        r = read(netif_read_fd, dst, want);
+        if (r < 0) {
+            if (errno == EINTR)
+                continue;
+            return (-1);
+        }
+        if (r == 0)
+            return (-1);
+        if (buf != NULL)
+            buf += r;
+        len -= r;
+    }
+    return (0);
+}
+
+/*
  * netif_read_thread() is a thread function which performs packet reads from
  *                     the network pipe and queues those packets for
  *                     processing.
@@ -711,56 +743,44 @@ static void *
 netif_read_thread(void *arg)
 {
     (void) arg;
-    uint8_t buf[2048]; // Oversized to fit maximum MTU frame
+    uint8_t  buf[NETIF_MAX_FRAME];
     uint16_t frame_len;
     uint     read_len;
 
     /* Loop until the pipeline hits EOF or thread is terminated */
     while (netif_up) {
         /* Read the 2-byte frame length prefix */
-        size_t bytes_read = 0;
-        while (bytes_read < sizeof (frame_len)) {
-            ssize_t r = read(netif_read_fd, ((char *)&frame_len) + bytes_read,
-                             sizeof (frame_len) - bytes_read);
-            if (r <= 0)
-                goto read_thread_exit;
-            bytes_read += r;
-        }
+        if (netif_read_full((uint8_t *)&frame_len, sizeof (frame_len)))
+            break;
 
-        if (frame_len <= sizeof (buf)) {
-            read_len = frame_len;
-
+        if ((frame_len >> 8) == 0xff) {
+            /* Special case: command */
+            read_len = frame_len & 0xff;
+            if (netif_read_full(buf, read_len))
+                break;
+            if (read_len > 0)
+                handle_cmd(buf, read_len);
+        } else if (frame_len <= sizeof (buf)) {
             /* Read the raw Ethernet frame payload */
-            bytes_read = 0;
-            while (bytes_read < read_len) {
-                ssize_t r = read(netif_read_fd, buf + bytes_read,
-                                 read_len - bytes_read);
-                if (r <= 0)
-                    goto read_thread_exit;
-                bytes_read += r;
-            }
+            read_len = frame_len;
+            if (netif_read_full(buf, read_len))
+                break;
 
             if (netif_capture) {
                 /* Send received packet to Amiga */
                 sm_queue_packet(buf, read_len);
             }
-        } else if ((frame_len >> 8) == 0xff) {
-            /* Special case: command */
-            read_len = frame_len & 0xff;
-
-            /* Read the command payload */
-            bytes_read = 0;
-            while (bytes_read < read_len) {
-                ssize_t r = read(netif_read_fd, buf + bytes_read,
-                                 read_len - bytes_read);
-                if (r <= 0)
-                    goto read_thread_exit;
-                bytes_read += r;
-            }
-            handle_cmd(buf, read_len);
+        } else {
+            /*
+             * Too large to buffer. Consume and discard the payload so
+             * that the next length prefix is read from the right place.
+             */
+            printf("netif: frame too long (%u bytes), dropped\n",
+                   frame_len);
+            if (netif_read_full(NULL, frame_len))
+                break;
         }
     }
-read_thread_exit:
     netif_mark_down();
     return (NULL);
 }
