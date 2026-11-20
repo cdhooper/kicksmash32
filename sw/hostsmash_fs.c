@@ -1465,6 +1465,11 @@ could_not_stat:
         hm->hm_hdr.km_status = errno_to_km_status();
         goto reply_open_fail;
     }
+    if ((hm_type == HM_TYPE_UNKNOWN) && (fstat(fd, &st) == 0)) {
+        /* Not opened for read, so not yet identified (seek needs this) */
+        hm_type = st_mode_to_hm_type(st.st_mode);
+        hm->hm_type = SWAP16(hm_type);
+    }
 
     handle = handle_new(name, "", phandle, hm_type, hm_mode);
     handle->he_fd = fd;

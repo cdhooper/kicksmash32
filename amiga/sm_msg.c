@@ -1089,7 +1089,11 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
         /* Try again, letting other tasks progress */
     }
     printf("Message receive timeout\n");
-    return (KM_STATUS_FAIL);
+    /*
+     * Not KM_STATUS_FAIL: that is a reply from the host. A timeout is a
+     * transport failure, so the caller can tell the link may be down.
+     */
+    return (MSG_STATUS_NO_REPLY);
 }
 
 /*

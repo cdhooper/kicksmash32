@@ -50,6 +50,26 @@ sm_fservice(void)
 }
 
 /*
+ * sm_check_service
+ * ----------------
+ * Checks the status of a host request. A status which did not come from
+ * the host (any KS_STATUS_* or MSG_STATUS_* value, such as a receive
+ * timeout) means the link or host service may be down, so the file
+ * service state is checked again. If the service is gone, later requests
+ * fail at once with KM_STATUS_UNAVAIL instead of each waiting for a
+ * timeout. Host replies (KM_STATUS_*) are all below 0x100.
+ *
+ * Returns the status unchanged.
+ */
+static uint
+sm_check_service(uint rc)
+{
+    if ((rc >= 0x100) && (rc != MSG_STATUS_NO_MEM))
+        (void) sm_fservice();
+    return (rc);
+}
+
+/*
  * sm_fopen
  * --------
  * Open the specified file, returning a file handle.
@@ -137,10 +157,7 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
     }
     free(msg);
 
-    if (rc == KS_STATUS_NODATA)
-        sm_fservice();  // Check if file service is still active
-
-    return (rc);
+    return (sm_check_service(rc));
 }
 
 /*
@@ -172,10 +189,7 @@ sm_fclose(handle_t handle)
         sm_mbuf = NULL;
     }
 
-    if (rc == KS_STATUS_NODATA)
-        sm_fservice();  // Check if file service is still active
-
-    return (rc);
+    return (sm_check_service(rc));
 }
 
 /*
@@ -271,9 +285,7 @@ sm_read_fail:
 
     host_tag_free(msg.hm_hdr.km_tag);
 
-    if (rc == KS_STATUS_NODATA)
-        sm_fservice();  // Check if file service is still active
-    return (rc);
+    return (sm_check_service(rc));
 }
 
 /*
@@ -352,9 +364,7 @@ sm_fwrite(handle_t handle, void *buf, uint writelen, uint padded_header,
     }
     host_tag_free(msg->hm_hdr.km_tag);
 
-    if (rc == KS_STATUS_NODATA)
-        sm_fservice();  // Check if file service is still active
-    return (rc);
+    return (sm_check_service(rc));
 }
 
 /*
@@ -381,7 +391,8 @@ sm_fpath(handle_t handle, char **name)
     msg.hm_hdr.km_status = 0;
     msg.hm_handle        = handle;
 
-    rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
+    rc = sm_check_service(host_msg(&msg, sizeof (msg), (void **) &rdata,
+                                   &rlen));
     if (rc == KM_STATUS_OK)
         *name = (char *)(rdata + 1);
 
@@ -423,7 +434,7 @@ sm_fdelete(handle_t handle, const char *name)
     msg->hm_handle        = handle;
     strcpy((char *)(msg + 1), name);  // Name follows message header
 
-    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    rc = sm_check_service(host_msg(msg, msglen, (void **) &rdata, &rlen));
     if (rc != KM_STATUS_OK)
         printf("Failed to delete %s: %s\n", name, smash_err(rc));
 
@@ -476,7 +487,7 @@ sm_frename(handle_t shandle, const char *name_old,
     strcpy((char *)(msg + 1), name_old);  // From name follows message header
     strcpy((char *)(msg + 1) + len_from, name_new);  // To name follows that
 
-    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    rc = sm_check_service(host_msg(msg, msglen, (void **) &rdata, &rlen));
     if (rc != KM_STATUS_OK) {
         printf("Failed to rename %s to %s: %s\n",
                name_old, name_new, smash_err(rc));
@@ -563,7 +574,7 @@ sm_fcreate(handle_t parent_handle, const char *name, const char *tgt_name,
     strcpy((char *)(msg + 1), name);  // Name follows message header
     strcpy((char *)(msg + 1) + namelen, tgt_name);  // Symlink target follows
 
-    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    rc = sm_check_service(host_msg(msg, msglen, (void **) &rdata, &rlen));
     if (rc != KM_STATUS_OK)
         printf("Failed to create %s: %s\n", name, smash_err(rc));
 
@@ -606,7 +617,8 @@ sm_fseek(handle_t handle, int seek_mode, uint64_t offset,
     msg.hm_unused1       = 0;
     msg.hm_unused2       = 0;
 
-    rc = host_msg(&msg, sizeof (msg), (void **) &rmsg, &rlen);
+    rc = sm_check_service(host_msg(&msg, sizeof (msg), (void **) &rmsg,
+                                   &rlen));
     if (rc != KM_STATUS_OK) {
         /* rmsg is not valid without a successful reply */
         printf("Failed to seek: %s\n", smash_err(rc));
@@ -679,7 +691,7 @@ sm_fsetdate(handle_t parent_handle, const char *name,
 
     strcpy((char *)(msg + 1), name);  // Name follows message header
 
-    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    rc = sm_check_service(host_msg(msg, msglen, (void **) &rdata, &rlen));
     if (rc != KM_STATUS_OK) {
         printf("Failed to set date %u.%u %s: %s\n",
                *sec, *nsec, name, smash_err(rc));
@@ -736,7 +748,7 @@ sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid)
 
     strcpy((char *)(msg + 1), name);  // Name follows message header
 
-    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    rc = sm_check_service(host_msg(msg, msglen, (void **) &rdata, &rlen));
     if (rc != KM_STATUS_OK) {
         printf("Failed to set owner %u.%u for %s: %s\n",
                oid, gid, name, smash_err(rc));
@@ -809,7 +821,7 @@ sm_fsetprotect(handle_t parent_handle, const char *name, uint perms)
 
     strcpy((char *)(msg + 1), name);  // Name follows message header
 
-    rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    rc = sm_check_service(host_msg(msg, msglen, (void **) &rdata, &rlen));
     if (rc != KM_STATUS_OK) {
         printf("Failed to set perms 0x%x for %s: %s\n",
                perms, name, smash_err(rc));

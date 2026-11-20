@@ -84,6 +84,7 @@ struct fh_private {
     handle_t      fp_handle;      /* KS file handle */
     uint64_t      fp_pos_cur;     /* Current file position */
     uint64_t      fp_pos_max;     /* Maximum file position */
+    uint8_t       fp_resync;      /* Host position may differ from cur */
 };
 
 typedef struct {
@@ -907,6 +908,7 @@ action_findinput(void)
     fp->fp_handle  = handle;
     fp->fp_pos_cur = 0;
     fp->fp_pos_max = 0;
+    fp->fp_resync  = 0;
 
     fh->fh_Port = NULL;            // Non-zero only if interactive
     fh->fh_Type = gvol->vl_msgport;   // Handler message port
@@ -975,6 +977,7 @@ action_findoutput(void)
     fp->fp_handle  = handle;
     fp->fp_pos_cur = 0;
     fp->fp_pos_max = 0;
+    fp->fp_resync  = 0;
 
     fh->fh_Port = NULL;            // Non-zero only if interactive
     fh->fh_Type = gvol->vl_msgport;   // Handler message port
@@ -1202,6 +1205,34 @@ action_parent(void)
     return (CTOB(newlock));
 }
 
+/*
+ * fp_resync_pos
+ * -------------
+ * After a failed read, the host's file position may be past the data which
+ * was actually delivered (a lost, corrupt, or rejected reply). The handle
+ * is then marked, and before the next read or seek, the host is moved
+ * back to the position of the data actually returned. This is done then,
+ * rather than right after the failure, so that a failure caused by the
+ * host being gone doesn't also wait for a seek to time out.
+ *
+ * Returns 0 if the host position is correct, or the sm_fseek() status.
+ */
+static uint
+fp_resync_pos(fh_private_t *fp)
+{
+    uint rc;
+
+    if (fp->fp_resync == 0)
+        return (0);
+    rc = sm_fseek(fp->fp_handle, OFFSET_BEGINNING, fp->fp_pos_cur, NULL, NULL);
+    if (rc == 0)
+        fp->fp_resync = 0;
+    else
+        printf("Failed to restore %x to pos=%llx\n",
+               fp->fp_handle, fp->fp_pos_cur);
+    return (rc);
+}
+
 static ULONG
 action_read(void)
 {
@@ -1222,6 +1253,12 @@ action_read(void)
         return (0);
     handle = fp->fp_handle;
     printf("READ %x at pos=%llx len=%x\n", handle, fp->fp_pos_cur, len);
+
+    rc = fp_resync_pos(fp);
+    if (rc != 0) {
+        gpack->dp_Res2 = km_status_to_amiga_error(rc);
+        return ((ULONG) -1);
+    }
 
     while (count < (uint) len) {
         uint remain = (uint) len - count;
@@ -1245,10 +1282,14 @@ action_read(void)
         if (rc == KM_STATUS_EOF)
             break;
     }
-    if ((rc != 0) && (rc != KM_STATUS_EOF) && (count == 0)) {
-        /* Error with nothing read; partial data is returned below */
-        gpack->dp_Res2 = km_status_to_amiga_error(rc);
-        return ((ULONG) -1);
+    if ((rc != 0) && (rc != KM_STATUS_EOF)) {
+        /* Host may have advanced past undelivered data: see fp_resync_pos() */
+        fp->fp_resync = 1;
+        if (count == 0) {
+            /* Error with nothing read; partial data is returned below */
+            gpack->dp_Res2 = km_status_to_amiga_error(rc);
+            return ((ULONG) -1);
+        }
     }
     return (count);  /* 0 at end of file */
 }
@@ -1366,6 +1407,12 @@ action_seek(void)
     handle = fp->fp_handle;
 
     printf("SEEK %x to %x mode %d\n", handle, offset, seek_mode);
+
+    /* OFFSET_CURRENT is relative to the host's position, so fix it first */
+    if (fp_resync_pos(fp) != 0) {
+        gpack->dp_Res2 = ERROR_SEEK_ERROR;
+        return ((ULONG) -1);
+    }
 
     /* Fix up bad apps (like 3.2.2 TextEdit) which supply other values */
     if (seek_mode < 0)
@@ -1666,6 +1713,13 @@ action_write(void)
     printf("WRITE %x buf=%p at pos=%llx len=%x\n",
            handle, buf, fp->fp_pos_cur, len);
 
+    /* A failed read may have left the host at another position */
+    rc = fp_resync_pos(fp);
+    if (rc != 0) {
+        gpack->dp_Res2 = km_status_to_amiga_error(rc);
+        return ((ULONG) -1);
+    }
+
     /*
      * The message layer temporarily writes message headers into the
      * buffer being sent (sm_fwrite() and host_send_msg()). The caller's
@@ -1687,6 +1741,15 @@ action_write(void)
         if (rc != 0) {
             printf("sm_fwrite(%x) got %d at pos=%llx, count=%x\n",
                    handle, rc, fp->fp_pos_cur, count);
+            /*
+             * The packet fails as a whole, so a retry will resend all of
+             * buf. Earlier chunks, and possibly this one if only the reply
+             * was lost, have already been written by the host. Rewind to
+             * the start of this write so that a retry overwrites the same
+             * range instead of appending a second copy.
+             */
+            fp->fp_pos_cur -= count;
+            fp->fp_resync = 1;
             gpack->dp_Res2 = km_status_to_amiga_error(rc);
             return ((ULONG) -1);
         }
