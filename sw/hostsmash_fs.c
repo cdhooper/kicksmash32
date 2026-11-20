@@ -87,6 +87,7 @@ timespec_to_timeval(struct timeval *tv, struct timespec *ts)
 #define mkdir(path, mode) mkdir(path)
 #define lstat(path, st) stat64(path, st)
 #define stat(path, st) stat64(path, st)
+#define fstat(fd, st) fstat64(fd, st)
 #undef stat
 #define stat stat64
 
