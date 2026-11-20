@@ -107,6 +107,8 @@ static input_mode_t   input_mode = INPUT_MODE_NORMAL;
 static uint           input_pos;
 static uint8_t        input_need_prompt;
 static char           input_buf[INPUT_BUF_MAX];
+static uint           input_tab_count;   /* Consecutive Tab key presses */
+static rl_completer_t rl_completer;      /* Command line completion func */
 
 
 /* ------------------------ Internal functions ------------------------ */
@@ -266,6 +268,269 @@ input_show_prompt(const char *prompt)
     fflush(stdout);
 }
 
+/*
+ * input_is_special
+ * ----------------
+ * Returns non-zero if the character must be escaped with a backslash
+ * to be taken literally as part of a command line argument.
+ */
+static uint
+input_is_special(char ch)
+{
+    switch (ch) {
+        case ' ':
+        case '\t':
+        case '"':
+        case '\'':
+        case '\\':
+        case ';':
+        case '&':
+        case '|':
+            return (1);
+    }
+    return (0);
+}
+
+/*
+ * input_lower
+ * -----------
+ * Converts an ASCII upper case letter to lower case. This is used instead
+ * of tolower(), which does not work as expected in clib2.
+ */
+static char
+input_lower(char ch)
+{
+    if ((ch >= 'A') && (ch <= 'Z'))
+        return (ch + ('a' - 'A'));
+    return (ch);
+}
+
+/*
+ * input_name_cmp
+ * --------------
+ * Compares two names, optionally without regard to case.
+ */
+static int
+input_name_cmp(const char *name1, const char *name2, uint nocase)
+{
+    while (*name1 != '\0') {
+        char ch1 = *name1;
+        char ch2 = *name2;
+        if (nocase) {
+            ch1 = input_lower(ch1);
+            ch2 = input_lower(ch2);
+        }
+        if (ch1 != ch2)
+            return ((uint8_t) ch1 - (uint8_t) ch2);
+        name1++;
+        name2++;
+    }
+    return (-(uint8_t) *name2);
+}
+
+/*
+ * input_show_matches
+ * ------------------
+ * Displays the final name component of each completion match, sorted,
+ * in columns. Directories are shown with a trailing '/'.
+ */
+static void
+input_show_matches(rl_match_t *matches, uint count, uint nocase)
+{
+    uint cur;
+    uint pos;
+    uint maxlen = 0;
+    uint cols;
+    uint rows;
+    uint row;
+    uint col;
+
+    /* Sort by name (insertion sort) */
+    for (cur = 1; cur < count; cur++) {
+        rl_match_t tmp = matches[cur];
+        for (pos = cur; pos > 0; pos--) {
+            if (input_name_cmp(matches[pos - 1].rm_name, tmp.rm_name,
+                               nocase) <= 0)
+                break;
+            matches[pos] = matches[pos - 1];
+        }
+        matches[pos] = tmp;
+    }
+
+    /* Trim the directory prefix from each name */
+    for (cur = 0; cur < count; cur++) {
+        char *name = matches[cur].rm_name;
+        char *ptr;
+        uint  len;
+        for (ptr = name; *ptr != '\0'; ptr++)
+            if ((*ptr == '/') || (*ptr == ':'))
+                name = ptr + 1;
+        if (name != matches[cur].rm_name)
+            memmove(matches[cur].rm_name, name, strlen(name) + 1);
+        len = strlen(matches[cur].rm_name) + matches[cur].rm_isdir;
+        if (maxlen < len)
+            maxlen = len;
+    }
+
+    cols = 79 / (maxlen + 2);
+    if (cols == 0)
+        cols = 1;
+    rows = (count + cols - 1) / cols;
+
+    putchar(KEY_NL);
+    for (row = 0; row < rows; row++) {
+        for (col = 0; col < cols; col++) {
+            uint len;
+            cur = col * rows + row;
+            if (cur >= count)
+                break;
+            printf("%s%s", matches[cur].rm_name,
+                   matches[cur].rm_isdir ? "/" : "");
+            len = strlen(matches[cur].rm_name) + matches[cur].rm_isdir;
+            if ((col + 1 < cols) && (cur + rows < count))
+                putchars(KEY_SPACE, maxlen + 2 - len);
+        }
+        putchar(KEY_NL);
+    }
+}
+
+/*
+ * input_complete
+ * --------------
+ * Handles the Tab key by completing the word before the cursor, using
+ * the registered completion function. If the matches have more in common
+ * than what has been typed, the common part is filled in. A unique match
+ * is followed by '/' for a directory or a space otherwise. If nothing
+ * can be filled in, a bell is sounded, and on the second consecutive Tab,
+ * all matches are displayed.
+ */
+static void
+input_complete(void)
+{
+    static char line[INPUT_BUF_MAX];  /* Static to reduce stack use */
+    static char word[INPUT_BUF_MAX];
+    static char repl[INPUT_BUF_MAX];
+    rl_match_t *matches;
+    uint        in_squotes = 0;
+    uint        in_dquotes = 0;
+    uint        wstart = 0;
+    uint        wlen = 0;
+    uint        rlen = 0;
+    uint        pos;
+    uint        cur;
+    uint        count;
+    uint        common;
+    uint        oldlen;
+    uint        taillen;
+    uint        nocase = 0;
+
+    if (rl_completer == NULL)
+        return;
+
+    /*
+     * Find the start of the word at the cursor, removing quoting.
+     * This follows the argument splitting rules of make_arglist().
+     */
+    for (pos = 0; pos < input_pos; pos++) {
+        char ch = input_buf[pos];
+        if (ch == '\\') {
+            if (pos + 1 < input_pos)
+                word[wlen++] = input_buf[++pos];
+            continue;
+        }
+        if ((ch == '\'') && !in_dquotes) {
+            in_squotes = !in_squotes;
+            continue;
+        }
+        if ((ch == '"') && !in_squotes) {
+            in_dquotes = !in_dquotes;
+            continue;
+        }
+        if (!in_squotes && !in_dquotes &&
+            ((ch == ' ') || (ch == '\t') || (ch == ';') ||
+             (ch == '&') || (ch == '|'))) {
+            wstart = pos + 1;
+            wlen = 0;
+            continue;
+        }
+        word[wlen++] = ch;
+    }
+    word[wlen] = '\0';
+    memcpy(line, input_buf, wstart);
+    line[wstart] = '\0';
+
+    count = rl_completer(line, word, &matches, &nocase);
+    if (count == 0) {
+        putchar(KEY_CTRL_G);
+        return;
+    }
+
+    /* Find the length the matches have in common */
+    common = strlen(matches[0].rm_name);
+    for (cur = 1; cur < count; cur++) {
+        const char *name = matches[cur].rm_name;
+        for (pos = 0; pos < common; pos++) {
+            char ch1 = name[pos];
+            char ch2 = matches[0].rm_name[pos];
+            if (nocase) {
+                ch1 = input_lower(ch1);
+                ch2 = input_lower(ch2);
+            }
+            if (ch1 != ch2)
+                break;
+        }
+        common = pos;
+    }
+
+    if ((count > 1) && (common <= wlen)) {
+        /* Nothing more can be filled in */
+        if (input_tab_count < 2) {
+            putchar(KEY_CTRL_G);
+        } else {
+            input_show_matches(matches, count, nocase);
+            input_need_prompt = 1;
+        }
+        goto complete_free;
+    }
+
+    /* Build the replacement word, escaping special characters */
+    for (pos = 0; pos < common; pos++) {
+        char ch = matches[0].rm_name[pos];
+        if (rlen + 3 >= sizeof (repl))
+            break;
+        if (input_is_special(ch))
+            repl[rlen++] = '\\';
+        repl[rlen++] = ch;
+    }
+    if (count == 1)
+        repl[rlen++] = matches[0].rm_isdir ? '/' : ' ';
+    repl[rlen] = '\0';
+
+    oldlen  = strlen(input_buf + wstart);
+    taillen = strlen(input_buf + input_pos);
+    if (wstart + rlen + taillen + 1 > sizeof (input_buf)) {
+        putchar(KEY_CTRL_G);  /* Does not fit in input buffer */
+        goto complete_free;
+    }
+
+    /* Replace the word and redisplay the line from the start of the word */
+    memmove(input_buf + wstart + rlen, input_buf + input_pos, taillen + 1);
+    memcpy(input_buf + wstart, repl, rlen);
+    putchars(KEY_BACKSPACE, input_pos - wstart);
+    putstr(input_buf + wstart);
+    if (oldlen > rlen + taillen) {
+        putchars(KEY_SPACE, oldlen - (rlen + taillen));
+        taillen = oldlen - rlen;
+    }
+    putchars(KEY_BACKSPACE, taillen);
+    input_pos = wstart + rlen;
+
+complete_free:
+    for (cur = 0; cur < count; cur++)
+        free(matches[cur].rm_name);
+    free(matches);
+}
+
 int
 get_new_input_line(const char *prompt, char **line)
 {
@@ -419,7 +684,16 @@ get_new_input_line(const char *prompt, char **line)
             goto literal_input;
     }
 
+    if (ch == KEY_TAB)
+        input_tab_count++;
+    else
+        input_tab_count = 0;
+
     switch (ch) {
+        case KEY_TAB:
+            /* Tab completes the word before the cursor */
+            input_complete();
+            break;
         case KEY_REDRAW1:
         case KEY_REDRAW2:
             /* ^L or ^R redraws line */
@@ -682,6 +956,12 @@ rl_bind_key(int key, const void *func)
     UNUSED(key);
     UNUSED(func);
     return (0);
+}
+
+void
+rl_set_completer(rl_completer_t func)
+{
+    rl_completer = func;
 }
 
 int

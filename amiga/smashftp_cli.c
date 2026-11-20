@@ -417,6 +417,165 @@ scan_int(const char *str, int *intval)
     return (RC_SUCCESS);
 }
 
+/*
+ * Command line completion of file names. The cmpl_list table specifies,
+ * by command name (from cmd_list), which kind of names are completed
+ * for that command's arguments.
+ */
+#define CMPL_LOCAL   0x01  // Complete local names
+#define CMPL_REMOTE  0x02  // Complete remote names
+#define CMPL_DIRS    0x04  // Complete only directory names
+#define CMPL_SKIP1   0x08  // First argument is not a name (chmod mode)
+#define CMPL_SWAP2   0x10  // Arguments after the first use the other side
+#define CMPL_DIRS2   0x20  // Arguments after the first complete only dirs
+
+typedef struct {
+    const char *cc_name;   // Command name, as found in cmd_list
+    uint        cc_flags;  // CMPL_* flags
+} cmpl_t;
+
+static const cmpl_t cmpl_list[] = {
+    { "cd",        CMPL_REMOTE | CMPL_DIRS },
+    { "chmod",     CMPL_REMOTE | CMPL_SKIP1 },
+    { "get",       CMPL_REMOTE | CMPL_SWAP2 | CMPL_DIRS2 },
+    { "delete",    CMPL_REMOTE },
+    { "dir",       CMPL_REMOTE },
+    { "lcd",       CMPL_LOCAL | CMPL_DIRS },
+    { "!cd",       CMPL_LOCAL | CMPL_DIRS },
+    { "lchmod",    CMPL_LOCAL | CMPL_SKIP1 },
+    { "!chmod",    CMPL_LOCAL | CMPL_SKIP1 },
+    { "ldelete",   CMPL_LOCAL },
+    { "ldir",      CMPL_LOCAL },
+    { "list",      CMPL_REMOTE },
+    { "llist",     CMPL_LOCAL },
+    { "lls",       CMPL_LOCAL },
+    { "!ls",       CMPL_LOCAL },
+    { "!list",     CMPL_LOCAL },
+    { "!dir",      CMPL_LOCAL },
+    { "lmkdir",    CMPL_LOCAL | CMPL_DIRS },
+    { "!mkdir",    CMPL_LOCAL | CMPL_DIRS },
+    { "lmakedir",  CMPL_LOCAL | CMPL_DIRS },
+    { "lmv",       CMPL_LOCAL | CMPL_DIRS2 },
+    { "!mv",       CMPL_LOCAL | CMPL_DIRS2 },
+    { "lln",       CMPL_LOCAL },
+    { "!ln",       CMPL_LOCAL },
+    { "ln",        CMPL_REMOTE },
+    { "lmakelink", CMPL_LOCAL },
+    { "makelink",  CMPL_REMOTE },
+    { "lrename",   CMPL_LOCAL | CMPL_DIRS2 },
+    { "!rename",   CMPL_LOCAL | CMPL_DIRS2 },
+    { "lrm",       CMPL_LOCAL },
+    { "!rm",       CMPL_LOCAL },
+    { "lrmdir",    CMPL_LOCAL | CMPL_DIRS },
+    { "!rmdir",    CMPL_LOCAL | CMPL_DIRS },
+    { "ls",        CMPL_REMOTE },
+    { "mkdir",     CMPL_REMOTE | CMPL_DIRS },
+    { "makedir",   CMPL_REMOTE | CMPL_DIRS },
+    { "mv",        CMPL_REMOTE | CMPL_DIRS2 },
+    { "protect",   CMPL_REMOTE | CMPL_SKIP1 },
+    { "lprotect",  CMPL_LOCAL | CMPL_SKIP1 },
+    { "put",       CMPL_LOCAL | CMPL_SWAP2 | CMPL_DIRS2 },
+    { "rename",    CMPL_REMOTE | CMPL_DIRS2 },
+    { "rm",        CMPL_REMOTE },
+    { "rmdir",     CMPL_REMOTE | CMPL_DIRS },
+};
+
+/*
+ * cmd_lookup
+ * ----------
+ * Returns the cmd_list entry for the specified command name, or NULL
+ * if there is no such command.
+ */
+static const cmd_t *
+cmd_lookup(const char *name)
+{
+    size_t cur;
+
+    for (cur = 0; cur < ARRAY_SIZE(cmd_list); cur++) {
+        int         cl_len  = cmd_list[cur].cl_len;
+        const char *cl_name = cmd_list[cur].cl_name;
+
+        if ((strcmp(name, cl_name) == 0) ||
+            ((cl_len != 0) && (strncmp(name, cl_name, cl_len) == 0))) {
+            return (&cmd_list[cur]);
+        }
+    }
+    return (NULL);
+}
+
+/*
+ * cli_complete
+ * ------------
+ * Command line completion function (see rl_set_completer()). The command
+ * and argument position of the word being completed are determined from
+ * the text which precedes it, and then matching local or remote names
+ * are collected.
+ */
+static uint
+cli_complete(const char *line, const char *word, rl_match_t **matches,
+             uint *nocase)
+{
+    char        *argv[MAX_ARGS];
+    const cmd_t *cmd;
+    uint         flags = 0;
+    uint         cur;
+    int          argc;
+    int          arg;
+    int          sarg = 0;
+    int          argnum = 0;
+
+    *matches = NULL;
+    if (word[0] == '-')
+        return (0);  // Option flag
+
+    argc = make_arglist(line, argv);
+
+    /* Find the start of the final command when there are multiple */
+    for (arg = 0; arg < argc; arg++) {
+        if ((strcmp(argv[arg], ";") == 0) ||
+            (strcmp(argv[arg], "&&") == 0) ||
+            (strcmp(argv[arg], "||") == 0)) {
+            sarg = arg + 1;
+        }
+    }
+    if (sarg >= argc)
+        goto complete_free;  // Completing a command name is not supported
+
+    cmd = cmd_lookup(argv[sarg]);
+    if (cmd == NULL)
+        goto complete_free;
+    for (cur = 0; cur < ARRAY_SIZE(cmpl_list); cur++) {
+        if (strcmp(cmd->cl_name, cmpl_list[cur].cc_name) == 0) {
+            flags = cmpl_list[cur].cc_flags;
+            break;
+        }
+    }
+    if (flags == 0)
+        goto complete_free;
+
+    /* Determine the argument number of the word, not counting options */
+    for (arg = sarg + 1; arg < argc; arg++)
+        if ((argv[arg][0] != '-') || (flags & CMPL_SKIP1))
+            argnum++;
+    argnum++;
+
+    if ((argnum == 1) && (flags & CMPL_SKIP1))
+        goto complete_free;
+    if ((argnum > 1) && (flags & CMPL_SWAP2))
+        flags ^= CMPL_LOCAL | CMPL_REMOTE;
+    if ((argnum > 1) && (flags & CMPL_DIRS2))
+        flags |= CMPL_DIRS;  // Destination: only directories
+
+    free_arglist(argc, argv);
+    *nocase = 1;  // Local and remote names are matched without case
+    return (complete_names(word, flags & CMPL_LOCAL, flags & CMPL_DIRS,
+                           matches));
+
+complete_free:
+    free_arglist(argc, argv);
+    return (0);
+}
+
 static rc_t
 cmd_exec_argv_single(int argc, char * const *argv)
 {
@@ -1052,7 +1211,7 @@ cmdline(void)
 
     /* Interactive user -- enable command editing and history */
     (void) rl_initialize();
-    (void) rl_bind_key('\t', rl_insert);  /* No auto-complete */
+    rl_set_completer(cli_complete);  /* Tab completes file names */
 
     using_history();
 

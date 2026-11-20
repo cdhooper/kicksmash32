@@ -37,6 +37,9 @@ rc_t cmd_time(int argc, char * const *argv);
 rc_t cmd_version(int argc, char * const *argv);
 rc_t parse_value(const char *arg, uint8_t *value, uint width);
 rc_t parse_addr(char * const **arg, int *argc, uint64_t *space, uint64_t *addr);
+struct rl_match;
+uint complete_names(const char *word, uint is_local, uint dirs_only,
+                    struct rl_match **matches);
 int is_user_abort(void);
 void clear_user_abort(void);
 

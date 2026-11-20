@@ -466,6 +466,9 @@ cmd_cd(int argc, char * const *argv)
 #define WILD_CHAR '*'  // Matches zero or more characters
 #define WILD_ONE  '?'  // Matches exactly one character
 
+/* Flags for remote_wild_scan() and local_wild_scan() */
+#define WILD_SCAN_QUIET 0x0001  // Do not report errors
+
 typedef rc_t (*wild_cb_t)(void *arg, const char *prefix, const char *name,
                           uint isdir, void *ent);
 
@@ -736,9 +739,12 @@ wild_check_prefix(const char *path, uint prefixlen)
  * of matches. The scan stops if cb() returns anything other than
  * RC_SUCCESS, and that value is returned. cb() must not send any remote
  * messages, as this would invalidate the directory entry being provided.
+ * Matching ignores case. Errors are not reported if WILD_SCAN_QUIET is
+ * set in flags.
  */
 static rc_t
-remote_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch)
+remote_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch,
+                 uint flags)
 {
     const char *pattern   = wild_split(path);
     uint        prefixlen = pattern - path;
@@ -766,12 +772,14 @@ remote_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch)
 
     rc = sm_fopen(cwd_handle, dirname, HM_MODE_READ, &type, 0, &handle);
     if (rc != KM_STATUS_OK) {
-        printf("Failed to open %s: %s\n", dirname, smash_err(rc));
+        if (!(flags & WILD_SCAN_QUIET))
+            printf("Failed to open %s: %s\n", dirname, smash_err(rc));
         scan_rc = RC_FAILURE;
         goto scan_free;
     }
     if (!hm_type_is_dir(type)) {
-        printf("%s is not a directory (%x)\n", dirname, type);
+        if (!(flags & WILD_SCAN_QUIET))
+            printf("%s is not a directory (%x)\n", dirname, type);
         sm_fclose(handle);
         scan_rc = RC_FAILURE;
         goto scan_free;
@@ -780,7 +788,9 @@ remote_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch)
     while (1) {
         rc = sm_fread(handle, DIRBUF_SIZE, (void **) &data, &rlen, 0);
         if ((rlen == 0) && (rc != KM_STATUS_EOF)) {
-            printf("Dir read of %s failed: %s\n", dirname, smash_err(rc));
+            if (!(flags & WILD_SCAN_QUIET))
+                printf("Dir read of %s failed: %s\n",
+                       dirname, smash_err(rc));
             scan_rc = RC_FAILURE;
             break;
         }
@@ -791,7 +801,9 @@ remote_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch)
             dent   = (hm_fdirent_t *)(((uintptr_t) data) + pos);
             entlen = dent->hmd_elen;
             if ((entlen == 0) || (entlen > 256)) {
-                printf("Corrupt entlen=%x in directory %s\n", entlen, dirname);
+                if (!(flags & WILD_SCAN_QUIET))
+                    printf("Corrupt entlen=%x in directory %s\n",
+                           entlen, dirname);
                 scan_rc = RC_FAILURE;
                 goto scan_done;
             }
@@ -833,7 +845,8 @@ scan_free:
  * See remote_wild_scan() for further information.
  */
 static rc_t
-local_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch)
+local_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch,
+                uint flags)
 {
     const char *pattern   = wild_split(path);
     uint        prefixlen = pattern - path;
@@ -858,17 +871,20 @@ local_wild_scan(const char *path, wild_cb_t cb, void *arg, uint *nmatch)
 
     lock = Lock(dirname, ACCESS_READ);
     if (lock == 0) {
-        printf("Failed to open %s\n", showname);
+        if (!(flags & WILD_SCAN_QUIET))
+            printf("Failed to open %s\n", showname);
         scan_rc = RC_FAILURE;
         goto scan_free;
     }
     if (Examine(lock, &fib) == 0) {
-        printf("%s can not be examined\n", showname);
+        if (!(flags & WILD_SCAN_QUIET))
+            printf("%s can not be examined\n", showname);
         scan_rc = RC_FAILURE;
         goto scan_unlock;
     }
     if (fib.fib_DirEntryType < 0) {
-        printf("%s is not a directory\n", showname);
+        if (!(flags & WILD_SCAN_QUIET))
+            printf("%s is not a directory\n", showname);
         scan_rc = RC_FAILURE;
         goto scan_unlock;
     }
@@ -928,9 +944,9 @@ wild_expand(const char *path, uint is_local, wild_list_t *wl)
     }
 
     if (is_local)
-        rc = local_wild_scan(path, wild_collect_cb, wl, &nmatch);
+        rc = local_wild_scan(path, wild_collect_cb, wl, &nmatch, 0);
     else
-        rc = remote_wild_scan(path, wild_collect_cb, wl, &nmatch);
+        rc = remote_wild_scan(path, wild_collect_cb, wl, &nmatch, 0);
 
     if ((rc == RC_SUCCESS) && (nmatch == 0)) {
         printf("No match for %s\n", path);
@@ -977,6 +993,105 @@ wild_first_dir(const char *path, uint is_local, char **name)
         return (RC_FAILURE);
     }
     return (RC_SUCCESS);
+}
+
+typedef struct {
+    wild_list_t wl;         // Collected matches
+    uint        is_local;   // Names are local (else remote)
+    uint        dirs_only;  // Collect only directories (and links)
+    uint        no_dot;     // Skip names which begin with '.'
+} complete_arg_t;
+
+/*
+ * complete_cb
+ * -----------
+ * Scan callback for complete_names() which collects matching names.
+ */
+static rc_t
+complete_cb(void *arg, const char *prefix, const char *name, uint isdir,
+            void *ent)
+{
+    complete_arg_t *ca = arg;
+
+    if (ca->no_dot && (name[0] == '.'))
+        return (RC_SUCCESS);
+    if (ca->dirs_only && !isdir) {
+        /* A remote link might be a directory, so it is also offered */
+        if (ca->is_local ||
+            (((hm_fdirent_t *) ent)->hmd_type != HM_TYPE_LINK)) {
+            return (RC_SUCCESS);
+        }
+    }
+    return (wild_collect_cb(&ca->wl, prefix, name, isdir, ent));
+}
+
+/*
+ * complete_names
+ * --------------
+ * Collects the local (is_local != 0) or remote names which begin with
+ * word, for command line completion. Each name returned is word's
+ * directory prefix followed by the matching entry name. If dirs_only is
+ * set, only directories (and remote links) are returned. Names beginning
+ * with '.' are only returned if the final component of word begins with
+ * '.'. Names are matched without regard to case.
+ *
+ * Returns the number of matches. If non-zero, the caller must free()
+ * each rm_name and then the *matches array.
+ */
+uint
+complete_names(const char *word, uint is_local, uint dirs_only,
+               rl_match_t **matches)
+{
+    complete_arg_t ca;
+    rl_match_t    *list;
+    char          *pattern;
+    uint           nmatch;
+    uint           cur;
+    uint           count;
+    rc_t           rc;
+
+    *matches = NULL;
+    if (has_wildcard(word))
+        return (0);
+    pattern = malloc(strlen(word) + 2);
+    if (pattern == NULL)
+        return (0);
+    strcpy(pattern, word);
+    strcat(pattern, "*");
+
+    ca.wl.wl_ent   = NULL;
+    ca.wl.wl_count = 0;
+    ca.wl.wl_alloc = 0;
+    ca.is_local    = is_local;
+    ca.dirs_only   = dirs_only;
+    ca.no_dot      = (*wild_split(word) != '.');
+
+    if (is_local) {
+        rc = local_wild_scan(pattern, complete_cb, &ca, &nmatch,
+                             WILD_SCAN_QUIET);
+    } else {
+        rc = remote_wild_scan(pattern, complete_cb, &ca, &nmatch,
+                              WILD_SCAN_QUIET);
+    }
+    free(pattern);
+
+    count = ca.wl.wl_count;
+    if ((rc != RC_SUCCESS) || (count == 0)) {
+        wild_list_free(&ca.wl);
+        return (0);
+    }
+    list = malloc(count * sizeof (*list));
+    if (list == NULL) {
+        wild_list_free(&ca.wl);
+        return (0);
+    }
+    for (cur = 0; cur < count; cur++) {
+        list[cur].rm_name  = ca.wl.wl_ent[cur].we_name;  // Take ownership
+        list[cur].rm_isdir = ca.wl.wl_ent[cur].we_isdir;
+    }
+    free(ca.wl.wl_ent);
+    *matches = list;
+    return (count);
 }
 
 /*
@@ -2293,7 +2408,7 @@ static rc_t
 lls_show_wild(const char *name, uint flags)
 {
     uint nmatch = 0;
-    rc_t rc = local_wild_scan(name, lls_wild_cb, &flags, &nmatch);
+    rc_t rc = local_wild_scan(name, lls_wild_cb, &flags, &nmatch, 0);
 
     if ((rc == RC_SUCCESS) && (nmatch == 0)) {
         printf("No match for %s\n", name);
@@ -2517,7 +2632,7 @@ static rc_t
 ls_show_wild(const char *name, uint flags)
 {
     uint nmatch = 0;
-    rc_t rc = remote_wild_scan(name, ls_wild_cb, &flags, &nmatch);
+    rc_t rc = remote_wild_scan(name, ls_wild_cb, &flags, &nmatch, 0);
 
     if ((rc == RC_SUCCESS) && (nmatch == 0)) {
         printf("No match for %s\n", name);
