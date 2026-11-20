@@ -1475,6 +1475,93 @@ get_file_fib(const char *filename, struct FileInfoBlock *fib)
     return (0);
 }
 
+static uint64_t diff_dstamp(struct DateStamp *ds1, struct DateStamp *ds2);
+
+/*
+ * Transfer progress display.  If a transfer runs longer than
+ * PROGRESS_DELAY_MS, the amount transferred and percent complete are
+ * shown after the file size, then updated in place (using backspaces)
+ * every PROGRESS_UPDATE_MS until the transfer finishes.
+ */
+#define PROGRESS_DELAY_MS  2000
+#define PROGRESS_UPDATE_MS 500
+
+typedef struct {
+    struct DateStamp start;  // Time transfer started
+    uint64_t         next;   // ms (since start) of next display update
+    uint64_t         total;  // Total bytes to transfer
+    uint             len;    // Length of progress text currently shown
+} progress_t;
+
+static void
+progress_start(progress_t *prog, uint64_t total)
+{
+    DateStamp(&prog->start);
+    prog->next  = PROGRESS_DELAY_MS;
+    prog->total = total;
+    prog->len   = 0;
+}
+
+static void
+progress_erase(progress_t *prog)
+{
+    uint count;
+    if (prog->len == 0)
+        return;
+    for (count = 0; count < prog->len; count++)
+        putchar('\b');
+    for (count = 0; count < prog->len; count++)
+        putchar(' ');
+    for (count = 0; count < prog->len; count++)
+        putchar('\b');
+    prog->len = 0;
+    fflush(stdout);
+}
+
+static void
+progress_update(progress_t *prog, uint64_t pos)
+{
+    struct DateStamp now;
+    uint64_t elapsed;
+    uint64_t total = prog->total;
+    uint64_t spos  = pos;
+    uint     percent;
+    uint     len;
+    uint     count;
+    char     buf[40];
+
+    DateStamp(&now);
+    elapsed = diff_dstamp(&now, &prog->start);
+    if (elapsed < prog->next)
+        return;
+    prog->next = elapsed + PROGRESS_UPDATE_MS;
+
+    /* Scale down to avoid 64-bit divide and 32-bit multiply overflow */
+    while ((total >> 24) != 0) {
+        total >>= 1;
+        spos  >>= 1;
+    }
+    percent = (total == 0) ? 100 : ((uint) spos * 100) / (uint) total;
+    if (percent > 100)
+        percent = 100;
+
+    sprintf(buf, " %u KB  %u%%", (uint) (pos >> 10), percent);
+    len = strlen(buf);
+
+    for (count = 0; count < prog->len; count++)
+        putchar('\b');
+    fputs(buf, stdout);
+    /* Blank any leftover characters from a longer previous display */
+    if (len < prog->len) {
+        for (count = len; count < prog->len; count++)
+            putchar(' ');
+        for (count = len; count < prog->len; count++)
+            putchar('\b');
+    }
+    prog->len = len;
+    fflush(stdout);
+}
+
 static rc_t
 get_file(const char *src, const char *dst)
 {
@@ -1494,6 +1581,7 @@ get_file(const char *src, const char *dst)
     uint64_t time_end;
     FILE    *fp;
     hm_fdirent_t *dent;
+    progress_t prog;
     struct DateStamp datestamp;
 
     rc = sm_fopen(cwd_handle, src, HM_MODE_READDIR, &type, 0, &handle);
@@ -1537,6 +1625,7 @@ get_file(const char *src, const char *dst)
     }
 
     rc = RC_SUCCESS;
+    progress_start(&prog, filesize);
     time_start = smash_time();
     while (pos < filesize) {
         if (is_user_abort()) {
@@ -1568,8 +1657,10 @@ failed_to_read:
         pos += rlen;
         if (rc != RC_SUCCESS)
             goto failed_to_read;
+        progress_update(&prog, pos);
     }
     time_end = smash_time();
+    progress_erase(&prog);
     diff = (uint) (time_end - time_start);
     if (flag_debug)
         printf("%u usec  ", diff);
@@ -3218,6 +3309,7 @@ put_file(const char *src, const char *dst)
     uint64_t pos = 0;
     uint64_t time_start;
     uint64_t time_end;
+    progress_t prog;
     struct FileInfoBlock fib;
 
     if (get_file_fib(src, &fib)) {
@@ -3254,8 +3346,10 @@ put_file(const char *src, const char *dst)
         printf("(%u bytes) ", (uint) filesize);
     else
         printf("(%u KB) ", (uint) ((filesize + 512) >> 10));
+    fflush(stdout);
 
     rc = RC_SUCCESS;
+    progress_start(&prog, filesize);
     time_start = smash_time();
     while (pos < filesize) {
         if (is_user_abort()) {
@@ -3284,9 +3378,11 @@ put_file(const char *src, const char *dst)
         }
 
         pos += bytes;
+        progress_update(&prog, pos);
     }
 
     time_end = smash_time();
+    progress_erase(&prog);
     diff = (uint) (time_end - time_start);
     if (flag_debug)
         printf("%u usec  ", diff);
