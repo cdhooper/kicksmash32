@@ -1131,7 +1131,7 @@ action_locate_object(void)
     *bname = cho;
     if (rc != 0) {
         printf("failed open with %x\n", rc);
-        gpack->dp_Res2 = km_status_to_amiga_error(rc);
+        gpack->dp_Res2 = km_status_to_amiga_read_error(rc);
         return (DOSFALSE);
     }
     newlock = CreateLock(handle, phandle, access, type);

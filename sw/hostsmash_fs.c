@@ -614,28 +614,34 @@ merge_amiga_paths(const char *base, const char *append)
     return (pathbuf);
 }
 
+/*
+ * convert_host_path_to_amiga_path() converts a relative host path in place
+ * to Amiga form. Each ".." component becomes "/" (Amiga parent), and "."
+ * and empty components are dropped.
+ */
 static void
 convert_host_path_to_amiga_path(char *path)
 {
-    char *ptr_s;
-    char *ptr_e;
-    char *ptr_copy = path;
+    char *src = path;
+    char *dst = path;
 
-    ptr_s = path;
-    ptr_e = strchr(ptr_s, '/');
-    while (ptr_e != NULL) {
-        uint elen = ptr_e - ptr_s;
-        if (strncmp(ptr_s, "..", elen) == 0) {
-            *(ptr_copy++) = '/';
-        } else {
-            strncpy(ptr_copy, ptr_s, elen + 1);
-            ptr_copy += elen + 1;
+    while (*src != '\0') {
+        char  *end  = strchr(src, '/');
+        size_t elen = (end != NULL) ? (size_t) (end - src) : strlen(src);
+
+        if ((elen == 2) && (src[0] == '.') && (src[1] == '.')) {
+            *(dst++) = '/';
+        } else if ((elen != 0) && ((elen != 1) || (src[0] != '.'))) {
+            memmove(dst, src, elen);
+            dst += elen;
+            if (end != NULL)
+                *(dst++) = '/';
         }
-        ptr_s = ptr_e + 1;
-        ptr_e = strchr(ptr_s, '/');
+        if (end == NULL)
+            break;
+        src = end + 1;
     }
-    if (ptr_s != ptr_copy)
-        strcpy(ptr_copy, ptr_s);
+    *dst = '\0';
 }
 
 /*
@@ -859,7 +865,10 @@ host_to_amiga_path(char *hpath, char *npath, char *lpath)
     if (real_lpath == NULL) {
 unresolved_link:
         /* Give up and just return the relative path of the unresolved link */
-        return (strdup(lpath));
+        full_lpath = strdup(lpath);
+        if ((full_lpath != NULL) && (full_lpath[0] != '/'))
+            convert_host_path_to_amiga_path(full_lpath);
+        return (full_lpath);
     }
     vol_lpath = volume_get_by_path(real_lpath, 1);
     if (vol_lpath == NULL) {
@@ -1406,6 +1415,7 @@ reply_open_fail:
             if (lstat(host_path, &st) != 0) {
                 if (hm_mode & HM_MODE_CREATE)
                     goto could_not_stat;
+                hm->hm_hdr.km_status = errno_to_km_status();  // Before fsprintf
                 fsprintf("fopen(%s) lstat fail errno=%d\n", host_path, errno);
                 goto reply_open_fail;
             }
@@ -1413,6 +1423,7 @@ reply_open_fail:
             if (stat(host_path, &st) != 0) {
                 if (hm_mode & HM_MODE_CREATE)
                     goto could_not_stat;
+                hm->hm_hdr.km_status = errno_to_km_status();  // Before fsprintf
                 fsprintf("fopen(%s) stat fail errno=%d\n", host_path, errno);
                 goto reply_open_fail;
             }
@@ -2659,6 +2670,7 @@ reply_delete_fail:
     host_path = make_host_path(phandle->he_avolume, name);
 
     if (lstat(host_path, &st) != 0) {
+        hm->hm_hdr.km_status = errno_to_km_status();  // Before fsprintf
         fsprintf("fdelete(%s) stat fail errno=%d\n", host_path, errno);
         goto reply_delete_fail;
     }
