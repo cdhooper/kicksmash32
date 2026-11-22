@@ -159,9 +159,12 @@ typedef struct {
     uint32_t     hm_old_hi;  // Reply: Prev file offset upper 32 bits (signed)
     uint32_t     hm_old_lo;  // Reply: Prev file offset lower 32 bits
     int8_t       hm_seek;    // -1=from beginning, 0=from current, 1=from end
-    uint8_t      hm_unused1; // Unused
+    uint8_t      hm_flags;   // HM_SEEK_FLAG_* (older hosts ignore this)
     uint16_t     hm_unused2; // Unused
 } hm_fseek_t;                // KM_OP_FSEEK
+
+/* hm_fseek_t hm_flags */
+#define HM_SEEK_FLAG_NOEXTEND 0x01  // Fail seek before start or past EOF
 
 typedef struct {
     km_msg_hdr_t hm_hdr;     // Standard message header

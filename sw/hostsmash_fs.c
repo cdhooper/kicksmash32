@@ -2309,6 +2309,37 @@ sm_fseek(hm_fseek_t *hm, uint *status)
         }
 
         oldpos = lseek64(handle->he_fd, 0, SEEK_CUR);
+        if (hm->hm_flags & HM_SEEK_FLAG_NOEXTEND) {
+            /*
+             * AmigaDOS semantics: a seek before the start of the file
+             * or past its end fails, and the position is unchanged.
+             */
+            off64_t eof = lseek64(handle->he_fd, 0, SEEK_END);
+            off64_t target;
+
+            switch (whence) {
+                default:
+                case SEEK_SET:
+                    target = offset;
+                    break;
+                case SEEK_CUR:
+                    target = oldpos + offset;
+                    break;
+                case SEEK_END:
+                    target = eof + offset;
+                    break;
+            }
+            if ((oldpos < 0) || (eof < 0) || (target < 0) || (target > eof)) {
+                fsprintf("Seek %x to %jd outside file (size %jd)\n",
+                         hm->hm_handle, (intmax_t) target, (intmax_t) eof);
+                if (oldpos >= 0)
+                    (void) lseek64(handle->he_fd, oldpos, SEEK_SET);
+                hm->hm_hdr.km_status = KM_STATUS_INVALID;
+                goto reply_seek;
+            }
+            offset = target;
+            whence = SEEK_SET;
+        }
         newpos = lseek64(handle->he_fd, offset, whence);
         if (newpos < 0) {
             /* Seek failed */
@@ -2637,7 +2668,7 @@ sm_fpath(hm_fhandle_t *hm, uint *status)
     hm_fhandle_t *hmr;
     handle_ent_t *handle = handle_get(hm->hm_handle);
     char         *pathbuf;
-    char          pathlen;
+    size_t        pathlen;
     uint          rc;
 
     fsprintf("fpath(%x)\n", hm->hm_handle);

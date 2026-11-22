@@ -148,6 +148,10 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
     strcpy((char *)(msg + 1), name);  // Name follows message header
 
     rc = host_msg(msg, msglen, (void **) &rdata, &rlen);
+    if ((rc == KM_STATUS_OK) && (rlen < sizeof (*rdata))) {
+        printf("fopen: short reply %u\n", rlen);
+        rc = MSG_STATUS_BAD_DATA;
+    }
     if (rc == KM_STATUS_OK) {
         *handle = rdata->hm_handle;
         sm_host_locks = (rdata->hm_mode & HM_MODE_LOCK) ? 1 : 0;
@@ -232,17 +236,25 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
         goto sm_read_fail;
     }
 
-    if (rcvlen >= sizeof (*rdata))
-        rcvlen -= sizeof (*rdata);
-    else
+    if (rcvlen < sizeof (*rdata)) {
+        /* Too short to hold hm_length */
+        printf("fread: short reply %u\n", rcvlen);
+        rc = MSG_STATUS_BAD_DATA;
         rcvlen = 0;
+        goto sm_read_fail;
+    }
+    rcvlen -= sizeof (*rdata);
     *data = (void *) (rdata + 1);
 
     uint total_len = rdata->hm_length;
-    if (total_len > readsize) {
-        printf("corrupt: fread(received %x > readsize %x) "
+    if ((total_len > readsize) || (rcvlen > total_len)) {
+        /*
+         * More data than requested, or this packet holds more than the
+         * declared total (which would overrun the continuation buffer).
+         */
+        printf("corrupt: fread(received %x/%x, readsize %x) "
                "cmd=%x status=%x tag=%x,%x\n",
-               total_len, readsize, rdata->hm_hdr.km_op,
+               rcvlen, total_len, readsize, rdata->hm_hdr.km_op,
                rdata->hm_hdr.km_status,
                rdata->hm_hdr.km_tag, tag);
         rc = MSG_STATUS_BAD_DATA;
@@ -393,6 +405,12 @@ sm_fpath(handle_t handle, char **name)
 
     rc = sm_check_service(host_msg(&msg, sizeof (msg), (void **) &rdata,
                                    &rlen));
+    if ((rc == KM_STATUS_OK) &&
+        ((rlen <= sizeof (*rdata)) ||
+         (memchr(rdata + 1, '\0', rlen - sizeof (*rdata)) == NULL))) {
+        printf("fpath: bad reply %u\n", rlen);
+        rc = MSG_STATUS_BAD_DATA;  // No NIL-terminated path in reply
+    }
     if (rc == KM_STATUS_OK)
         *name = (char *)(rdata + 1);
 
@@ -595,10 +613,14 @@ sm_fcreate(handle_t parent_handle, const char *name, const char *tgt_name,
  * offset is the offset from the start of the file / directory.
  * new_pos is an optional pointer to the value of the new file position.
  * prev_pos is an optional pointer to the value of the previous file position.
+ * flags is a combination of HM_SEEK_FLAG_*
+ *      HM_SEEK_FLAG_NOEXTEND fails a seek before the start of the file or
+ *              past its end, leaving the position unchanged (AmigaDOS
+ *              Seek() semantics). Older hosts ignore this flag.
  */
 uint
 sm_fseek(handle_t handle, int seek_mode, uint64_t offset,
-         uint64_t *new_pos, uint64_t *prev_pos)
+         uint64_t *new_pos, uint64_t *prev_pos, uint flags)
 {
     uint rc;
     uint rlen;
@@ -614,11 +636,13 @@ sm_fseek(handle_t handle, int seek_mode, uint64_t offset,
     msg.hm_off_hi        = offset >> 32;
     msg.hm_off_lo        = offset;
     msg.hm_seek          = seek_mode;
-    msg.hm_unused1       = 0;
+    msg.hm_flags         = flags;
     msg.hm_unused2       = 0;
 
     rc = sm_check_service(host_msg(&msg, sizeof (msg), (void **) &rmsg,
                                    &rlen));
+    if ((rc == KM_STATUS_OK) && (rlen < sizeof (*rmsg)))
+        rc = MSG_STATUS_BAD_DATA;  // Reply too short to hold positions
     if (rc != KM_STATUS_OK) {
         /* rmsg is not valid without a successful reply */
         printf("Failed to seek: %s\n", smash_err(rc));

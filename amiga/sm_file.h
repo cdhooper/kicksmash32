@@ -27,7 +27,7 @@ uint sm_fcreate(handle_t parent_handle, const char *name, const char *tgt_name,
                 uint hm_type, uint create_perms);
 uint sm_fdelete(handle_t handle, const char *name);
 uint sm_fseek(handle_t handle, int seek_mode, uint64_t offset,
-              uint64_t *new_pos, uint64_t *prev_pos);
+              uint64_t *new_pos, uint64_t *prev_pos, uint flags);
 uint sm_fsetdate(handle_t parent_handle, const char *name, uint which,
                  uint *sec, uint *nsec);
 uint sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid);

@@ -84,6 +84,8 @@ struct fh_private {
     handle_t      fp_handle;      /* KS file handle */
     uint64_t      fp_pos_cur;     /* Current file position */
     uint64_t      fp_pos_max;     /* Maximum file position */
+    uint64_t      fp_size;        /* File size, if fp_size_known */
+    uint8_t       fp_size_known;  /* Non-zero if fp_size is exact */
     uint8_t       fp_resync;      /* Host position may differ from cur */
 };
 
@@ -169,6 +171,20 @@ km_status_to_amiga_error(uint status)
             printf("Status %x mapped to read/write error\n", status);
             return (ABORT_DISK_ERROR);
     }
+}
+
+/*
+ * km_status_to_amiga_read_error
+ * -----------------------------
+ * As km_status_to_amiga_error(), for a failure to read an object: a
+ * permission failure there means the object is read-protected.
+ */
+static uint
+km_status_to_amiga_read_error(uint status)
+{
+    if (status == KM_STATUS_PERM)
+        return (ERROR_READ_PROTECTED);
+    return (km_status_to_amiga_error(status));
 }
 
 /*
@@ -358,7 +374,12 @@ action_copy_dir(void)
     handle_t   pphandle = (lock == NULL) ? 0 : lock->fl_PHandle;
 
     printf("COPY_DIR %x %x = ", phandle, pphandle);
-    rc = fs_open(phandle, "", 0, SHARED_LOCK, &type, 0, &handle);
+    rc = fs_open(phandle, "", HM_MODE_READ, SHARED_LOCK, &type, 0, &handle);
+    if ((rc != 0) && (rc != KM_STATUS_INUSE)) {
+        /* As in LOCATE_OBJECT: open for stat (for example, no read perms) */
+        rc = fs_open(phandle, "", HM_MODE_READDIR, SHARED_LOCK, &type, 0,
+                     &handle);
+    }
     if (rc == 0) {
         printf("%x\n", handle);
         newlock = CreateLock(handle, pphandle, SHARED_LOCK, type);
@@ -878,7 +899,10 @@ action_findinput(void)
     *bname = cho;
 
     if (rc != 0) {
-        gpack->dp_Res2 = km_status_to_amiga_error(rc);
+        /* FINDINPUT reports the read-only open's error */
+        gpack->dp_Res2 = (gpack->dp_Type == ACTION_FINDUPDATE) ?
+                         km_status_to_amiga_error(rc) :
+                         km_status_to_amiga_read_error(rc);
         return (DOSFALSE);
     }
 
@@ -908,6 +932,8 @@ action_findinput(void)
     fp->fp_handle  = handle;
     fp->fp_pos_cur = 0;
     fp->fp_pos_max = 0;
+    fp->fp_size    = 0;
+    fp->fp_size_known = 0;  // Seek bounds are checked by the host
     fp->fp_resync  = 0;
 
     fh->fh_Port = NULL;            // Non-zero only if interactive
@@ -938,7 +964,7 @@ action_findoutput(void)
     char          cho;
     uint          rc;
     uint          type;
-    uint          hm_mode = HM_MODE_WRITE | HM_MODE_CREATE | HM_MODE_TRUNC;
+    uint          hm_mode = HM_MODE_RDWR | HM_MODE_CREATE | HM_MODE_TRUNC;
     uint          create_perms = 0;
 
     /* Temporarily NIL-terminate name */
@@ -949,8 +975,18 @@ action_findoutput(void)
 
     printf("FINDOUTPUT p=%x %p '%s'\n", phandle, lock, name);
 
+    /*
+     * As with FFS, a MODE_NEWFILE handle may also be read. If the host
+     * won't allow read access (for example, a write-only file), fall
+     * back to write-only access.
+     */
     rc = fs_open(phandle, name, hm_mode, EXCLUSIVE_LOCK, &type, create_perms,
                  &handle);
+    if (rc == KM_STATUS_PERM) {
+        hm_mode = HM_MODE_WRITE | HM_MODE_CREATE | HM_MODE_TRUNC;
+        rc = fs_open(phandle, name, hm_mode, EXCLUSIVE_LOCK, &type,
+                     create_perms, &handle);
+    }
     *bname = cho;
 
     if (rc != 0) {
@@ -978,6 +1014,13 @@ action_findoutput(void)
     fp->fp_pos_cur = 0;
     fp->fp_pos_max = 0;
     fp->fp_resync  = 0;
+    /*
+     * The file was just truncated, and while the host holds the exclusive
+     * lock, only this handle can change its size: track it here so that
+     * a seek outside the file fails without a host request.
+     */
+    fp->fp_size       = 0;
+    fp->fp_size_known = sm_host_locks;
 
     fh->fh_Port = NULL;            // Non-zero only if interactive
     fh->fh_Type = gvol->vl_msgport;   // Handler message port
@@ -1194,9 +1237,14 @@ action_parent(void)
     /* The host resolves "/" relative to a handle as its parent directory */
     printf("  parent of %s\n", name);
     rc = fs_open(phandle, "/", HM_MODE_READ, SHARED_LOCK, &type, 0, &handle);
+    if ((rc != 0) && (rc != KM_STATUS_INUSE)) {
+        /* As in LOCATE_OBJECT: open for stat (for example, no read perms) */
+        rc = fs_open(phandle, "/", HM_MODE_READDIR, SHARED_LOCK, &type, 0,
+                     &handle);
+    }
     if (rc != 0) {
         printf("failed parent open with %x\n", rc);
-        gpack->dp_Res2 = ERROR_DIR_NOT_FOUND;
+        gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
     newlock = CreateLock(handle, 0, SHARED_LOCK, type);
@@ -1224,7 +1272,8 @@ fp_resync_pos(fh_private_t *fp)
 
     if (fp->fp_resync == 0)
         return (0);
-    rc = sm_fseek(fp->fp_handle, OFFSET_BEGINNING, fp->fp_pos_cur, NULL, NULL);
+    rc = sm_fseek(fp->fp_handle, OFFSET_BEGINNING, fp->fp_pos_cur, NULL, NULL,
+                  0);
     if (rc == 0)
         fp->fp_resync = 0;
     else
@@ -1287,13 +1336,21 @@ action_read(void)
         fp->fp_resync = 1;
         if (count == 0) {
             /* Error with nothing read; partial data is returned below */
-            gpack->dp_Res2 = km_status_to_amiga_error(rc);
+            gpack->dp_Res2 = km_status_to_amiga_read_error(rc);
             return ((ULONG) -1);
         }
     }
     return (count);  /* 0 at end of file */
 }
 
+/*
+ * action_read_link
+ * ----------------
+ * Returns the target of a soft link. As with FFS, Res1 is the length of
+ * the target (without NIL) on success. If the buffer is too small, Res1
+ * is DOSFALSE with ERROR_LINE_TOO_LONG, and nothing is truncated.
+ * A NULL lock is the volume root.
+ */
 static ULONG
 action_read_link(void)
 {
@@ -1303,19 +1360,19 @@ action_read_link(void)
     char      *linkpath;
     ULONG      buflen = GARG4;
     handle_t   handle;
-    handle_t   phandle;
+    handle_t   phandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
     uint type;
     uint rc;
     uint rlen;
+    uint len;
 
-    if ((lock == NULL) || (name == NULL) || (buf == NULL) || (buflen == 0)) {
+    if ((name == NULL) || (buf == NULL) || (buflen == 0)) {
         gpack->dp_Res2 = ERROR_REQUIRED_ARG_MISSING;
         return (DOSFALSE);
     }
-    phandle = lock->fl_Key;
     name = strip_volume(name);
 
-    printf("ACTION_READ_LINK %x '%s' %p %ul\n", phandle, name, buf, buflen);
+    printf("ACTION_READ_LINK %x '%s' %p %u\n", phandle, name, buf, buflen);
 
     rc = sm_fopen(phandle, name, HM_MODE_READLINK, &type, 0, &handle);
     if (rc != 0) {
@@ -1324,19 +1381,26 @@ action_read_link(void)
     }
 
     rc = sm_fread(handle, 1024, (void **) &linkpath, &rlen, 0);
-    if (rc != 0) {
+    if ((rc != 0) && (rc != KM_STATUS_EOF)) {
         sm_fclose(handle);
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
 
-    if (rlen > buflen - 1)
-        rlen = buflen - 1;
-    memcpy(buf, linkpath, rlen);
-    buf[rlen] = '\0';
+    /* The host's reply includes the NIL; don't rely on it */
+    for (len = 0; (len < rlen) && (linkpath[len] != '\0'); len++)
+        ;
+    if (len + 1 > buflen) {
+        printf("  link target length %u exceeds buffer %u\n", len, buflen);
+        sm_fclose(handle);
+        gpack->dp_Res2 = ERROR_LINE_TOO_LONG;
+        return (DOSFALSE);
+    }
+    memcpy(buf, linkpath, len);
+    buf[len] = '\0';
 
     sm_fclose(handle);
-    return (rlen);
+    return (len);
 }
 
 static ULONG
@@ -1420,9 +1484,31 @@ action_seek(void)
     else if (seek_mode > 0)
         seek_mode = OFFSET_END;
 
+    /*
+     * As with FFS, a seek before the start of the file or past its end
+     * fails and leaves the position unchanged. If the file size is known
+     * here, check it without a host request. Otherwise the host checks
+     * (HM_SEEK_FLAG_NOEXTEND).
+     */
+    if (fp->fp_size_known) {
+        int64_t target;
+        if (seek_mode == OFFSET_BEGINNING)
+            target = offset;
+        else if (seek_mode == OFFSET_END)
+            target = (int64_t) fp->fp_size + offset;
+        else
+            target = (int64_t) fp->fp_pos_cur + offset;
+        if ((target < 0) || ((uint64_t) target > fp->fp_size)) {
+            printf("  seek to %llx outside file size %llx\n",
+                   target, fp->fp_size);
+            gpack->dp_Res2 = ERROR_SEEK_ERROR;
+            return ((ULONG) -1);
+        }
+    }
+
     /* Sign-extend so the host sees negative offsets as negative */
     rc = sm_fseek(handle, seek_mode, (uint64_t) (int64_t) offset,
-                  &new_pos, &prev_pos);
+                  &new_pos, &prev_pos, HM_SEEK_FLAG_NOEXTEND);
     if (rc != 0) {
         printf("fseek(%x) to %d failed: %d\n", handle, offset, rc);
         gpack->dp_Res2 = ERROR_SEEK_ERROR;
@@ -1464,7 +1550,7 @@ action_set_protect(void)
 
     if (rc != 0) {
         printf("failed set_protect with %x\n", rc);
-        gpack->dp_Res2 = ERROR_OBJECT_NOT_FOUND;
+        gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
     return (DOSTRUE);
@@ -1750,6 +1836,7 @@ action_write(void)
              */
             fp->fp_pos_cur -= count;
             fp->fp_resync = 1;
+            fp->fp_size_known = 0;  // Host may have written part of it
             gpack->dp_Res2 = km_status_to_amiga_error(rc);
             return ((ULONG) -1);
         }
@@ -1757,6 +1844,8 @@ action_write(void)
         fp->fp_pos_cur += chunk;
         if (fp->fp_pos_max < fp->fp_pos_cur)
             fp->fp_pos_max = fp->fp_pos_cur;
+        if (fp->fp_size < fp->fp_pos_cur)
+            fp->fp_size = fp->fp_pos_cur;
     }
 
     return (count);
