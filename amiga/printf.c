@@ -228,9 +228,21 @@ kprintn(buf_t *desc, UINTMAX_T value, uint base, int flags, int width, int dot)
 
     p = buf;
     do {
-        uint digit = value % base;
+        /* Divide by base 16 bits at a time: avoids 64-bit libgcc division */
+        uint32_t hi = (uint32_t) (value >> 32);
+        uint32_t lo = (uint32_t) value;
+        uint32_t t;
+        uint     digit;
+
+        t     = (hi % base << 16) | (lo >> 16);
+        hi   /= base;
+        lo    = ((t % base) << 16) | (lo & 0xffff);
+        t    /= base;
+        digit = lo % base;
+        lo    = (t << 16) | (lo / base);
+        value = ((UINTMAX_T) hi << 32) | lo;
         *p++ = (char) (digit + ((digit <= 9) ? '0' : hex_a));
-    } while ((value /= base) != 0);
+    } while (value != 0);
 
     q = p;
     if (flags & FMT_ALT && *(p - 1) != '0') {

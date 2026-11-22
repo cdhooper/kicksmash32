@@ -34,6 +34,9 @@
 #include "smash_cmd.h"
 #include "host_cmd.h"
 #include "cpu_control.h"
+#ifdef NO_DEBUG
+#include "printf.h"  // Removes printf() calls, which have no output there
+#endif
 
 #define HOST_INTERFACE_VERSION 1
 uint8_t host_interface_version = 0;
@@ -719,9 +722,9 @@ release_msg_semaphore(void)
         Permit();
         msg_buf_t *mb;
         while ((mb = tag_queue_remove(TAG_QUEUE_ANY)) != NULL) {
-            km_msg_hdr_t *km = (km_msg_hdr_t *) mb->mb_data;
-            printf("Removed %x tag=%x op=%x len=%x\n",
-                   (uint) mb, km->km_tag, km->km_op, mb->mb_len);
+            printf("Removed %x tag=%x op=%x len=%x\n", (uint) mb,
+                   ((km_msg_hdr_t *) mb->mb_data)->km_tag,
+                   ((km_msg_hdr_t *) mb->mb_data)->km_op, mb->mb_len);
             FreeMem(mb, sizeof (*mb));
         }
         free_msgbuf_list(&hdr->ms_free_list);

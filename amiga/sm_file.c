@@ -19,6 +19,9 @@
 #include "host_cmd.h"
 #include "sm_msg.h"
 #include "sm_file.h"
+#ifdef NO_DEBUG
+#include "printf.h"  // Removes printf() calls, which have no output there
+#endif
 
 static uint     sm_mbuf_size = 0;
 static uint8_t *sm_mbuf      = NULL;

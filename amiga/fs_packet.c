@@ -594,7 +594,11 @@ FillInfoBlock(FileInfoBlock_t *fib, fileattr_t *fattr, hm_fdirent_t *dent)
         uint64_t size = ((uint64_t) dent->hmd_size_hi << 32) |
                         dent->hmd_size_lo;
         uint     bsize = (dent->hmd_blksize != 0) ? dent->hmd_blksize : 512;
-        uint64_t blks = (size + bsize - 1) / bsize;
+        uint     shift = 0;
+        uint64_t blks;
+        while ((shift < 30) && ((2U << shift) <= bsize))
+            shift++;  // Block sizes are powers of 2
+        blks = (size + (1U << shift) - 1) >> shift;
         fib->fib_NumBlocks = (blks > 0xffffffff) ? 0xffffffff : (ULONG) blks;
     }
 

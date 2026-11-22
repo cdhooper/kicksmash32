@@ -56,7 +56,7 @@ CFLAGS  += -Wno-sign-compare -fomit-frame-pointer -I../fw -mcpu=68060
 CFLAGS_ROMFS := -DROMFS -fbaserel -resident -mcpu=68060
 LDFLAGS_SMASH = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -mcrt=clib2 -lgcc -lc -lamiga
 #LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -nostdlib -lgcc -lamiga -lc
-LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -lgcc -lamiga -lc -noixemul
+LDFLAGS_FS = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -lgcc -lamiga -noixemul
 LDFLAGS_FTP = -Xlinker -Map=$(OBJDIR)/$@.map -Wa,-a > $(OBJDIR)/$@_prog.lst -mcrt=clib2 -lgcc -lc -lamiga
 
 BUILD_TIMESTAMP := $(shell date '+%Y-%m-%d %H:%M:%S')
