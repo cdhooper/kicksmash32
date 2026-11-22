@@ -26,6 +26,7 @@ typedef unsigned int uint;
 #endif
 #include <sys/file.h>
 #include <string.h>
+#include <strings.h>  // strncasecmp
 #include <limits.h>
 #include <pthread.h>
 #include <errno.h>
@@ -34,6 +35,9 @@ typedef unsigned int uint;
 #include <fcntl.h>
 #include <inttypes.h>
 #include <dirent.h>
+#ifdef __linux__
+#include <sys/syscall.h>  // SYS_renameat2
+#endif
 
 #include "../fw/smash_cmd.h"
 #include "../amiga/host_cmd.h"
@@ -63,6 +67,7 @@ typedef unsigned int uint;
 #define SEEK_OFFSET_END           (1)
 
 #define KS_PATH_MAX              4096  // Maximum length of file pathname
+#define FWRITE_MAX       (16 << 20)    // Maximum length of a single write
 
 #ifdef OSX
 #define lseek64 lseek
@@ -374,13 +379,22 @@ errno_to_km_status(void)
 static char *
 make_amiga_relpath(handle_ent_t **parent, const char *name)
 {
-    char pathname[4096];
+    /*
+     * The result is never longer than the parent's path, a '/', and the
+     * name (elements are only copied or removed), plus ":" and NIL when
+     * seeking a volume name. Room for the parent's path is added once the
+     * parent is known.
+     */
+    size_t nlen = strlen(name);
+    char *pathname = malloc(nlen + 4);
     const char *nptr = name;
     const char *nstart;
     char *tptr;
     char *colon;
     char *slash;
 
+    if (pathname == NULL)
+        return (NULL);
     if ((*parent != NULL) && ((*parent)->he_type == HM_TYPE_VOLDIR)) {
         /* Root of all volumes (Volume Directory) */
         *parent = NULL;
@@ -419,6 +433,14 @@ make_amiga_relpath(handle_ent_t **parent, const char *name)
     /* Parent path */
     tptr = pathname;
     if ((*parent != NULL) && ((*parent)->he_type != HM_TYPE_VOLUME)) {
+        size_t plen = strlen((*parent)->he_name);
+        char  *newbuf = realloc(pathname, plen + nlen + 4);
+        if (newbuf == NULL) {
+            free(pathname);
+            return (NULL);
+        }
+        pathname = newbuf;
+        tptr = pathname;
         strcpy(tptr, (*parent)->he_name);
         tptr += strlen(tptr);
         if ((tptr > pathname) && (tptr[-1] != '/') && (*nptr != '\0'))
@@ -445,8 +467,10 @@ make_amiga_relpath(handle_ent_t **parent, const char *name)
                 fsprintf("Seek vol name %s\n", pathname);
 #endif
                 *parent = handle_get_name(pathname);
-                if (*parent == NULL)
+                if (*parent == NULL) {
+                    free(pathname);
                     return (NULL);
+                }
                 /* Got volume; start again with path name */
 get_rel_restart:
                 tptr = pathname;
@@ -504,9 +528,9 @@ get_rel_trim_dotdot:
 
 #ifdef REL_PATH_DEBUG
     fsprintf("got relative path %s from '%s' and '%s'\n",
-             pathbuf, name, *parent ? (*parent)->he_name : "NULL");
+             pathname, name, *parent ? (*parent)->he_name : "NULL");
 #endif
-    return (strdup(pathname));
+    return (pathname);
 }
 
 /*
@@ -517,28 +541,27 @@ get_rel_trim_dotdot:
 char *
 merge_host_paths(const char *base, const char *append)
 {
-    char pathbuf[KS_PATH_MAX];
-    uint len = strlen(base);
+    size_t len = strlen(base);
+    char  *pathbuf;
+
     if (len == 0)                   // no base
         return (strdup(append));
     if (strlen(append) == 0)        // no append
         return (strdup(base));
     if (append[0] == '/')           // append starts at root directory
         return (strdup(append));
+
+    pathbuf = malloc(len + strlen(append) + 2);  // base, '/', append, NIL
+    if (pathbuf == NULL)
+        return (NULL);
     strcpy(pathbuf, base);
     if (base[len - 1] != '/') {
         if (base[len - 1] != ':') {
             /* Volume name plus some part of path; add a slash */
             pathbuf[len++] = '/';
-        } else {
-            /* Possiblly just the volume name */
-            const char *ptr;
-            /* Is the name just the volume root? */
-            for (ptr = &base[len - 2]; ptr > base; ptr--)
-                if (*ptr == ':') {
-                    /* More than one colon present; add a slash */
-                    pathbuf[len++] = '/';
-                }
+        } else if ((len > 2) && (memchr(base + 1, ':', len - 2) != NULL)) {
+            /* More than one colon present, so not just a volume name */
+            pathbuf[len++] = '/';
         }
     }
     strcpy(pathbuf + len, append);
@@ -550,7 +573,7 @@ merge_host_paths(const char *base, const char *append)
         *ptr = '\0';
 #endif
 
-    return (strdup(pathbuf));
+    return (pathbuf);
 }
 
 /*
@@ -570,8 +593,8 @@ make_host_path(amiga_vol_t *vol, const char *append)
 char *
 merge_amiga_paths(const char *base, const char *append)
 {
-    char pathbuf[2048];
-    uint len;
+    char  *pathbuf;
+    size_t len;
 
     if (base == NULL)
         return (strdup(append));
@@ -581,11 +604,14 @@ merge_amiga_paths(const char *base, const char *append)
         return (strdup(append));
     if (strlen(append) == 0)
         return (strdup(base));
+    pathbuf = malloc(len + strlen(append) + 2);  // base, '/', append, NIL
+    if (pathbuf == NULL)
+        return (NULL);
     strcpy(pathbuf, base);
     if ((base[len - 1] != '/') && (base[len - 1] != ':'))
         pathbuf[len++] = '/';
     strcpy(pathbuf + len, append);
-    return (strdup(pathbuf));
+    return (pathbuf);
 }
 
 static void
@@ -734,7 +760,14 @@ amiga_link_to_host_path(handle_ent_t *phandle, const char *apath,
         fsprintf("link relative path failed for %s\n", apath);
         return (NULL);
     }
-    target_path = make_host_path(phandle->he_avolume, name);
+    if (handle == NULL) {
+        /* Target is in the Volume Directory, not in an exported volume */
+        fsprintf("link target %s is not in a volume\n", apath);
+        free(name);
+        return (NULL);
+    }
+    /* The target may be on another volume than the link (phandle) */
+    target_path = make_host_path(handle->he_avolume, name);
     free(name);
 
     name = make_host_relative_path(target_path, link_path);
@@ -1364,8 +1397,12 @@ reply_open_fail:
 
     hm_type = SWAP16(hm->hm_type);
     if (hm_mode & HM_MODE_READ) {
-        /* File is opened for read; attempt to figure out file type */
-        if (hm_mode & HM_MODE_NOFOLLOW) {
+        /*
+         * File is opened for read; attempt to figure out file type.
+         * Reading a link (HM_MODE_LINK) is about the link itself, whose
+         * target may not exist.
+         */
+        if (hm_mode & (HM_MODE_NOFOLLOW | HM_MODE_LINK)) {
             if (lstat(host_path, &st) != 0) {
                 if (hm_mode & HM_MODE_CREATE)
                     goto could_not_stat;
@@ -1463,8 +1500,8 @@ could_not_stat:
         fd = open(host_path, oflags);
     }
     if (fd == -1) {
-        fsprintf("File open %s fail: %d\n", host_path, errno);
         hm->hm_hdr.km_status = errno_to_km_status();
+        fsprintf("File open %s fail: %d\n", host_path, errno);
         goto reply_open_fail;
     }
     if ((hm_type == HM_TYPE_UNKNOWN) && (fstat(fd, &st) == 0)) {
@@ -1594,7 +1631,7 @@ sm_fread(hm_freadwrite_t *hm, uint *status)
     uint             hm_flag = SWAP16(hm->hm_flag);
     handle_ent_t    *handle = handle_get(hm->hm_handle);
     uint             pathlen = 0;
-    char             pathbuf[2048];
+    char            *pathbuf = NULL;  // Directory path, for directory reads
     ssize_t          readcnt = 0;
 
     hm->hm_hdr.km_op |= KM_OP_REPLY;
@@ -1650,8 +1687,9 @@ reply_read_fail:
 #endif
 dir_read_common:
         pathlen = strlen(handle->he_name);
-        if (pathlen > sizeof (pathbuf) - 257) {
-            fsprintf("Path too long: %u bytes\n", pathlen);
+        pathbuf = malloc(pathlen + 258);  // Path, '/', entry name, NIL
+        if (pathbuf == NULL) {
+            hm->hm_hdr.km_status = KM_STATUS_FAIL;
             goto reply_read_fail;
         }
         strcpy(pathbuf, handle->he_name);
@@ -1702,7 +1740,17 @@ dir_read_common:
             lbuf[llen] = '\0';
             path = host_to_amiga_path(handle->he_path, handle->he_name, lbuf);
 
-            llen = strlen(path) + 1;
+            /*
+             * Never send more than requested. A target which does not fit
+             * is sent truncated without its NIL, which tells the Amiga
+             * that the target is too long for the request.
+             */
+            llen = strlen(path) + 1;  // Including NIL
+            if ((uint) llen > len) {
+                fsprintf("link target %d bytes exceeds request %u\n",
+                         llen, len);
+                llen = len;
+            }
             memcpy(ndata, path, llen);
             free(path);
 
@@ -2134,6 +2182,7 @@ dir_read_common:
 #endif
     rc = send_msg(hmr, sizeof (*hmr) + pos, status);
     free(hmr);
+    free(pathbuf);
     return (rc);
 }
 
@@ -2224,6 +2273,13 @@ reply_write_fail:
     else
         rxlen = 0;
 
+    if (hm_length > FWRITE_MAX) {
+        /* Clients write at most 64 KB at a time; don't allocate any size */
+        fsprintf("fwrite(%x) length %x too large\n", hm->hm_handle,
+                 hm_length);
+        hm->hm_hdr.km_status = KM_STATUS_INVALID;
+        goto reply_write_fail;
+    }
     if (rxlen < hm_length) {
         /* More data pending */
         uint8_t *rdata = malloc(hm_length + sizeof (km_msg_hdr_t));
@@ -2269,14 +2325,14 @@ reply_write_fail:
             rdatapos += rxlen;
         }
         if (rc == RC_SUCCESS) {
-            if (hm_flag & HM_FLAG_SEEK0) {
-                hm_flag &= ~HM_FLAG_SEEK0;
+            if (hm_flag & HM_FLAG_SEEK0)
                 (void) lseek64(handle->he_fd, 0, SEEK_SET);
-            }
             writecnt = write_all(handle->he_fd, rdata, hm_length);
         }
         free(rdata);
     } else {
+        if (hm_flag & HM_FLAG_SEEK0)
+            (void) lseek64(handle->he_fd, 0, SEEK_SET);
         writecnt = write_all(handle->he_fd, ndata, hm_length);
     }
     if (rc == KM_STATUS_OK) {
@@ -2427,6 +2483,8 @@ sm_fcreate(hm_fopenhandle_t *hm, uint *status)
 reply_create_fail:
         if (name != NULL)
             free(name);
+        if (host_path != NULL)
+            free(host_path);
         hm->hm_handle = 0;
         if (hm->hm_hdr.km_status == KM_STATUS_OK)
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
@@ -2485,16 +2543,24 @@ create_node:
             uint  hm_name_len = strlen(hm_name) + 1;
             char *lname = hm_name + hm_name_len;
             char *relname;
+            int   rc;
             relname = amiga_link_to_host_path(phandle, lname, host_path);
 
-            if (symlink(relname, host_path)) {
+            /*
+             * A target on a volume the host doesn't export (for example
+             * DH0:) is stored verbatim, as FFS stores any soft link
+             * target. Reading the link returns it unchanged, so it
+             * resolves on the Amiga.
+             */
+            rc = symlink((relname != NULL) ? relname : lname, host_path);
+            if (rc != 0) {
+                hm->hm_hdr.km_status = errno_to_km_status();
                 fsprintf("symlink: %s -> %s failed: %d\n",
                          host_path, lname, errno);
-                hm->hm_hdr.km_status = errno_to_km_status();
-                goto reply_create_fail;
             }
-            if (relname != NULL)
-                free(relname);
+            free(relname);
+            if (rc != 0)
+                goto reply_create_fail;
             break;
         }
         case HM_TYPE_HLINK: {  // Hard link
@@ -2552,6 +2618,7 @@ create_node:
             break;
     }
 
+    free(host_path);
     return (send_msg(hm, sizeof (*hm), status));
 }
 
@@ -2618,8 +2685,8 @@ reply_delete_fail:
             }
             if (rmdir(host_path)) {
                 /* Failed */
-                fsprintf("rmdir(%s) failed: %d\n", host_path, errno);
                 hm->hm_hdr.km_status = errno_to_km_status();
+                fsprintf("rmdir(%s) failed: %d\n", host_path, errno);
                 goto reply_delete_fail;
             }
             break;
@@ -2634,8 +2701,8 @@ reply_delete_fail:
 #endif
             /* Use unlink() */
             if (unlink(host_path)) {
-                fsprintf("unlink(%s) failed: %d\n", host_path, errno);
                 hm->hm_hdr.km_status = errno_to_km_status();
+                fsprintf("unlink(%s) failed: %d\n", host_path, errno);
                 goto reply_delete_fail;
             }
             break;
@@ -2643,6 +2710,149 @@ reply_delete_fail:
     free(name);
     free(host_path);
     return (send_msg(hm, sizeof (*hm), status));
+}
+
+/*
+ * rename_noreplace
+ * ----------------
+ * Renames old to new, failing with EEXIST if new exists, atomically where
+ * the host supports it (Linux renameat2() and macOS renamex_np() on local
+ * filesystems). Where it doesn't (for example NFS), the plain rename()
+ * remains, as the caller has already checked that new does not exist.
+ * Windows rename() never replaces an existing file.
+ */
+static int
+rename_noreplace(const char *old, const char *new)
+{
+#if defined(__linux__) && defined(SYS_renameat2)
+#ifndef RENAME_NOREPLACE
+#define RENAME_NOREPLACE (1 << 0)
+#endif
+    if (syscall(SYS_renameat2, AT_FDCWD, old, AT_FDCWD, new,
+                RENAME_NOREPLACE) == 0)
+        return (0);
+    if ((errno != EINVAL) && (errno != ENOSYS) && (errno != EOPNOTSUPP))
+        return (-1);
+    fsprintf("renameat2(NOREPLACE) unsupported: %d\n", errno);
+#elif defined(OSX) && defined(RENAME_EXCL)
+    if (renamex_np(old, new, RENAME_EXCL) == 0)
+        return (0);
+    if ((errno != EINVAL) && (errno != ENOTSUP))
+        return (-1);
+    fsprintf("renamex_np(EXCL) unsupported: %d\n", errno);
+#endif
+    return (rename(old, new));
+}
+
+/*
+ * path_has_prefix
+ * ---------------
+ * Returns non-zero if path is prefix or is below prefix (prefix followed
+ * by '/'). The comparison ignores case on hosts whose filesystems usually
+ * do.
+ */
+static int
+path_has_prefix(const char *path, const char *prefix, size_t plen)
+{
+#if defined(__MINGW32__) || defined(OSX)
+    if (strncasecmp(path, prefix, plen) != 0)
+        return (0);
+#else
+    if (strncmp(path, prefix, plen) != 0)
+        return (0);
+#endif
+    return ((path[plen] == '\0') || (path[plen] == '/'));
+}
+
+/*
+ * path_replace_prefix
+ * -------------------
+ * Replaces the first plen characters of *pathp with the first nlen
+ * characters of newprefix.
+ */
+static void
+path_replace_prefix(char **pathp, size_t plen, const char *newprefix,
+                    size_t nlen)
+{
+    const char *rest = *pathp + plen;
+    char       *newpath = malloc(nlen + strlen(rest) + 1);
+
+    if (newpath == NULL)
+        return;  // Keep the old name
+    memcpy(newpath, newprefix, nlen);
+    strcpy(newpath + nlen, rest);
+    free(*pathp);
+    *pathp = newpath;
+}
+
+/*
+ * handles_renamed
+ * ---------------
+ * Called after an object has been renamed. Open handles store their path,
+ * so every handle for the object, or for anything below it, is updated
+ * to the new path. This keeps locks and open files valid across a
+ * rename, as with AmigaOS. Objects renamed by other programs on the host
+ * are not tracked.
+ *
+ * ovol / oname: the old volume and path within it
+ * nvol / nname: the new volume and path within it
+ * nvolhandle:   the new volume's handle
+ * ohost / nhost: the old and new host paths
+ */
+static void
+handles_renamed(amiga_vol_t *ovol, const char *oname, amiga_vol_t *nvol,
+                const char *nname, handle_ent_t *nvolhandle,
+                const char *ohost, const char *nhost)
+{
+    handle_ent_t *node;
+    size_t        olen  = strlen(oname);
+    size_t        nlen  = strlen(nname);
+    size_t        ohlen = strlen(ohost);
+    size_t        nhlen = strlen(nhost);
+
+    /* "dir/" is the same object as "dir" */
+    while ((olen > 1) && (oname[olen - 1] == '/'))
+        olen--;
+    while ((nlen > 1) && (nname[nlen - 1] == '/'))
+        nlen--;
+    while ((ohlen > 1) && (ohost[ohlen - 1] == '/'))
+        ohlen--;
+    while ((nhlen > 1) && (nhost[nhlen - 1] == '/'))
+        nhlen--;
+    if (olen == 0)
+        return;  // Volume root is never renamed
+
+    for (node = handle_list_head; node != NULL; node = node->he_next) {
+        if ((node->he_type == HM_TYPE_VOLUME) ||
+            (node->he_type == HM_TYPE_VOLDIR) ||
+            (node->he_avolume != ovol) || (node->he_name == NULL) ||
+            !path_has_prefix(node->he_name, oname, olen))
+            continue;
+
+        fsprintf("rename: handle %x '%s'", node->he_handle, node->he_name);
+        path_replace_prefix(&node->he_name, olen, nname, nlen);
+        fsprintf(" -> '%s'\n", node->he_name);
+
+        if ((node->he_path != NULL) && (node->he_path[0] != '\0') &&
+            path_has_prefix(node->he_path, ohost, ohlen))
+            path_replace_prefix(&node->he_path, ohlen, nhost, nhlen);
+
+        if (nvol != ovol) {
+            node->he_avolume = nvol;
+            node->he_volume  = nvolhandle;
+        }
+#ifdef __MINGW32__
+        /* Windows lock keys are resolved paths: identify the object again */
+        if (node->he_lock != 0) {
+            char *hpath = make_host_path(nvol, node->he_name);
+            lock_key_free(&node->he_lock_key);
+            if ((hpath == NULL) ||
+                !lock_key_get(hpath, 1, &node->he_lock_key))
+                node->he_lock = 0;  // Object can no longer be identified
+            free(hpath);
+        }
+#endif
+    }
 }
 
 uint
@@ -2723,10 +2933,11 @@ reply_rename_fail:
          * case-insensitive host filesystem.
          */
         struct stat st;
+        int         same = 0;
+        int         rc;
         if (lstat(path_new, &st) == 0) {
             lock_key_t key_old;
             lock_key_t key_new;
-            int        same = 0;
 
             memset(&key_old, 0, sizeof (key_old));
             memset(&key_new, 0, sizeof (key_new));
@@ -2744,12 +2955,18 @@ reply_rename_fail:
                 goto reply_rename_fail;
             }
         }
+        /* Atomic no-replace closes the window since the check above */
+        rc = same ? rename(path_old, path_new) :
+                    rename_noreplace(path_old, path_new);
+        if (rc != 0) {
+            hm->hm_hdr.km_status = errno_to_km_status();
+            fsprintf("rename %s to %s failed\n", path_old, path_new);
+            goto reply_rename_fail;
+        }
     }
-    if (rename(path_old, path_new)) {
-        fsprintf("rename %s to %s failed\n", path_old, path_new);
-        hm->hm_hdr.km_status = errno_to_km_status();
-        goto reply_rename_fail;
-    }
+    handles_renamed(phandle_old->he_avolume, apath_old,
+                    phandle_new->he_avolume, apath_new,
+                    phandle_new->he_volume, path_old, path_new);
     free(path_old);
     free(path_new);
     free(apath_old);
@@ -2851,8 +3068,8 @@ reply_setdate_fail:
     }
 
     if (lstat(path, &statbuf)) {
-        fsprintf("lstat fail: %d\n", errno);
         hm->hm_hdr.km_status = errno_to_km_status();
+        fsprintf("lstat fail: %d\n", errno);
         goto reply_setdate_fail;
     }
 
@@ -2890,8 +3107,8 @@ reply_setdate_fail:
     }
 
     if (_utime(path, &times)) {
-        fsprintf("utimesat fail: %d\n", errno);
         hm->hm_hdr.km_status = errno_to_km_status();
+        fsprintf("utimesat fail: %d\n", errno);
         goto reply_setdate_fail;
     }
 #elif defined(OSX)
@@ -2930,8 +3147,8 @@ reply_setdate_fail:
             goto reply_setdate_fail;
     }
     if (utimes(path, times)) {
-        fsprintf("utimes fail: %d\n", errno);
         hm->hm_hdr.km_status = errno_to_km_status();
+        fsprintf("utimes fail: %d\n", errno);
         goto reply_setdate_fail;
     }
 #else
@@ -2970,8 +3187,8 @@ reply_setdate_fail:
             goto reply_setdate_fail;
     }
     if (utimensat(AT_FDCWD, path, times, AT_SYMLINK_NOFOLLOW)) {
-        fsprintf("utimesat fail: %d\n", errno);
         hm->hm_hdr.km_status = errno_to_km_status();
+        fsprintf("utimesat fail: %d\n", errno);
         goto reply_setdate_fail;
     }
 #endif
@@ -3032,8 +3249,8 @@ reply_setown_fail:
     goto reply_setown_fail;
 #else
     if (chown(path, oid, gid)) {
-        fsprintf("chown fail: %d\n", errno);
         hm->hm_hdr.km_status = errno_to_km_status();
+        fsprintf("chown fail: %d\n", errno);
         goto reply_setown_fail;
     }
 #endif
@@ -3091,8 +3308,8 @@ reply_setprotect_fail:
     fsprintf("uperms=%x %o\n", uperms, uperms);
 
     if (chmod(path, uperms)) {
-        fsprintf("chmod fail\n");
         hm->hm_hdr.km_status = errno_to_km_status();
+        fsprintf("chmod fail\n");
         goto reply_setprotect_fail;
     }
 

@@ -379,6 +379,65 @@ sm_fwrite(handle_t handle, void *buf, uint writelen, uint padded_header,
     return (sm_check_service(rc));
 }
 
+#define FPATH_MAX 8192  // Longest path accepted from the host
+
+static char *sm_pbuf      = NULL;  // Path assembled from a multi-part reply
+static uint  sm_pbuf_size = 0;
+
+/*
+ * sm_fpath_cont
+ * -------------
+ * The host splits a reply longer than one message (a path of about 2000
+ * bytes or more) into continuation messages, but the reply does not say
+ * how long the path is. Continuation messages are appended until the
+ * path's NIL arrives.
+ */
+static uint
+sm_fpath_cont(uint tag, const char *first, uint firstlen, char **name)
+{
+    uint seq = 1;
+    uint len = firstlen;
+    uint rc;
+
+    if ((sm_pbuf == NULL) || (sm_pbuf_size < FPATH_MAX)) {
+        free(sm_pbuf);
+        sm_pbuf = malloc(FPATH_MAX);
+        sm_pbuf_size = (sm_pbuf != NULL) ? FPATH_MAX : 0;
+        if (sm_pbuf == NULL)
+            return (MSG_STATUS_NO_MEM);
+    }
+    if (firstlen > FPATH_MAX)
+        return (MSG_STATUS_BAD_DATA);
+    memcpy(sm_pbuf, first, firstlen);
+
+    while (memchr(sm_pbuf, '\0', len) == NULL) {
+        km_msg_hdr_t *rdata;
+        uint          rcvlen;
+
+        rc = host_recv_msg(tag, (void **) &rdata, &rcvlen);
+        if (rc == KM_STATUS_EOF)
+            rc = KM_STATUS_OK;
+        if (rc != KM_STATUS_OK)
+            return (rc);
+        if (host_interface_version > 0) {
+            if (rdata->km_op < seq)
+                continue;  // Repeated message can be dropped
+            if (rdata->km_op != seq)
+                return (MSG_STATUS_BAD_DATA);  // Skipped message(s)
+            seq++;
+        }
+        if (rcvlen <= sizeof (*rdata))
+            return (MSG_STATUS_BAD_DATA);
+        rcvlen -= sizeof (*rdata);
+        if (len + rcvlen > FPATH_MAX)
+            return (MSG_STATUS_BAD_DATA);
+        memcpy(sm_pbuf + len, rdata + 1, rcvlen);
+        len += rcvlen;
+    }
+    *name = sm_pbuf;
+    return (KM_STATUS_OK);
+}
+
 /*
  * sm_fpath
  * --------
@@ -393,28 +452,37 @@ sm_fpath(handle_t handle, char **name)
 {
     uint rc;
     uint rlen;
+    uint tag;
     hm_fhandle_t *rdata;
     hm_fhandle_t msg;
 
     if ((sm_file_active == 0) && (sm_fservice() == 0))
         return (KM_STATUS_UNAVAIL);
 
+    tag = host_tag_alloc();
     msg.hm_hdr.km_op     = KM_OP_FPATH;
     msg.hm_hdr.km_status = 0;
+    msg.hm_hdr.km_tag    = tag;
     msg.hm_handle        = handle;
 
-    rc = sm_check_service(host_msg(&msg, sizeof (msg), (void **) &rdata,
-                                   &rlen));
-    if ((rc == KM_STATUS_OK) &&
-        ((rlen <= sizeof (*rdata)) ||
-         (memchr(rdata + 1, '\0', rlen - sizeof (*rdata)) == NULL))) {
+    rc = host_msg_tag(&msg, sizeof (msg), (void **) &rdata, &rlen);
+    if ((rc == KM_STATUS_OK) && (rlen <= sizeof (*rdata))) {
         printf("fpath: bad reply %u\n", rlen);
-        rc = MSG_STATUS_BAD_DATA;  // No NIL-terminated path in reply
+        rc = MSG_STATUS_BAD_DATA;  // No path in reply
     }
-    if (rc == KM_STATUS_OK)
-        *name = (char *)(rdata + 1);
+    if (rc == KM_STATUS_OK) {
+        char *path = (char *)(rdata + 1);
+        uint  plen = rlen - sizeof (*rdata);
+        if (memchr(path, '\0', plen) != NULL)
+            *name = path;
+        else
+            rc = sm_fpath_cont(tag, path, plen, name);  // Long path
+        if (rc != KM_STATUS_OK)
+            printf("fpath: reply failed: %s\n", smash_err(rc));
+    }
+    host_tag_free(tag);
 
-    return (rc);
+    return (sm_check_service(rc));
 }
 
 /*

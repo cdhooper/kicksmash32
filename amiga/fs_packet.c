@@ -1353,6 +1353,8 @@ action_read(void)
  * is DOSFALSE with ERROR_LINE_TOO_LONG, and nothing is truncated.
  * A NULL lock is the volume root.
  */
+#define READ_LINK_MAX 4096  // Longest link target requested from the host
+
 static ULONG
 action_read_link(void)
 {
@@ -1382,17 +1384,25 @@ action_read_link(void)
         return (DOSFALSE);
     }
 
-    rc = sm_fread(handle, 1024, (void **) &linkpath, &rlen, 0);
+    /*
+     * Request room for any host link target (PATH_MAX). Only the actual
+     * target is sent. This also keeps older hosts, which don't limit the
+     * reply to the request, from overrunning their reply buffer.
+     */
+    rc = sm_fread(handle, READ_LINK_MAX, (void **) &linkpath, &rlen, 0);
     if ((rc != 0) && (rc != KM_STATUS_EOF)) {
         sm_fclose(handle);
         gpack->dp_Res2 = km_status_to_amiga_error(rc);
         return (DOSFALSE);
     }
 
-    /* The host's reply includes the NIL; don't rely on it */
+    /*
+     * The host's reply includes the NIL. A reply without one is a target
+     * which did not fit in the request.
+     */
     for (len = 0; (len < rlen) && (linkpath[len] != '\0'); len++)
         ;
-    if (len + 1 > buflen) {
+    if ((len == rlen) || (len + 1 > buflen)) {
         printf("  link target length %u exceeds buffer %u\n", len, buflen);
         sm_fclose(handle);
         gpack->dp_Res2 = ERROR_LINE_TOO_LONG;
