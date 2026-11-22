@@ -893,7 +893,9 @@ action_findinput(void)
          * explains why the file could not be created (for example, a
          * write-protected directory) rather than "object not found".
          */
-        if ((rc2 == 0) || (gpack->dp_Type != ACTION_FINDUPDATE))
+        if ((rc2 == 0) ||
+            ((gpack->dp_Type != ACTION_FINDUPDATE) &&
+             (rc != KM_STATUS_INVALID)))  // Keep "wrong type" (a directory)
             rc = rc2;
     }
     *bname = cho;

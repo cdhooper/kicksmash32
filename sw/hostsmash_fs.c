@@ -1417,6 +1417,7 @@ could_not_stat:
         }
         dir = opendir(host_path);
         if (dir == NULL) {
+            hm->hm_hdr.km_status = errno_to_km_status();  // Before fsprintf
             fsprintf("opendir(%s) failed\n", host_path);
             goto reply_open_fail;
         }
@@ -1565,7 +1566,13 @@ static uint64_t
 get_fs_size(const char *path, uint64_t *used, uint *blksize)
 {
     struct statvfs buf;
-    statvfs(path, &buf);
+    if (statvfs(path, &buf) != 0) {
+        /* Size unknown: report 0, which the Amiga replaces with defaults */
+        fsprintf("statvfs(%s) failed: %d\n", path, errno);
+        *used = 0;
+        *blksize = 0;
+        return (0);
+    }
     *used = buf.f_blocks - buf.f_bavail;
     /* f_blocks and f_bavail are in units of f_frsize (fragment size) */
     *blksize = (buf.f_frsize != 0) ? buf.f_frsize : buf.f_bsize;
@@ -1971,7 +1978,7 @@ dir_read_common:
                             char f_perms[16];
                             char f_date[12];
                             char f_time[12];
-                            if (fscanf(fp, "%s %s %s",
+                            if (fscanf(fp, "%15s %11s %11s",
                                        f_perms, f_date, f_time) == 3) {
                                 fsprintf("%s UAEM perms=%s\n",
                                          host_path_uaem, f_perms);
@@ -2130,6 +2137,34 @@ dir_read_common:
     return (rc);
 }
 
+/*
+ * write_all
+ * ---------
+ * Writes all of buf, continuing after a short write. Returns len on
+ * success, or -1 with errno set (a write which can't make progress, such
+ * as on a full disk, reports ENOSPC).
+ */
+static ssize_t
+write_all(int fd, const uint8_t *buf, size_t len)
+{
+    size_t done = 0;
+
+    while (done < len) {
+        ssize_t cnt = write(fd, buf + done, len - done);
+        if (cnt < 0) {
+            if (errno == EINTR)
+                continue;
+            return (-1);
+        }
+        if (cnt == 0) {
+            errno = ENOSPC;
+            return (-1);
+        }
+        done += cnt;
+    }
+    return ((ssize_t) len);
+}
+
 uint
 sm_fwrite(hm_freadwrite_t *hm, uint rxlen, uint *status)
 {
@@ -2238,16 +2273,18 @@ reply_write_fail:
                 hm_flag &= ~HM_FLAG_SEEK0;
                 (void) lseek64(handle->he_fd, 0, SEEK_SET);
             }
-            writecnt = write(handle->he_fd, rdata, hm_length);
+            writecnt = write_all(handle->he_fd, rdata, hm_length);
         }
         free(rdata);
     } else {
-        writecnt = write(handle->he_fd, ndata, hm_length);
+        writecnt = write_all(handle->he_fd, ndata, hm_length);
     }
     if (rc == KM_STATUS_OK) {
         if (writecnt < 0) {
-            fsprintf("write rc=%d errno=%d\n", rc, errno);
+            /* Any data which was written is past the Amiga's position */
+            int err = errno;
             rc = errno_to_km_status();
+            fsprintf("write failed: %s\n", strerror(err));
         }
     }
 
@@ -2408,13 +2445,28 @@ reply_create_fail:
 
     fsprintf("host path=%s\n", host_path);
     switch (hm_type) {
-        case HM_TYPE_FILE:   // Regular file
-            ftype = S_IFREG;
+        case HM_TYPE_FILE: {  // Regular file
+            /* open() rather than mknod(), which needs root on some hosts */
+            int oflags = O_WRONLY | O_CREAT | O_EXCL;
+            int fd;
+#ifdef __MINGW32__
+            oflags |= O_BINARY;
+#endif
+            fd = open(host_path, oflags, umode);
+            if (fd == -1) {
+                hm->hm_hdr.km_status = errno_to_km_status();
+                goto reply_create_fail;
+            }
+            close(fd);
+            break;
+        }
 create_node:
 #ifdef __MINGW32__
             (void) ftype;
             (void) dev;
-            printf("mknod() not supported in Windows\n");
+            fsprintf("mknod() not supported in Windows\n");
+            hm->hm_hdr.km_status = KM_STATUS_INVALID;
+            goto reply_create_fail;
 #else
             if (mknod(host_path, ftype | umode, dev)) {
                 hm->hm_hdr.km_status = errno_to_km_status();
@@ -2446,19 +2498,35 @@ create_node:
             break;
         }
         case HM_TYPE_HLINK: {  // Hard link
-            uint  hm_name_len = strlen(hm_name) + 1;
-            char *lname = hm_name + hm_name_len;
-            char *relname;
+            /*
+             * The target is an Amiga path (usually from sm_fpath), which
+             * may be on another volume: resolve it to a host path.
+             */
+            uint          hm_name_len = strlen(hm_name) + 1;
+            char         *lname = hm_name + hm_name_len;
+            handle_ent_t *thandle = phandle;
+            char         *tname;
+            char         *tpath;
+            int           rc;
 
-            relname = amiga_link_to_host_path(phandle, lname, host_path);
-            if (link(lname, host_path)) {
-                fsprintf("hard link %s -> %s failed: %d\n",
-                         host_path, lname, errno);
-                hm->hm_hdr.km_status = errno_to_km_status();
+            tname = make_amiga_relpath(&thandle, lname);
+            if ((tname == NULL) || (thandle == NULL)) {
+                fsprintf("hard link target %s not found\n", lname);
+                if (tname != NULL)
+                    free(tname);
+                hm->hm_hdr.km_status = KM_STATUS_NOEXIST;
                 goto reply_create_fail;
             }
-            if (relname != NULL)
-                free(relname);
+            tpath = make_host_path(thandle->he_avolume, tname);
+            free(tname);
+            rc = link(tpath, host_path);
+            if (rc != 0) {
+                hm->hm_hdr.km_status = errno_to_km_status();
+                fsprintf("hard link %s -> %s failed\n", host_path, tpath);
+            }
+            free(tpath);
+            if (rc != 0)
+                goto reply_create_fail;
             break;
         }
 #endif /* ALLOW_CREATE_LINK */
@@ -2646,6 +2714,36 @@ reply_rename_fail:
         fsprintf("frename(%s) can't rename to a volume\n", path_new);
         hm->hm_hdr.km_status = KM_STATUS_PERM;
         goto reply_rename_fail;
+    }
+    {
+        /*
+         * As with AmigaOS, an existing object is never replaced (UNIX
+         * rename() would). Renaming an object onto itself is allowed,
+         * for example to change only the case of the name on a
+         * case-insensitive host filesystem.
+         */
+        struct stat st;
+        if (lstat(path_new, &st) == 0) {
+            lock_key_t key_old;
+            lock_key_t key_new;
+            int        same = 0;
+
+            memset(&key_old, 0, sizeof (key_old));
+            memset(&key_new, 0, sizeof (key_new));
+            if (lock_key_get(path_old, 0, &key_old)) {
+                if (lock_key_get(path_new, 0, &key_new)) {
+                    same = lock_key_equal(&key_old, &key_new);
+                    lock_key_free(&key_new);
+                }
+                lock_key_free(&key_old);
+            }
+            if (!same) {
+                fsprintf("frename(%s) refused: %s exists\n",
+                         path_old, path_new);
+                hm->hm_hdr.km_status = KM_STATUS_EXIST;
+                goto reply_rename_fail;
+            }
+        }
     }
     if (rename(path_old, path_new)) {
         fsprintf("rename %s to %s failed\n", path_old, path_new);
