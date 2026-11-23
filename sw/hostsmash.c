@@ -239,8 +239,8 @@ netprintf(const char *fmt, ...)
 #define MODE_FWWRITE   0x4000
 
 /* XXX: Need to register USB device ID at http://pid.codes */
-#define MX_VENDOR 0x1209
-#define MX_DEVICE 0x1610
+#define KS_USB_VENDOR 0x1209  // Kicksmash USB vendor id
+#define KS_USB_DEVICE 0x1610  // Kicksmash USB device id
 
 #define EEPROM_SIZE_DEFAULT       0x400000    // 4 MB
 #define EEPROM_BANK_SIZE_DEFAULT  0x080000    // 512 KB
@@ -3755,7 +3755,7 @@ run_terminal_mode(void)
 
 /*
  * Locating the tty device associated with the USB connection of Kicksmash
- * (ks_port_list() and find_mx_programmer()).
+ * (ks_port_list() and find_kicksmash()).
  *
  * OS-specific implementation notes are below
  * Linux
@@ -3781,7 +3781,7 @@ run_terminal_mode(void)
  *              Unfortunately, the "../../../../" is not consistent across
  *              USB devices.
  *      Additionally on Linux, one could
- *          Walk USB busses/devices and search for the programmer.
+ *          Walk USB busses/devices and search for Kicksmash.
  *          Then use /dev/bus/usb/<dirname>/<filename> to find the unique
  *              major.minor
  *          And use /sys/dev/char/<major>:<minor> to find the sysfs entry
@@ -3793,7 +3793,7 @@ run_terminal_mode(void)
  *          currently attached USB device information, including the path
  *          to any instantiated serial devices. The output is processed by
  *          this code using a simple state machine which first searches for
- *          the "MX29F1615" string and then takes the next serial device
+ *          the "KickSmash" string and then takes the next serial device
  *          path located on a line with the "IOCalloutDevice" string.
  *      Additionally on MacOS, one could use the ioreg utility to output in
  *          archive format (-a option) which is really XML. An XML library
@@ -3862,7 +3862,7 @@ ks_port_list(ks_port_t *ports, uint max)
 #ifdef LINUX
     /*
      * For Linux, walk /dev/serial/by-id looking for a name which matches
-     * the programmer. The same device may appear more than once (usb-
+     * Kicksmash. The same device may appear more than once (usb-
      * and pci- prefixes), so ports are de-duplicated by tty device. The
      * USB serial number and port path come from sysfs.
      */
@@ -3883,10 +3883,8 @@ ks_port_list(ks_port_t *ports, uint max)
         const char *tname;
         char       *ptr;
 
-        if ((strstr(dent->d_name, "MX29F1615") == NULL) &&
-            (strstr(dent->d_name, "KickSmash") == NULL)) {
+        if (strstr(dent->d_name, "KickSmash") == NULL)
             continue;
-        }
         if (((size_t) snprintf(link, sizeof (link), "%s/%s", LINUX_BY_ID_DIR,
                                dent->d_name) >= sizeof (link)) ||
             (realpath(link, tty) == NULL)) {
@@ -3930,7 +3928,7 @@ ks_port_list(ks_port_t *ports, uint max)
 #ifdef OSX
     char buf[256];
     char serial[64] = "";
-    bool_t saw_programmer = FALSE;
+    bool_t saw_kicksmash = FALSE;
     FILE *fp = popen("ioreg -lrx -c IOUSBHostDevice", "r");
     if (fp == NULL)
         return (0);
@@ -3941,7 +3939,7 @@ ks_port_list(ks_port_t *ports, uint max)
      * path to the serial interface.
      */
     while ((fgets(buf, sizeof (buf), fp) != NULL) && (nports < max)) {
-        if (saw_programmer) {
+        if (saw_kicksmash) {
             char *ptr;
             char *eptr;
             if ((strstr(buf, "\"USB Serial Number\"") != NULL) &&
@@ -3964,16 +3962,15 @@ ks_port_list(ks_port_t *ports, uint max)
                     snprintf(ports[nports].serial,
                              sizeof (ports[nports].serial), "%s", serial);
                     nports++;
-                    saw_programmer = FALSE;  // Look for another
+                    saw_kicksmash = FALSE;  // Look for another
                     serial[0] = '\0';
                     continue;
                 }
                 printf("%.80s\n", buf);
             }
         }
-        if ((strstr(buf, "MX29F1615") != NULL) ||
-            (strstr(buf, "KickSmash") != NULL)) {
-            saw_programmer = TRUE;
+        if (strstr(buf, "KickSmash") != NULL) {
+            saw_kicksmash = TRUE;
             serial[0] = '\0';
         }
     }
@@ -4011,7 +4008,7 @@ ks_port_list(ks_port_t *ports, uint max)
         HKEY hDev;
 
         snprintf(vidpid, sizeof (vidpid), "VID_%04X&PID_%04X",
-                 MX_VENDOR, MX_DEVICE);
+                 KS_USB_VENDOR, KS_USB_DEVICE);
 
         /* Serial numbers and their ParentIdPrefix values */
         snprintf(path, sizeof (path), "%s\\%s", enum_roots[0], vidpid);
@@ -4234,19 +4231,19 @@ ks_port_find(const char *serial, const char *usbpath,
 }
 
 /*
- * find_mx_programmer() will attempt to locate the tty device associated
- *                      with the USB connection of Kicksmash. If found,
- *                      it will update the device_name[] global with the
- *                      file path to the serial interface. If --serial
- *                      was specified, only a device with that USB serial
- *                      number is selected.
+ * find_kicksmash() will attempt to locate the tty device associated
+ *                  with the USB connection of Kicksmash. If found,
+ *                  it will update the device_name[] global with the
+ *                  file path to the serial interface. If --serial
+ *                  was specified, only a device with that USB serial
+ *                  number is selected.
  *
  * @param  [in]  None.
- * @global [out] device_name[] is the located path of the programmer (if found).
+ * @global [out] device_name[] is the located path of Kicksmash (if found).
  * @return       None.
  */
 static void
-find_mx_programmer(void)
+find_kicksmash(void)
 {
     ks_port_t ports[KS_PORTS_MAX];
     uint      nports = ks_port_list(ports, ARRAY_SIZE(ports));
@@ -7524,7 +7521,7 @@ errx(EXIT_FAILURE, "how did we get here?");
     }
 #endif
     if (device_name[0] == '\0')
-        find_mx_programmer();
+        find_kicksmash();
 
     if (device_name[0] == '\0') {
         warnx("You must specify a device to open (-d <dev>)");
