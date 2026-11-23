@@ -272,8 +272,11 @@ static handle_ent_t *
 handle_get_name(const char *name)
 {
     handle_ent_t *node;
+
+    /* Volume names are case-insensitive, as in AmigaDOS */
     for (node = handle_list_head; node != NULL; node = node->he_next)
-        if ((node->he_name != NULL) && (strcmp(node->he_name, name) == 0))
+        if ((node->he_type == HM_TYPE_VOLUME) && (node->he_name != NULL) &&
+            (strcasecmp(node->he_name, name) == 0))
             return (node);
     fsprintf("Failed to find \"%s\" in handle list\n", name);
     return (NULL);
@@ -577,17 +580,95 @@ merge_host_paths(const char *base, const char *append)
 }
 
 /*
+ * host_path_fix_case
+ * ------------------
+ * AmigaDOS names are case-insensitive, but most host filesystems are
+ * case-sensitive. If the path does not exist as given, each component
+ * past <start> (the volume's host directory) which does not exist is
+ * looked up in its parent directory, ignoring case (ASCII letters), and
+ * replaced in place with the name found. The first component which can't
+ * be found ends the search, leaving the rest as given (for example, the
+ * name of a file being created).
+ */
+static void
+host_path_fix_case(char *path, size_t start)
+{
+    struct stat    st;
+    struct dirent *de;
+    DIR           *dir;
+    char          *comp;
+    char          *end;
+    char           save;
+    size_t         len;
+
+    if ((lstat(path, &st) == 0) || (errno != ENOENT))
+        return;  // Exists as given (the usual case)
+
+    for (comp = path + start; *comp == '/'; comp++)
+        ;
+    while (*comp != '\0') {
+        end = strchr(comp, '/');
+        if (end == NULL)
+            end = comp + strlen(comp);
+        save = *end;
+        *end = '\0';
+        len = end - comp;
+
+        if (lstat(path, &st) != 0) {
+            /* Search parent directory for a name differing only in case */
+            char *parent = path;
+            int   found  = 0;
+            if (comp == path)
+                parent = ".";
+            else if (comp == path + 1)
+                parent = "/";
+            else
+                comp[-1] = '\0';
+            dir = opendir(parent);
+            if (comp > path + 1)
+                comp[-1] = '/';
+            if (dir != NULL) {
+                while ((de = readdir(dir)) != NULL) {
+                    if ((strlen(de->d_name) == len) &&
+                        (strcasecmp(de->d_name, comp) == 0)) {
+                        memcpy(comp, de->d_name, len);
+                        found = 1;
+                        break;
+                    }
+                }
+                closedir(dir);
+            }
+            if (!found) {
+                *end = save;
+                return;
+            }
+        }
+        *end = save;
+        if (save == '\0')
+            break;
+        for (comp = end + 1; *comp == '/'; comp++)
+            ;
+    }
+}
+
+/*
  * make_host_path is used to build a final path for file open.
  * It takes the volume path and simply concatenates the file
- * path, inserting a slash in the middle as appropriate.
+ * path, inserting a slash in the middle as appropriate. Components
+ * are matched to host names ignoring case, as AmigaDOS does.
  */
 char *
 make_host_path(amiga_vol_t *vol, const char *append)
 {
+    char *path;
+
     if (vol == NULL)
         return (strdup(append));
 
-    return (merge_host_paths(vol->av_path, append));
+    path = merge_host_paths(vol->av_path, append);
+    if ((path != NULL) && (append[0] != '/'))
+        host_path_fix_case(path, strlen(vol->av_path));
+    return (path);
 }
 
 char *

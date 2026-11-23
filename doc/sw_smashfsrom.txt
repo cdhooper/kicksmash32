@@ -4,9 +4,19 @@ smashfsrom - ROMable Amiga Filesystem for host-exported volumes
 See the documentation on smashfs for an overview of what smashfs is.
 
 smashfsrom is a version of smashfs which can be included in the
-Kickstart ROM in order to provide smashfs at boot. It currently does
-not support booting from a smashfs volume, but that might be added in
-the future.
+Kickstart ROM in order to provide smashfs at boot.
+
+The Amiga may also boot from a smashfs volume. Give the volume a boot
+priority with hostsmash (the default is not bootable):
+    hostsmash -d /dev/ttyACM0 -m wb:bootpri=10 /amiga/wb
+At cold start, before the boot menu, smashfsrom asks hostsmash for its
+volumes, and adds a boot node for each bootable volume. That volume is
+then shown in the Early Startup boot menu, and the Amiga boots from it
+if it has the highest boot priority of all boot devices. DOS starts
+smashfs as the handler for that volume, and smashfs then serves all
+volumes. hostsmash must already be running when the Amiga is reset.
+If it isn't, boot is delayed by a few seconds while smashfsrom waits
+for a reply.
 
 There is also smashfsrom_d, which is smashfsrom, but also emits file
 access debug output on the Amiga serial point.

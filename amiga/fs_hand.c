@@ -30,6 +30,17 @@
 #include "fs_packet.h"
 
 #define DIRBUF_SIZE 2000
+
+#ifdef ROMFS
+#define REFRESH_VOLUME_LIST() refresh_volume_list(0)
+struct DosPacket *rom_startup_pkt;  // Set if DOS started smashfs (fs_rom.c)
+static struct MsgPort *reject_port;  // Boot node port while volume is absent
+static ULONG reject_mask;
+void smashboot_add(const char *name, int bootpri);
+#else
+#define REFRESH_VOLUME_LIST() refresh_volume_list()
+#define reject_mask 0
+#endif
 #define SHUTDOWN_MAX_SECS 60  // Max wait at exit for locks to be released
 
 const char *version = "\0$VER: smashfs "VERSION" ("BUILD_DATE") \xA9 Chris Hooper";
@@ -83,8 +94,21 @@ check_host_epoch(uint32_t epoch)
     prev_valid = 1;
 }
 
+/*
+ * refresh_volume_list
+ * -------------------
+ * Reads the host's Volume Directory, adding new volumes to the DOS list
+ * and flushing those which are gone. With boot_scan set (smashboot ROM
+ * module, before DOS starts), it instead creates a boot node for each
+ * volume the host reports as bootable.
+ */
+#ifdef ROMFS
+void
+refresh_volume_list(uint boot_scan)
+#else
 static void
 refresh_volume_list(void)
+#endif
 {
     static uint8_t fopen_fails = 0;
     handle_t       phandle = 0;
@@ -107,6 +131,10 @@ refresh_volume_list(void)
     rc = sm_fopen(phandle, "::", HM_MODE_READ, &type, 0, &handle);
     if (handle == 0) {
         printf("Could not open volume directory\n");
+#ifdef ROMFS
+        if (boot_scan)
+            return;
+#endif
         if (fopen_fails++ >= 1)
             volume_flush();  // 2 strikes
         return;
@@ -134,9 +162,13 @@ refresh_volume_list(void)
                 check_host_epoch(dent->hmd_rdev);
             }
             if (strlen(dname) < VOLNAME_MAXLEN) {
-                uint vol_flags   = dent->hmd_ino;
-                int  vol_bootpri = (int) dent->hmd_nlink;
-                volume_seen(dname, dent->hmd_atime, vol_flags, vol_bootpri);
+#ifdef ROMFS
+                if (boot_scan) {
+                    if (dent->hmd_ino & AV_FLAG_BOOTABLE)
+                        smashboot_add(dname, (int32_t) dent->hmd_nlink);
+                } else
+#endif
+                    volume_seen(dname, dent->hmd_atime);
             }
             printf(" %s", (char *) (dent + 1));
             pos += sizeof (*dent) + entlen;
@@ -147,6 +179,10 @@ refresh_volume_list(void)
     }
 gvl_fail:
     sm_fclose(handle);
+#ifdef ROMFS
+    if (boot_scan)
+        return;
+#endif
     volume_flush();
 }
 
@@ -169,7 +205,8 @@ handle_messages(void)
      */
     while (!done) {
         /* volume_seen() and volume_flush() add and delete volume ports */
-        waitmask = volume_msg_masks | timer_msg_mask | SIGBREAKF_CTRL_C;
+        waitmask = volume_msg_masks | timer_msg_mask | SIGBREAKF_CTRL_C |
+                   reject_mask;
         mask = Wait(waitmask);
         if (mask & timer_msg_mask) {
             uint timer_msec = 1000;
@@ -188,7 +225,7 @@ handle_messages(void)
                                                             LDF_VOLUMES |
                                                             LDF_WRITE);
                     if (dl != NULL) {
-                        refresh_volume_list();
+                        REFRESH_VOLUME_LIST();
                         UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
                         do_refresh = 0;
                     } else {
@@ -221,6 +258,10 @@ handle_messages(void)
         }
         if ((mask & volume_msg_masks) && !done)
             volume_message(mask & volume_msg_masks);
+#ifdef ROMFS
+        if (mask & reject_mask)
+            volume_port_reject(reject_port);
+#endif
 
         if (mask & SIGBREAKF_CTRL_C) {
             printf("Signal exit\n");
@@ -295,14 +336,43 @@ show_usage:
         rc = 1;
         goto go_exit;
     }
-    /*
-     * Blocking lock is safe here: no volume ports exist yet, so nobody
-     * holding the DosList lock can be waiting on a packet to us.
-     */
-    LockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
-        refresh_volume_list();
-    UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
-    timer_restart(1000);
+#ifdef ROMFS
+    if (rom_startup_pkt != NULL) {
+        /*
+         * DOS started smashfs as the handler of a boot device node, and
+         * may hold the DosList lock until the startup packet is replied.
+         * Attach the boot volume now; the timer refresh adds the rest.
+         */
+        struct DosPacket  *pkt = rom_startup_pkt;
+        struct DeviceNode *dn  = (struct DeviceNode *) BTOC(pkt->dp_Arg3);
+        volume_boot_attach(dn);
+        rom_startup_pkt = NULL;
+        if (dn->dn_Task == NULL) {
+            /*
+             * The host volume is not available. Kickstart 3.2 boot code
+             * sends packets to dn_Task even after a failed startup, so it
+             * must not be left NULL. Point it at this process's port,
+             * where every packet is rejected with ERROR_DEVICE_NOT_MOUNTED,
+             * until volume_seen() adopts the node when the volume appears.
+             */
+            reject_port = &((struct Process *) FindTask(NULL))->pr_MsgPort;
+            reject_mask = BIT(reject_port->mp_SigBit);
+            dn->dn_Task = reject_port;
+        }
+        ReplyPkt(pkt, DOSTRUE, 0);
+        timer_restart(1000 / TICKS_PER_SECOND);  // Refresh soon
+    } else
+#endif
+    {
+        /*
+         * Blocking lock is safe here: no volume ports exist yet, so nobody
+         * holding the DosList lock can be waiting on a packet to us.
+         */
+        LockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
+            REFRESH_VOLUME_LIST();
+        UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
+        timer_restart(1000);
+    }
 
     /* Returns after all volumes have been freed or abandoned */
     handle_messages();
@@ -311,6 +381,10 @@ show_usage:
     fs_packet_cleanup();
     printf("smashfs exit\n");
 go_exit:
+#ifdef ROMFS
+    if (rom_startup_pkt != NULL)  // DOS is waiting for the handler startup
+        ReplyPkt(rom_startup_pkt, DOSFALSE, ERROR_NO_FREE_STORE);
+#endif
     host_msg_exit();  // I don't know why atexit() doesn't work
     CloseLibrary((struct Library *)DOSBase);
     return (rc);

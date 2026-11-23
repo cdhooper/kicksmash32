@@ -159,7 +159,7 @@ $(OBJS): Makefile $(SMASH_HDRS) | $(OBJDIR)
 	@echo Building $@
 	$(QUIET)$(CC) $(CFLAGS) -c $(filter %.c,$^) -Wa,-a,-ad >$(@:.o=.lst) -o $@
 
-$(FS_OBJS): $(FS_HDRS)
+$(FS_OBJS) $(FSROM_OBJS) $(FSROM_OBJS_D): $(FS_HDRS)
 $(FTP_OBJS): $(FTP_HDRS)
 $(NET_OBJS) $(NETDRV_OBJS): $(NET_HDRS)
 

@@ -197,16 +197,21 @@ typedef struct {
     uint32_t     hmd_mtime;   // Modify time   (secs since Jan 1, 1970)
     uint32_t     hmd_aperms;  // Amiga-style file permissions
     uint32_t     hmd_ino;     // Unique file number per-filesystem
+                              // Volume entries: AV_FLAG_* flags
     uint32_t     hmd_ouid;    // Owner userid
     uint32_t     hmd_ogid;    // Owner groupid
     uint32_t     hmd_mode;    // Unix disk mode (permissions)
     uint32_t     hmd_nlink;   // Filesystem links to file
+                              // Volume entries: boot priority (signed)
     uint32_t     hmd_rdev;    // Filesystem block and char devices
                               // Volume entries: host epoch (changes when
                               // hostsmash restarts; 0 if not supported)
     uint32_t     hmd_rsvd[2]; // Reserved space for future expansion
     /* Name and comment follows... */
 } hm_fdirent_t;               // KM_OP_FREAD
+
+/* Volume entry flags (hmd_ino of a Volume Directory entry) */
+#define AV_FLAG_BOOTABLE 0x01  // Volume is bootable at hmd_nlink priority
 /*
  * The filename immediately follows hm_fdirent_t in the reply
  * message, and the file comment immediately follows the filename

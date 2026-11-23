@@ -20,6 +20,9 @@
 #include <libraries/dos.h>
 #include <libraries/dosextens.h>
 #include <libraries/filehandler.h>
+#ifdef ROMFS
+#include <libraries/expansionbase.h>
+#endif
 #include "printf.h"
 #include "fs_hand.h"
 #include "fs_vol.h"
@@ -179,9 +182,30 @@ fsname(struct DosInfo *info, char *name, void *ignore)
 static const char smashfs_handler_bstr[] __attribute__((aligned(4))) =
     "\7smashfs";
 
+/*
+ * dosnode_link
+ * ------------
+ * Adds a node to the DOS list. The caller must hold the DosList lock.
+ */
+static void
+dosnode_link(DosList_t *node)
+{
+    struct DosInfo *info = (struct DosInfo *)
+                   BTOC(((struct RootNode *) DOSBase->dl_Root)->rn_Info);
+
+    node->dol_Next = info->di_DevInfo;
+    info->di_DevInfo = CTOB(node);
+}
+
+/*
+ * volnode_init
+ * ------------
+ * Creates a DOS device or volume node. Unless nolink is set, the node is
+ * added to the DOS list, and the caller must hold the DosList lock.
+ */
 static struct DosList *
 volnode_init(char *name, uint32_t access_time, LONG dl_type,
-             struct MsgPort *msgport, void *ignore)
+             struct MsgPort *msgport, void *ignore, uint nolink)
 {
     uint namelen;
     char *volumename;
@@ -257,10 +281,8 @@ volnode_init(char *name, uint32_t access_time, LONG dl_type,
      * can be locked. Since that would unnecessarily complicate this code,
      * it's up to the caller to do the AttemptLockDosList().
      */
-    // LockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
-        dosnode->dol_Next = info->di_DevInfo;
-        info->di_DevInfo = (BPTR) CTOB(dosnode);
-    // UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
+    if (nolink == 0)
+        dosnode_link(dosnode);
     return (dosnode);
 }
 
@@ -274,10 +296,10 @@ volnode_new(char *name, uint32_t access_time, vollist_t *vol)
      * So create both a device and a volume.
      */
     vol->vl_devnode = volnode_init(name, access_time, DLT_DEVICE,
-                                   vol->vl_msgport, NULL);
+                                   vol->vl_msgport, NULL, 0);
     vol->vl_volnode = (DeviceList_t *)
                       volnode_init(name, access_time, DLT_VOLUME,
-                                   vol->vl_msgport, vol->vl_devnode);
+                                   vol->vl_msgport, vol->vl_devnode, 0);
 }
 
 /*
@@ -336,9 +358,10 @@ volnode_readd(char *name, uint32_t access_time, vollist_t *vol)
 
     if ((node = vol->vl_devnode) == NULL) {
         vol->vl_devnode = volnode_init(name, access_time, DLT_DEVICE,
-                                       vol->vl_msgport, NULL);
+                                       vol->vl_msgport, NULL, 0);
     } else {
-        volnode_rename(info, node, name, NULL);
+        if (vol->vl_bootdev == 0)  // Boot node name is not from AllocVec()
+            volnode_rename(info, node, name, NULL);
         node->dol_Task = vol->vl_msgport;
         node->dol_Next = info->di_DevInfo;
         info->di_DevInfo = CTOB(node);
@@ -347,7 +370,7 @@ volnode_readd(char *name, uint32_t access_time, vollist_t *vol)
     if ((node = (DosList_t *) vol->vl_volnode) == NULL) {
         vol->vl_volnode = (DeviceList_t *)
                           volnode_init(name, access_time, DLT_VOLUME,
-                                       vol->vl_msgport, vol->vl_devnode);
+                                       vol->vl_msgport, vol->vl_devnode, 0);
     } else {
         volnode_rename(info, node, name, vol->vl_devnode);
         node->dol_Task = vol->vl_msgport;
@@ -405,20 +428,134 @@ volnode_remove(vollist_t *vol)
         printf("Unable to find volnode to remove\n");
 }
 
+#ifdef ROMFS
+/*
+ * smashboot_find()
+ *     Returns the boot device node which the smashboot ROM module created
+ *     for the specified host volume, or NULL if there is none.
+ */
+static smashboot_dev_t *
+smashboot_find(const char *name)
+{
+    struct ExpansionBase *ExpansionBase;
+    struct BootNode      *bn;
+    smashboot_dev_t      *sbd;
+    smashboot_dev_t      *found = NULL;
+
+    ExpansionBase = (struct ExpansionBase *)
+                    OpenLibrary("expansion.library", 37);
+    if (ExpansionBase == NULL)
+        return (NULL);
+    Forbid();
+    for (bn = (struct BootNode *) ExpansionBase->MountList.lh_Head;
+         bn->bn_Node.ln_Succ != NULL;
+         bn = (struct BootNode *) bn->bn_Node.ln_Succ) {
+        sbd = smashboot_dev(bn->bn_DeviceNode);
+        if ((sbd != NULL) && (strcmp(sbd->sbd_hostname, name) == 0)) {
+            found = sbd;
+            break;
+        }
+    }
+    Permit();
+    CloseLibrary((struct Library *) ExpansionBase);
+    return (found);
+}
+
+/*
+ * volume_adopt_bootdev()
+ *     Makes a boot device node the volume's device node, so that DOS
+ *     packets sent to it arrive at the volume's message port.
+ */
+static void
+volume_adopt_bootdev(vollist_t *vol, struct DeviceNode *dn)
+{
+    vol->vl_bootdev = 1;
+    vol->vl_devnode = (DosList_t *) dn;
+    dn->dn_Task     = vol->vl_msgport;
+}
+#endif
+
+/*
+ * volume_create()
+ *     Opens a host volume and adds it to the volume list, without any
+ *     DOS nodes.
+ */
+static vollist_t *
+volume_create(char *name)
+{
+    vollist_t *cur;
+    MsgPort_t *msgport;
+    handle_t   handle;
+    uint       type;
+    uint       rc;
+
+    rc = sm_fopen(0, name, HM_MODE_READDIR, &type, 0, &handle);
+    if (rc != 0) {
+        printf("failed open of volume %s\n", name);
+        return (NULL);
+    }
+
+    msgport = CreatePort(NULL, 0);
+    if (msgport == NULL) {
+        printf("failed to create port for volume %s\n", name);
+        sm_fclose(handle);
+        return (NULL);
+    }
+
+    cur = AllocMem(sizeof (vollist_t), MEMF_PUBLIC | MEMF_CLEAR);
+    if (cur == NULL) {
+        printf("failed to allocate volume %s\n", name);
+        DeletePort(msgport);
+        sm_fclose(handle);
+        return (NULL);
+    }
+    strcpy(cur->vl_name, name);
+    cur->vl_next = vollist;
+    cur->vl_seen = 1;
+    cur->vl_in_dos_list = 1;
+    cur->vl_msgport = msgport;
+    cur->vl_msg_mask = BIT(msgport->mp_SigBit);
+    cur->vl_handle = handle;
+    cur->vl_root_rewind = 1;
+    vollist = cur;
+    volume_msg_masks |= cur->vl_msg_mask;
+    return (cur);
+}
+
+#ifdef ROMFS
+/*
+ * volume_boot_attach()
+ *     Called when DOS has started smashfs as the handler of a boot device
+ *     node. The volume is opened and the node pointed at its message port,
+ *     so that the handler startup packet may be replied right away. The
+ *     DOS volume node is added by the next volume_seen() of the volume,
+ *     which holds the DosList lock (DOS may hold it until the reply).
+ */
+void
+volume_boot_attach(struct DeviceNode *dn)
+{
+    vollist_t *cur = volume_create(smashboot_dev(dn)->sbd_hostname);
+
+    if (cur != NULL) {
+        volume_adopt_bootdev(cur, dn);
+        /* Locks need the volume node, so create it (unlisted) now */
+        cur->vl_in_dos_list = 2;
+        cur->vl_volnode = (DeviceList_t *)
+                          volnode_init(cur->vl_name, 0, DLT_VOLUME,
+                                       cur->vl_msgport, dn, 1);
+    }
+}
+#endif
+
 /*
  * volume_seen()
  *     Mark volume as seen. Unknown volumes are immediately added to the
  *     DOS volume list.
  */
 void
-volume_seen(char *name, uint32_t access_time, uint flags, int bootpri)
+volume_seen(char *name, uint32_t access_time)
 {
     vollist_t *cur;
-    MsgPort_t *msgport;
-    handle_t phandle = 0;
-    handle_t handle;
-    uint     type;
-    uint     rc;
 
     for (cur = vollist; cur != NULL; cur = cur->vl_next) {
         if (strcmp(name, cur->vl_name) == 0) {
@@ -427,56 +564,46 @@ volume_seen(char *name, uint32_t access_time, uint flags, int bootpri)
                 /* Previously dropped out of volume list */
                 cur->vl_in_dos_list = 1;
                 volnode_readd(name, access_time, cur);
+            } else if (cur->vl_in_dos_list == 2) {
+                /* Boot volume from volume_boot_attach() */
+                cur->vl_in_dos_list = 1;
+                if (cur->vl_volnode != NULL)
+                    dosnode_link((DosList_t *) cur->vl_volnode);
             }
             return;
         }
     }
 
-    rc = sm_fopen(phandle, name, HM_MODE_READDIR, &type, 0, &handle);
-    if (rc != 0) {
-        printf("failed open of volume %s\n", name);
+    cur = volume_create(name);
+    if (cur == NULL)
         return;
-    }
 
-    msgport = CreatePort(NULL, 0);
-    if (msgport == NULL) {
-        printf("failed to create port for volume %s\n", name);
-        sm_fclose(handle);
+#ifdef ROMFS
+    smashboot_dev_t *sbd = smashboot_find(name);
+    if (sbd != NULL) {
+        /*
+         * DOS normally added the boot node to the DOS list at boot,
+         * but it was taken out if the volume was flushed since.
+         */
+        struct DosInfo *info = (struct DosInfo *)
+                   BTOC(((struct RootNode *) DOSBase->dl_Root)->rn_Info);
+        DosList_t *dn;
+
+        volume_adopt_bootdev(cur, &sbd->sbd_dn);
+        for (dn = (DosList_t *) BTOC(info->di_DevInfo); dn != NULL;
+             dn = (DosList_t *) BTOC(dn->dol_Next))
+            if (dn == (DosList_t *) sbd)
+                break;
+        if (dn == NULL)
+            dosnode_link((DosList_t *) sbd);
+        cur->vl_volnode = (DeviceList_t *)
+                          volnode_init(name, access_time, DLT_VOLUME,
+                                       cur->vl_msgport, cur->vl_devnode, 0);
         return;
-    }
-
-    cur = AllocMem(sizeof (vollist_t), MEMF_PUBLIC);
-    if (cur == NULL) {
-        printf("failed to allocate volume %s\n", name);
-        DeletePort(msgport);
-        sm_fclose(handle);
-        return;
-    }
-    strcpy(cur->vl_name, name);
-    cur->vl_next = vollist;
-    cur->vl_seen = 1;
-    cur->vl_in_dos_list = 1;
-    cur->vl_use_count = 0;
-    cur->vl_msgport = msgport;
-    cur->vl_msg_mask = BIT(msgport->mp_SigBit);
-    cur->vl_handle = handle;
-    cur->vl_root_scan = 0;
-    cur->vl_root_rewind = 1;
-    cur->vl_flags = flags;
-    cur->vl_bootpri = bootpri;
-    volnode_new(name, access_time, cur);
-    vollist = cur;
-
-#if 0
-    if (flags & AV_FLAG_BOOTABLE) {
-        /* Create boot node */
-        AddBootNode(bootpri, ADNF_STARTPROC, dn, md->configDev);
     }
 #endif
-
-    volume_msg_masks |= cur->vl_msg_mask;
+    volnode_new(name, access_time, cur);
 }
-#define AV_FLAG_BOOTABLE 0x01
 
 /*
  * volume_port_reject()
@@ -485,7 +612,7 @@ volume_seen(char *name, uint32_t access_time, uint flags, int bootpri)
  *     node just before it was removed may have queued a packet; without
  *     a reply, that process would wait forever.
  */
-static void
+void
 volume_port_reject(struct MsgPort *mp)
 {
     struct StandardPacket *sp;
@@ -538,7 +665,8 @@ volume_flush(void)
                     FreeVec(BTOC(dlnode->dl_Name));
                     FreeMem(dlnode, sizeof (*dlnode));
                 }
-                if ((dlnode = (DeviceList_t *) cur->vl_devnode) != NULL) {
+                if (((dlnode = (DeviceList_t *) cur->vl_devnode) != NULL) &&
+                    (cur->vl_bootdev == 0)) {
                     FreeVec(BTOC(dlnode->dl_Name));
                     FreeMem(dlnode, sizeof (*dlnode));
                 }

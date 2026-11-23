@@ -32,7 +32,7 @@ typedef unsigned int uint;
 void msg_init(void);
 
 #ifdef ROMFS
-extern const uint32_t lcrc32_table[];
+extern uint32_t lcrc32_table[];
 #endif
 extern void (*ecia_spin)(unsigned int ticks);
 #if !defined(ROMFS) && !defined(STANDALONE)
@@ -45,6 +45,9 @@ void sm_rom_alias_close(void);
 #endif
 extern uint (*esend_cmd_core)(uint16_t cmd, void *arg, uint16_t arglen,
                               void *reply, uint replymax, uint *replyalen);
+#ifdef ROMFS
+void lcrc32_init(void);
+#endif
 uint send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
                    void *reply, uint replymax, uint *replyalen);
 void send_cmd_core_begin(void);

@@ -2345,6 +2345,7 @@ sm_msg_copy_to_ram(void)
         return;
     }
     memcpy(copy_to_ram_ptr, (void *) copy_to_ram_start, len);
+    lcrc32_init();
     esend_cmd_core = (void *) (copy_to_ram_ptr +
                                (uintptr_t) send_cmd_core - copy_to_ram_start);
 

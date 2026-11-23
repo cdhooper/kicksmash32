@@ -553,6 +553,18 @@ File service options
         still be specified. Using "cd ::" in smashftp will always take
         you to the Volume Directory.
 
+    Volume flags may follow the colon of the volume name, separated
+    by commas. The only flag currently is:
+        bootpri=<num>
+            Make the volume bootable at the specified boot priority
+            (-128 to 127). This requires smashfsrom in the Kickstart ROM,
+            and hostsmash must already be running when the Amiga starts.
+            The Amiga boots from the highest priority bootable device
+            (DF0: is normally 5, and hard disk partitions are normally 0).
+            Volumes are not bootable unless this flag is given.
+        Example:
+            hostsmash -d /dev/ttyACM0 -m wb:bootpri=10 /amiga/wb
+
 If you get an erase error on the flash, it's possible that a flash block
 has been locked. I've not found a way around this without removing the
 flash parts, as the Micron datasheet says that it requires a programming

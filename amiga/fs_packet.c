@@ -1969,6 +1969,42 @@ handle_packet(void)
         case ACTION_PARENT:
             res1 = action_parent();
             break;
+        case ACTION_EXAMINE_FH:
+        case ACTION_COPY_DIR_FH:
+        case ACTION_PARENT_FH:
+            /*
+             * Every open file holds a lock on the same object, so these
+             * are done as EXAMINE_OBJECT, COPY_DIR (DupLock), and PARENT
+             * of that lock. Arg1 is the file handle's fh_Arg1.
+             */
+            gpack->dp_Arg1 = CTOB(((fh_private_t *) GARG1)->fp_lock);
+            if (gpack->dp_Type == ACTION_EXAMINE_FH)
+                res1 = action_examine_object();
+            else if (gpack->dp_Type == ACTION_COPY_DIR_FH)
+                res1 = action_copy_dir();
+            else
+                res1 = action_parent();
+            break;
+        case ACTION_FH_FROM_LOCK: {
+            /*
+             * OpenFromLock(): open the lock's object (empty name relative
+             * to the lock) as FINDINPUT does, then free the lock, which
+             * the file now replaces.
+             */
+            static char empty_bstr[4] __attribute__((aligned(4)));
+            fs_lock_t  *lock = (fs_lock_t *) BTOC(GARG2);
+
+            gpack->dp_Arg3 = CTOB(empty_bstr);
+            res1 = action_findinput();
+            if (res1 != DOSFALSE) {
+                fh_private_t *fp = (fh_private_t *)
+                                   ((FileHandle_t *) BTOC(GARG1))->fh_Arg1;
+                fp->fp_lock->fl_PHandle = lock->fl_PHandle;
+                gpack->dp_Arg1 = GARG2;
+                action_free_lock();
+            }
+            break;
+        }
         case ACTION_READ:
             res1 = action_read();
             break;
@@ -2025,12 +2061,8 @@ handle_packet(void)
         case ACTION_WRITE_PROTECT:
         case ACTION_CHANGE_SIGNAL:
         case ACTION_FORMAT:
-        case ACTION_FH_FROM_LOCK:
         case ACTION_CHANGE_MODE:    // convert lock to exclusive or shared
-        case ACTION_COPY_DIR_FH:
-        case ACTION_PARENT_FH:
         case ACTION_EXAMINE_ALL:
-        case ACTION_EXAMINE_FH:
         case ACTION_LOCK_RECORD:
         case ACTION_FREE_RECORD:
         case ACTION_ADD_NOTIFY:

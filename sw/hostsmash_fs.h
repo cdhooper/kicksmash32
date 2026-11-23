@@ -1,8 +1,6 @@
 #ifndef _HOSTSMASH_FS_H
 #define _HOSTSMASH_FS_H
 
-#define AV_FLAG_BOOTABLE 0x01
-
 typedef struct amiga_vol  amiga_vol_t;
 typedef struct handle_ent handle_ent_t;
 
