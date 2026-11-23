@@ -3436,14 +3436,15 @@ put_file(const char *src, const char *dst)
 
     fp = fopen(src, "r");
     if (fp == NULL) {
-        printf("Failed to open %s for read\n", dst);
+        printf("Failed to open %s for read\n", src);
         return (RC_FAILURE);
     }
 
-    rc = sm_fopen(cwd_handle, dst, HM_MODE_WRITE | HM_MODE_CREATE,
-                 &type, fib.fib_Protection, &handle);
+    rc = sm_fopen(cwd_handle, dst,
+                  HM_MODE_WRITE | HM_MODE_CREATE | HM_MODE_TRUNC,
+                  &type, fib.fib_Protection, &handle);
     if (rc != KM_STATUS_OK) {
-        printf("Failed to open %s for write: %s\n", src, smash_err(rc));
+        printf("Failed to open %s for write: %s\n", dst, smash_err(rc));
         fclose(fp);
         return (RC_FAILURE);
     }
