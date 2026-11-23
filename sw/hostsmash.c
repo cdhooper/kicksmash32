@@ -342,6 +342,8 @@ static char            *terminal_cmd      = NULL;
 static uint             amiga_net_service = 0;
 static bool             reopen_quiet      = FALSE;  // Hide reopen messages
 static bool             cmd_quiet         = FALSE;  // Hide CMD: timeout
+static volatile bool    dev_link_down     = FALSE;  // Device gone, reopening
+static volatile uint    dev_reopen_count  = 0;      // Times device reopened
 
 #ifdef __MINGW32__
 #define UNUSED(x) (void)(x)
@@ -1173,6 +1175,19 @@ config_dev(int fd)
 #endif
 
 /*
+ * reopen_dev_done() records that the device was reopened. The message
+ *                   interface uses this to restart Kicksmash message
+ *                   service mode before its next command.
+ */
+static void
+reopen_dev_done(void)
+{
+    dev_reopen_count++;
+    __sync_synchronize();  // Count must be visible before link is up
+    dev_link_down = FALSE;
+}
+
+/*
  * reopen_dev() will wait for the serial device to reappear after it has
  *              disappeared.
  *
@@ -1187,6 +1202,7 @@ reopen_dev(void)
     time_t        now       = time(NULL);
     bool_t        printed   = FALSE;
 
+    dev_link_down = TRUE;
     if (dev_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(dev_handle);
         dev_handle = INVALID_HANDLE_VALUE;
@@ -1227,6 +1243,7 @@ top:
         printf("\r<< Reopened %s >>\n", device_name);
     }
     last_time = now;
+    reopen_dev_done();
 }
 #else
 static void
@@ -1242,6 +1259,7 @@ reopen_dev(void)
     oflags |= O_NONBLOCK;
 #endif
 
+    dev_link_down = TRUE;
     dev_fd = -1;
     if (temp != -1) {
         if (flock(temp, LOCK_UN | LOCK_NB) < 0)
@@ -1275,6 +1293,7 @@ top:
         printf("\r<< Reopened %s >>\n", device_name);
     }
     last_time = now;
+    reopen_dev_done();
 }
 #endif
 
@@ -1482,10 +1501,13 @@ th_serial_writer(void *arg)
              (pos >= sizeof (lbuf)) || (ic_delay != 0)) {
             int count = dev_write_all(lbuf, pos);
             if (count < 0) {
-                /* Device closed or failed; wait for reader to reopen it */
+                /*
+                 * Device closed or failed; wait for reader to reopen it.
+                 * The data is discarded, as a partial command sent to a
+                 * reattached device would only confuse it.
+                 */
                 time_delay_msec(500);
-                if (pos >= sizeof (lbuf))
-                    pos--;
+                pos = 0;
                 continue;
             }
             if (ic_delay) {
@@ -4516,6 +4538,8 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
         if ((int)ch == -1) {
             if (ks_message_terminated)
                 return (0);
+            if (dev_link_down)
+                return (MSG_STATUS_NO_REPLY);  // Device went away
             if (timeout_count++ >= timeout) {
                 printf("Receive timeout (%d ms): discarded %u bytes\n",
                        timeout, pos);
@@ -4546,16 +4570,20 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
                         printf(" %02x", bufp[cur ^ 1]);
                     }
                 }
-                if (pos - KS_MSG_HEADER_LEN < len) {
+                if (pos == 0) {
+                    /* Nothing received */
+                } else if (pos <= KS_MSG_HEADER_LEN) {
+                    printf(" [header short by %ld bytes]\n",
+                           (long) (KS_MSG_HEADER_LEN - pos));
+                } else if (pos - KS_MSG_HEADER_LEN < len) {
                     printf(" [data short by %ld bytes]\n",
                            (long) (len - (pos - KS_MSG_HEADER_LEN)));
                 } else if (pos - KS_MSG_HEADER_LEN < len + 4) {
                     printf(" [CRC short by %ld bytes]\n",
                            (long) (len + 4 - (pos - KS_MSG_HEADER_LEN)));
                 } else {
-                    printf("%08x got CRC???", crc_rx);
+                    printf("%08x got CRC???\n", crc_rx);
                 }
-                printf("\n");
 #endif
                 return (MSG_STATUS_NO_REPLY);
             }
@@ -4692,6 +4720,84 @@ recv_ks_reply_core(void *buf, uint buflen, uint flags,
     }
 }
 
+static uint     msg_service_active = 0;  // Message mode is running
+static uint     msg_reopen_handled = 0;  // dev_reopen_count at service start
+static uint16_t app_state_send[2];
+
+/*
+ * ks_msg_service_start() puts Kicksmash in message service mode and
+ *                        sets the app state. It is called when message
+ *                        mode starts, and again after the serial device
+ *                        has gone away and been reopened (for example,
+ *                        the USB cable was unplugged), as Kicksmash may
+ *                        have reset or may have a partial command buffered.
+ */
+static uint
+ks_msg_service_start(uint quiet)
+{
+    uint    rc;
+    uint    status;
+    uint    rxlen;
+    uint8_t buf[256];
+
+    if (quiet)
+        cmd_quiet = TRUE;
+    rc = send_cmd("prom service");  // Leaves and re-enters service mode
+    cmd_quiet = FALSE;
+    if (rc != 0)
+        return (MSG_STATUS_NO_REPLY);
+
+    rc = send_ks_cmd_core(KS_CMD_MSG_STATE | KS_MSG_STATE_SET,
+                          sizeof (app_state_send), app_state_send);
+    if (rc == 0)
+        rc = recv_ks_reply_core(buf, sizeof (buf), 1, &status, &rxlen);
+    if (rc == 0)
+        rc = status;
+    if ((rc != 0) && !quiet)
+        printf("HS Set App State failed: %d (%s)\n", rc, smash_err(rc));
+    return (rc);
+}
+
+/*
+ * ks_msg_link_check() verifies the serial link is usable for a message
+ *                     command. While the device is gone, it fails
+ *                     quickly. After the device is reopened, it restarts
+ *                     Kicksmash message service mode. The caller must
+ *                     hold the send lock.
+ */
+static uint
+ks_msg_link_check(void)
+{
+    static uint warned = 0;
+    uint count;
+    uint rc;
+
+    if (!msg_service_active)
+        return (0);
+    if (dev_link_down) {
+        time_delay_msec(100);  // Don't spin while the device is gone
+        return (MSG_STATUS_NO_REPLY);
+    }
+    count = dev_reopen_count;
+    if (count == msg_reopen_handled)
+        return (0);
+
+    /* Allow Kicksmash to time out any partially received command */
+    time_delay_msec(250);
+    rc = ks_msg_service_start(TRUE);
+    if (rc != 0) {
+        if (warned++ == 0)
+            printf("<< Kicksmash message service not responding >>\n");
+        time_delay_msec(500);
+        return (rc);
+    }
+    msg_reopen_handled = count;
+    warned = 0;
+    printf("<< Kicksmash message service restarted >>\n");
+    fflush(stdout);
+    return (0);
+}
+
 static uint
 send_ks_cmd_prio(uint prio, uint cmd, void *txbuf, uint txlen, void *rxbuf,
                  uint rxmax, uint *rxstatus, uint *rxlen, uint flags)
@@ -4704,7 +4810,9 @@ send_ks_cmd_prio(uint prio, uint cmd, void *txbuf, uint txlen, void *rxbuf,
      * forwarding thread) just nests here.
      */
     ks_send_lock(prio);
-    rc = send_ks_cmd_core(cmd, txlen, txbuf);
+    rc = ks_msg_link_check();
+    if (rc == 0)
+        rc = send_ks_cmd_core(cmd, txlen, txbuf);
     if (rc == 0)
         rc = recv_ks_reply_core(rxbuf, rxmax, flags, rxstatus, rxlen);
     ks_send_unlock();
@@ -5232,8 +5340,6 @@ goto retry;
     return (RC_TIMEOUT);
 }
 
-static uint16_t app_state_send[2];
-
 static uint
 keep_app_state(void)
 {
@@ -5241,7 +5347,7 @@ keep_app_state(void)
     uint rc;
     rc = send_ks_cmd(KS_CMD_MSG_STATE | KS_MSG_STATE_SET, app_state_send,
                      sizeof (app_state_send), NULL, 0, &status, NULL, 0);
-    if (rc != 0) {
+    if ((rc != 0) && !dev_link_down) {
         printf("HS send message failed: %d (%s)\n", rc, smash_err(rc));
         return (rc);
     }
@@ -5515,8 +5621,9 @@ process_msg(uint status, uint8_t *rxdata, uint rxlen)
         if (rc == 0)
             break;
 
-        printf("process_msg failure op=%x,%x status=%02x: %x (%s)\n",
-               op, km->km_op, status, rc, smash_err(rc));
+        if (!dev_link_down)
+            printf("process_msg failure op=%x,%x status=%02x: %x (%s)\n",
+                   op, km->km_op, status, rc, smash_err(rc));
         time_delay_msec(100);
     } while (retry-- > 0);
 }
@@ -5539,8 +5646,9 @@ handle_atou_messages(void)
     while (1) {
         rc = recv_msg(TAG_QUEUE_ANY, rxdata, sizeof (rxdata), &status, &rxlen);
         if (rc != 0) {
-            printf("HS recv_msg failure: %d (%s)\n", rc, smash_err(rc));
-            return (rc);
+            if (!dev_link_down)
+                printf("HS recv_msg failure: %d (%s)\n", rc, smash_err(rc));
+            return (handled);
         }
         if ((status & ~KS_MSG_OVERRIDE) == KS_CMD_MSG_SEND) {
             process_msg(status, rxdata, rxlen);
@@ -5571,8 +5679,6 @@ handle_atou_messages(void)
 static void
 run_message_mode(void)
 {
-    char buf[2048];
-    uint rxlen;
     uint status;
     uint rc;
     uint curtick = 10;
@@ -5591,20 +5697,11 @@ run_message_mode(void)
     app_state_send[0] = SWAP16(0xffff);     // Affect all bits
     app_state_send[1] = SWAP16(app_state);  // Message service up
 
-    if (send_cmd("prom service"))
-        return; // "timeout" was reported in this case
-
+    msg_reopen_handled = dev_reopen_count;
+    if (ks_msg_service_start(FALSE) != 0)
+        return;  // Failure was reported
     show_ks_inquiry();
-
-    rc = send_ks_cmd(KS_CMD_MSG_STATE | KS_MSG_STATE_SET, app_state_send,
-                     sizeof (app_state_send), buf, sizeof (buf), &status,
-                     &rxlen, 1);
-    if (rc == 0)
-        rc = status;
-    if (rc != 0) {
-        printf("HS Set App State failed: %d (%s)\n", rc, smash_err(rc));
-        return;
-    }
+    msg_service_active = 1;  // Restart service if device is reopened
 
     rc = send_ks_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, &status, NULL, 0);
     if (rc == 0)
@@ -5668,6 +5765,7 @@ run_message_mode(void)
                 curtick += curtick / 2;
         }
     }
+    msg_service_active = 0;
     sm_destroy_queues();
 }
 
