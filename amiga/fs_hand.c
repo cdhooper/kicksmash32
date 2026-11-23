@@ -101,12 +101,16 @@ check_host_epoch(uint32_t epoch)
  * and flushing those which are gone. With boot_scan set (smashboot ROM
  * module, before DOS starts), it instead creates a boot node for each
  * volume the host reports as bootable.
+ *
+ * The host is read without holding the DosList lock (see volume_update()).
+ * Returns -1 if the DosList lock was not available, in which case the
+ * refresh should be tried again soon.
  */
 #ifdef ROMFS
-void
+int
 refresh_volume_list(uint boot_scan)
 #else
-static void
+static int
 refresh_volume_list(void)
 #endif
 {
@@ -124,8 +128,11 @@ refresh_volume_list(void)
     uint8_t        epoch_checked = 0;
 
     if (sm_fservice() == 0) {
-        volume_flush();
-        return;  // file service is not active
+#ifdef ROMFS
+        if (boot_scan)
+            return (0);  // Before DOS: there is no DOS list
+#endif
+        return (volume_update());  // file service is not active
     }
 
     rc = sm_fopen(phandle, "::", HM_MODE_READ, &type, 0, &handle);
@@ -133,11 +140,11 @@ refresh_volume_list(void)
         printf("Could not open volume directory\n");
 #ifdef ROMFS
         if (boot_scan)
-            return;
+            return (0);
 #endif
         if (fopen_fails++ >= 1)
-            volume_flush();  // 2 strikes
-        return;
+            return (volume_update());  // 2 strikes
+        return (0);
     }
     fopen_fails = 0;
     while (1) {
@@ -181,9 +188,9 @@ gvl_fail:
     sm_fclose(handle);
 #ifdef ROMFS
     if (boot_scan)
-        return;
+        return (0);
 #endif
-    volume_flush();
+    return (volume_update());
 }
 
 void
@@ -204,7 +211,7 @@ handle_messages(void)
      * volumes are abandoned (see volume_abandon()).
      */
     while (!done) {
-        /* volume_seen() and volume_flush() add and delete volume ports */
+        /* volume_seen() and volume_update() add and delete volume ports */
         waitmask = volume_msg_masks | timer_msg_mask | SIGBREAKF_CTRL_C |
                    reject_mask;
         mask = Wait(waitmask);
@@ -220,38 +227,32 @@ handle_messages(void)
                 if ((runtime & 7) == 0)
                     do_refresh++;
                 if (do_refresh) {
-                    /* To avoid deadlock, handlers never use LockDosList() */
-                    struct DosList *dl = AttemptLockDosList(LDF_DEVICES |
-                                                            LDF_VOLUMES |
-                                                            LDF_WRITE);
-                    if (dl != NULL) {
-                        REFRESH_VOLUME_LIST();
-                        UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
+                    if (REFRESH_VOLUME_LIST() == 0)
                         do_refresh = 0;
-                    } else {
+                    else
                         timer_msec = 1000 / TICKS_PER_SECOND;  // one tick
-                    }
                 }
-            } else {
+            } else if (volume_update() != 0) {
+                /* DosList is busy; volume_update() frees unused volumes */
+                timer_msec = 1000 / TICKS_PER_SECOND;  // one tick
+            } else if (gvolumes_inuse == 0) {
+                done = 1;
+            } else if (--shutdown_timer == 0) {
                 /* To avoid deadlock, handlers never use LockDosList() */
                 struct DosList *dl = AttemptLockDosList(LDF_DEVICES |
                                                         LDF_VOLUMES |
                                                         LDF_WRITE);
                 if (dl != NULL) {
-                    volume_flush();  // Frees volumes no longer in use
-                    if (gvolumes_inuse == 0) {
-                        done = 1;
-                    } else if (--shutdown_timer == 0) {
-                        volume_abandon();
-                        done = 1;
-                    } else if ((shutdown_timer % 10) == 0) {
-                        printf("%u volumes in use; shutdown in %u\n",
-                               gvolumes_inuse, shutdown_timer);
-                    }
+                    volume_abandon();
                     UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
+                    done = 1;
                 } else {
+                    shutdown_timer = 1;  // Try again
                     timer_msec = 1000 / TICKS_PER_SECOND;  // one tick
                 }
+            } else if ((shutdown_timer % 10) == 0) {
+                printf("%u volumes in use; shutdown in %u\n",
+                       gvolumes_inuse, shutdown_timer);
             }
             if (!done)
                 timer_restart(timer_msec);
@@ -353,7 +354,7 @@ show_usage:
              * sends packets to dn_Task even after a failed startup, so it
              * must not be left NULL. Point it at this process's port,
              * where every packet is rejected with ERROR_DEVICE_NOT_MOUNTED,
-             * until volume_seen() adopts the node when the volume appears.
+             * until volume_update() adopts the node when the volume appears.
              */
             reject_port = &((struct Process *) FindTask(NULL))->pr_MsgPort;
             reject_mask = BIT(reject_port->mp_SigBit);
@@ -364,14 +365,12 @@ show_usage:
     } else
 #endif
     {
-        /*
-         * Blocking lock is safe here: no volume ports exist yet, so nobody
-         * holding the DosList lock can be waiting on a packet to us.
-         */
-        LockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
-            REFRESH_VOLUME_LIST();
-        UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
-        timer_restart(1000);
+        if (REFRESH_VOLUME_LIST() == 0) {
+            timer_restart(1000);
+        } else {
+            do_refresh = 1;  // DosList busy; try again soon
+            timer_restart(1000 / TICKS_PER_SECOND);
+        }
     }
 
     /* Returns after all volumes have been freed or abandoned */

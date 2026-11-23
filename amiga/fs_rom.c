@@ -471,7 +471,7 @@ smashboot_scan(void *arg)
 {
     extern struct Library *__UtilityBase;
     extern uint8_t flag_output;
-    void refresh_volume_list(uint boot_scan);
+    int refresh_volume_list(uint boot_scan);
     void __ctor_stdlib_memory_init(void *);
     void __dtor_stdlib_memory_exit(void *);
 

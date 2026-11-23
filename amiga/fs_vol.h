@@ -25,8 +25,9 @@ typedef struct vollist vollist_t;
 typedef struct vollist {
     char          vl_name[VOLNAME_MAXLEN + 1];
     vollist_t    *vl_next;
-    uint8_t       vl_seen;
-    uint8_t       vl_in_dos_list;
+    uint8_t       vl_seen;         // Listed by the host since last update
+    uint8_t       vl_in_dos_list;  // 0=no, 1=yes, 2=boot devnode only
+    uint32_t      vl_atime;        // Host access time (volume node date)
     uint8_t       vl_bootdev;      // vl_devnode is a smashboot_dev_t
     uint          vl_use_count;
     ULONG         vl_msg_mask;
@@ -63,7 +64,7 @@ void volume_boot_attach(struct DeviceNode *dn);
 #endif
 
 void volume_seen(char *name, uint32_t access_time);
-void volume_flush(void);
+int  volume_update(void);
 void volume_port_reject(struct MsgPort *mp);
 void volume_abandon(void);
 void volume_reopen_handles(void);

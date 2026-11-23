@@ -198,6 +198,24 @@ dosnode_link(DosList_t *node)
 }
 
 /*
+ * dosnode_present
+ * ---------------
+ * Reports whether a node is in the DOS list. The caller must hold the
+ * DosList lock.
+ */
+static int
+dosnode_present(struct DosInfo *info, DosList_t *node)
+{
+    DosList_t *dl;
+
+    for (dl = (DosList_t *) BTOC(info->di_DevInfo); dl != NULL;
+         dl = (DosList_t *) BTOC(dl->dol_Next))
+        if (dl == node)
+            return (1);
+    return (0);
+}
+
+/*
  * volnode_init
  * ------------
  * Creates a DOS device or volume node. Unless nolink is set, the node is
@@ -286,30 +304,6 @@ volnode_init(char *name, uint32_t access_time, LONG dl_type,
     return (dosnode);
 }
 
-static void
-volnode_new(char *name, uint32_t access_time, vollist_t *vol)
-{
-    /*
-     * For Workbench to see it, we need DLT_VOLUME
-     * For Info to show it, we need DLT_DEVICE
-     *
-     * So create both a device and a volume.
-     */
-    vol->vl_devnode = volnode_init(name, access_time, DLT_DEVICE,
-                                   vol->vl_msgport, NULL, 0);
-    vol->vl_volnode = (DeviceList_t *)
-                      volnode_init(name, access_time, DLT_VOLUME,
-                                   vol->vl_msgport, vol->vl_devnode, 0);
-}
-
-/*
- * volnode_readd
- * -------------
- * Puts back the DOS nodes of a volume which had previously dropped out of
- * the DOS list, but whose nodes were kept because locks or files still
- * reference them. Reusing the nodes (rather than allocating new ones)
- * keeps existing locks valid. The caller must hold the DosList lock.
- */
 /*
  * volnode_rename
  * --------------
@@ -347,6 +341,18 @@ volnode_rename(struct DosInfo *info, DosList_t *node, const char *name,
     printf("Volume renamed %s\n", dosname);
 }
 
+/*
+ * volnode_readd
+ * -------------
+ * Adds the DOS nodes of a volume to the DOS list. For Workbench to see
+ * the volume, it needs a DLT_VOLUME node; for Info to show it, it needs
+ * a DLT_DEVICE node. So both are created, if the volume does not yet
+ * have them. A volume which had previously dropped out of the DOS list
+ * keeps its nodes when locks or files still reference them. Reusing the
+ * nodes (rather than allocating new ones) keeps existing locks valid.
+ * A node which is already in the DOS list (such as a boot node which DOS
+ * added) is not added again. The caller must hold the DosList lock.
+ */
 static void
 volnode_readd(char *name, uint32_t access_time, vollist_t *vol)
 {
@@ -363,8 +369,8 @@ volnode_readd(char *name, uint32_t access_time, vollist_t *vol)
         if (vol->vl_bootdev == 0)  // Boot node name is not from AllocVec()
             volnode_rename(info, node, name, NULL);
         node->dol_Task = vol->vl_msgport;
-        node->dol_Next = info->di_DevInfo;
-        info->di_DevInfo = CTOB(node);
+        if (!dosnode_present(info, node))
+            dosnode_link(node);
     }
 
     if ((node = (DosList_t *) vol->vl_volnode) == NULL) {
@@ -374,8 +380,8 @@ volnode_readd(char *name, uint32_t access_time, vollist_t *vol)
     } else {
         volnode_rename(info, node, name, vol->vl_devnode);
         node->dol_Task = vol->vl_msgport;
-        node->dol_Next = info->di_DevInfo;
-        info->di_DevInfo = CTOB(node);
+        if (!dosnode_present(info, node))
+            dosnode_link(node);
     }
 }
 
@@ -478,7 +484,7 @@ volume_adopt_bootdev(vollist_t *vol, struct DeviceNode *dn)
 /*
  * volume_create()
  *     Opens a host volume and adds it to the volume list, without any
- *     DOS nodes.
+ *     DOS nodes. This does not need the DosList lock.
  */
 static vollist_t *
 volume_create(char *name)
@@ -512,7 +518,7 @@ volume_create(char *name)
     strcpy(cur->vl_name, name);
     cur->vl_next = vollist;
     cur->vl_seen = 1;
-    cur->vl_in_dos_list = 1;
+    cur->vl_in_dos_list = 0;  // Added by volume_update()
     cur->vl_msgport = msgport;
     cur->vl_msg_mask = BIT(msgport->mp_SigBit);
     cur->vl_handle = handle;
@@ -528,8 +534,8 @@ volume_create(char *name)
  *     Called when DOS has started smashfs as the handler of a boot device
  *     node. The volume is opened and the node pointed at its message port,
  *     so that the handler startup packet may be replied right away. The
- *     DOS volume node is added by the next volume_seen() of the volume,
- *     which holds the DosList lock (DOS may hold it until the reply).
+ *     DOS volume node is added by the next volume_update(), which holds
+ *     the DosList lock (DOS may hold it until the reply).
  */
 void
 volume_boot_attach(struct DeviceNode *dn)
@@ -549,8 +555,9 @@ volume_boot_attach(struct DeviceNode *dn)
 
 /*
  * volume_seen()
- *     Mark volume as seen. Unknown volumes are immediately added to the
- *     DOS volume list.
+ *     Marks a volume as listed by the host. An unknown volume is opened
+ *     and added to the volume list; its DOS nodes are added by the next
+ *     volume_update(). This does not need the DosList lock.
  */
 void
 volume_seen(char *name, uint32_t access_time)
@@ -559,50 +566,143 @@ volume_seen(char *name, uint32_t access_time)
 
     for (cur = vollist; cur != NULL; cur = cur->vl_next) {
         if (strcmp(name, cur->vl_name) == 0) {
-            cur->vl_seen++;
-            if (cur->vl_in_dos_list == 0) {
-                /* Previously dropped out of volume list */
-                cur->vl_in_dos_list = 1;
-                volnode_readd(name, access_time, cur);
-            } else if (cur->vl_in_dos_list == 2) {
-                /* Boot volume from volume_boot_attach() */
-                cur->vl_in_dos_list = 1;
-                if (cur->vl_volnode != NULL)
-                    dosnode_link((DosList_t *) cur->vl_volnode);
-            }
+            cur->vl_seen = 1;
+            cur->vl_atime = access_time;
             return;
         }
     }
 
     cur = volume_create(name);
-    if (cur == NULL)
-        return;
+    if (cur != NULL)
+        cur->vl_atime = access_time;
+}
 
+/*
+ * volume_link()
+ *     Adds the DOS nodes of a volume which is not in the DOS list.
+ *     The caller must hold the DosList lock.
+ */
+static void
+volume_link(vollist_t *cur)
+{
+    if (cur->vl_in_dos_list == 2) {
+        /* Boot volume from volume_boot_attach(): DOS added the devnode */
+        if (cur->vl_volnode != NULL)
+            dosnode_link((DosList_t *) cur->vl_volnode);
+    } else if (cur->vl_in_dos_list == 0) {
 #ifdef ROMFS
-    smashboot_dev_t *sbd = smashboot_find(name);
-    if (sbd != NULL) {
-        /*
-         * DOS normally added the boot node to the DOS list at boot,
-         * but it was taken out if the volume was flushed since.
-         */
-        struct DosInfo *info = (struct DosInfo *)
-                   BTOC(((struct RootNode *) DOSBase->dl_Root)->rn_Info);
-        DosList_t *dn;
-
-        volume_adopt_bootdev(cur, &sbd->sbd_dn);
-        for (dn = (DosList_t *) BTOC(info->di_DevInfo); dn != NULL;
-             dn = (DosList_t *) BTOC(dn->dol_Next))
-            if (dn == (DosList_t *) sbd)
-                break;
-        if (dn == NULL)
-            dosnode_link((DosList_t *) sbd);
-        cur->vl_volnode = (DeviceList_t *)
-                          volnode_init(name, access_time, DLT_VOLUME,
-                                       cur->vl_msgport, cur->vl_devnode, 0);
-        return;
-    }
+        if ((cur->vl_bootdev == 0) && (cur->vl_devnode == NULL)) {
+            /*
+             * The volume has a boot node, which DOS normally added to the
+             * DOS list at boot (but which was taken out if the volume was
+             * flushed since). volnode_readd() adds it if it's missing.
+             */
+            smashboot_dev_t *sbd = smashboot_find(cur->vl_name);
+            if (sbd != NULL)
+                volume_adopt_bootdev(cur, &sbd->sbd_dn);
+        }
 #endif
-    volnode_new(name, access_time, cur);
+        volnode_readd(cur->vl_name, cur->vl_atime, cur);
+    }
+    cur->vl_in_dos_list = 1;
+}
+
+/*
+ * volume_free()
+ *     Closes the host handles of volumes which were removed from the
+ *     volume list, and frees them. This does not need the DosList lock.
+ */
+static void
+volume_free(vollist_t *cur)
+{
+    vollist_t    *next;
+    DeviceList_t *dlnode;
+
+    for (; cur != NULL; cur = next) {
+        next = cur->vl_next;
+        if (sm_fservice()) {
+            sm_fclose(cur->vl_handle);
+            if (cur->vl_root_scan != 0)
+                sm_fclose(cur->vl_root_scan);
+        }
+        volume_msg_masks &= ~cur->vl_msg_mask;
+        Forbid();
+            /* No new packet can arrive between these two steps */
+            volume_port_reject(cur->vl_msgport);
+            DeletePort(cur->vl_msgport);
+        Permit();
+
+        if ((dlnode = cur->vl_volnode) != NULL) {
+            FreeVec(BTOC(dlnode->dl_Name));
+            FreeMem(dlnode, sizeof (*dlnode));
+        }
+        if (((dlnode = (DeviceList_t *) cur->vl_devnode) != NULL) &&
+            (cur->vl_bootdev == 0)) {
+            FreeVec(BTOC(dlnode->dl_Name));
+            FreeMem(dlnode, sizeof (*dlnode));
+        }
+        FreeMem(cur, sizeof (vollist_t));
+    }
+}
+
+/*
+ * volume_update()
+ *     Brings the DOS list up to date with the volumes the host listed
+ *     (see volume_seen()) since the last update: their DOS nodes are
+ *     added, and the DOS nodes of the other volumes are removed. Volumes
+ *     which are no longer listed and not in use are freed.
+ *
+ *     The DosList lock is held only while the DOS list is changed, and
+ *     not across any host message. On Kickstart 3.2, holding that lock is
+ *     a Forbid(), so no other task could run while waiting for the host.
+ *
+ *     Returns -1 without making changes if the DosList lock is not
+ *     available (handlers must not wait for it).
+ */
+int
+volume_update(void)
+{
+    vollist_t *cur;
+    vollist_t *next;
+    vollist_t *prev = NULL;
+    vollist_t *gone = NULL;
+
+    if (AttemptLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE) == NULL)
+        return (-1);
+
+    gvolumes_inuse = 0;
+    for (cur = vollist; cur != NULL; cur = next) {
+        next = cur->vl_next;
+        if (cur->vl_seen) {
+            if (cur->vl_in_dos_list != 1)
+                volume_link(cur);
+            cur->vl_seen = 0;
+        } else {
+            printf("Flushing %s\n", cur->vl_name);
+            if (cur->vl_in_dos_list) {
+                cur->vl_in_dos_list = 0;
+                volnode_remove(cur);
+            }
+            if (cur->vl_use_count == 0) {
+                /* Okay to finish volume remove, after the unlock */
+                if (prev == NULL)
+                    vollist = next;
+                else
+                    prev->vl_next = next;
+                cur->vl_next = gone;
+                gone = cur;
+                continue;
+            }
+            printf("%s use count still %u\n",
+                   cur->vl_name, cur->vl_use_count);
+        }
+        gvolumes_inuse++;
+        prev = cur;
+    }
+    UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
+
+    volume_free(gone);
+    return (0);
 }
 
 /*
@@ -621,69 +721,6 @@ volume_port_reject(struct MsgPort *mp)
     while ((sp = (struct StandardPacket *) GetMsg(mp)) != NULL) {
         pkt = (struct DosPacket *) (sp->sp_Msg.mn_Node.ln_Name);
         ReplyPkt(pkt, DOSFALSE, ERROR_DEVICE_NOT_MOUNTED);
-    }
-}
-
-/*
- * volume_flush()
- *     Removes DOS nodes for any volumes which are no longer present.
- */
-void
-volume_flush(void)
-{
-    vollist_t *cur  = vollist;
-    vollist_t *prev = NULL;
-    gvolumes_inuse = 0;
-    while (cur != NULL) {
-        if (cur->vl_seen == 0) {
-            printf("Flushing %s\n", cur->vl_name);
-            if (cur->vl_in_dos_list) {
-                cur->vl_in_dos_list = 0;
-                volnode_remove(cur);
-            }
-            if (cur->vl_use_count == 0) {
-                /* Okay to finish volume remove */
-                DeviceList_t *dlnode;
-                vollist_t    *next = cur->vl_next;
-                if (prev == NULL)
-                    vollist = next;
-                else
-                    prev->vl_next = next;
-                if (sm_fservice()) {
-                    sm_fclose(cur->vl_handle);
-                    if (cur->vl_root_scan != 0)
-                        sm_fclose(cur->vl_root_scan);
-                }
-                volume_msg_masks &= ~BIT(cur->vl_msgport->mp_SigBit);
-                Forbid();
-                    /* No new packet can arrive between these two steps */
-                    volume_port_reject(cur->vl_msgport);
-                    DeletePort(cur->vl_msgport);
-                Permit();
-
-                if ((dlnode = cur->vl_volnode) != NULL) {
-                    FreeVec(BTOC(dlnode->dl_Name));
-                    FreeMem(dlnode, sizeof (*dlnode));
-                }
-                if (((dlnode = (DeviceList_t *) cur->vl_devnode) != NULL) &&
-                    (cur->vl_bootdev == 0)) {
-                    FreeVec(BTOC(dlnode->dl_Name));
-                    FreeMem(dlnode, sizeof (*dlnode));
-                }
-                FreeMem(cur, sizeof (vollist_t));
-                cur = next;
-                continue;
-            } else {
-                printf("%s use count still %u\n",
-                       cur->vl_name, cur->vl_use_count);
-                gvolumes_inuse++;
-            }
-        } else {
-            gvolumes_inuse++;
-        }
-        cur->vl_seen = 0;
-        prev = cur;
-        cur = cur->vl_next;
     }
 }
 

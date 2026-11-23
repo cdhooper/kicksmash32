@@ -2306,6 +2306,21 @@ write_all(int fd, const uint8_t *buf, size_t len)
     return ((ssize_t) len);
 }
 
+#define FWRITE_DATA_TIMEOUT_MS 5000  // Give up waiting for write data
+#define FWRITE_STALL_REPORT_MS 100   // Report data gaps longer than this
+
+/*
+ * fwrite_time_msec() returns a millisecond timestamp for measuring gaps
+ *                    in received write data.
+ */
+static uint64_t
+fwrite_time_msec(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return ((uint64_t) tv.tv_sec * 1000 + tv.tv_usec / 1000);
+}
+
 uint
 sm_fwrite(hm_freadwrite_t *hm, uint rxlen, uint *status)
 {
@@ -2377,7 +2392,7 @@ reply_write_fail:
         uint8_t *rdata = malloc(hm_length + sizeof (km_msg_hdr_t));
         uint8_t  rxdata[4096];
         uint     rdatapos = rxlen;
-        uint     timeout = 0;
+        uint64_t last_rx  = fwrite_time_msec();
 
         if (rdata == NULL) {
             hm->hm_hdr.km_status = KM_STATUS_FAIL;
@@ -2392,19 +2407,27 @@ reply_write_fail:
                 break;
 
             if (rxlen == 0) {
-                if (++timeout < 1000) {
+                if (fwrite_time_msec() - last_rx < FWRITE_DATA_TIMEOUT_MS) {
                     time_delay_msec(1);
                     continue;
                 }
-                printf("fwrite(%x) tag=%x data timeout at pos=%x\n",
-                       hm->hm_handle, main_tag, rdatapos);
+                printf("fwrite(%x) tag=%x data timeout at pos=%x of %x\n",
+                       hm->hm_handle, SWAP16(main_tag), rdatapos, hm_length);
                 rc = RC_FAILURE;
                 break;
+            } else {
+                uint64_t now = fwrite_time_msec();
+                if (now - last_rx > FWRITE_STALL_REPORT_MS) {
+                    fsprintf("fwrite(%x) tag=%x data stalled %u ms at "
+                             "pos=%x of %x\n", hm->hm_handle,
+                             SWAP16(main_tag), (uint) (now - last_rx),
+                             rdatapos, hm_length);
+                }
+                last_rx = now;
             }
-            timeout = 0;
             if (rxlen > rxmax) {
                 printf("fwrite(%x) tag=%x receive len %x > max %x\n",
-                       hm->hm_handle, main_tag, rxlen, rxmax);
+                       hm->hm_handle, SWAP16(main_tag), rxlen, rxmax);
                 rc = RC_FAILURE;
                 break;
             }

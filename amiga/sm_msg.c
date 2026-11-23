@@ -1063,6 +1063,48 @@ host_recv_msg_noblock(uint tag, void **rdata, uint *rlen)
     return (host_recv_msg_try(tag, rdata, rlen, 0));
 }
 
+/* Exec SysFlags bits (not in the NDK includes) */
+#ifndef SFF_ATTN_SWITCH
+#define SFF_ATTN_SWITCH  (1 << 15)  // SAR: task switch requested
+#endif
+#ifndef SFF_QUANTUM_OVER
+#define SFF_QUANTUM_OVER (1 << 14)  // TQE: time quantum expended
+#endif
+
+/*
+ * host_recv_msg_yield
+ * -------------------
+ * Gives the CPU to another ready task of the same (or higher) priority
+ * while waiting for a slow reply. Polling for a reply otherwise never
+ * sleeps, and spends most of its time in supervisor state with interrupts
+ * disabled, where Exec does not switch tasks. A task of the same priority
+ * which is part way through sending a multi-part message (such as a large
+ * file write from smashftp) would then not run until this receive times
+ * out (about 10 seconds), but the host can not reply to this task until
+ * that message is complete.
+ *
+ * Marking the quantum as expended and requesting a task switch causes
+ * Permit() to reschedule. If no other task of the same priority is ready,
+ * this task simply continues, without any forced delay.
+ *
+ * This has no effect if the caller holds Forbid(), as Permit() will then
+ * not reschedule. Note that on Kickstart 3.2 (DOS V47), holding the DosList
+ * lock (LockDosList() or AttemptLockDosList()) is a Forbid().
+ */
+static void
+host_recv_msg_yield(void)
+{
+#ifndef STANDALONE
+    Forbid();
+    /* Atomically set both bits, since interrupts change SysFlags too. */
+    __asm__ __volatile__("or.w %1,%0"
+                         : "+m" (SysBase->SysFlags)
+                         : "i" (SFF_ATTN_SWITCH | SFF_QUANTUM_OVER)
+                         : "cc");
+    Permit();
+#endif
+}
+
 /*
  * host_recv_msg
  * -------------
@@ -1090,6 +1132,7 @@ host_recv_msg(uint tag, void **rdata, uint *rlen)
         if ((rc != KS_STATUS_NODATA) && (rc != KS_STATUS_CRC))
             return (rc);
         /* Try again, letting other tasks progress */
+        host_recv_msg_yield();
     }
     printf("Message receive timeout\n");
     /*
