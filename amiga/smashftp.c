@@ -3848,5 +3848,6 @@ main(int argc, char *argv[])
         BPTR old_lock = CurrentDir(save_currentdir);
         UnLock(old_lock);
     }
+    sm_file_exit();
     exit(rc);
 }

@@ -17,6 +17,8 @@
 #include <inline/exec.h>
 
 #include <devices/timer.h>
+#include <devices/input.h>
+#include <devices/inputevent.h>
 #include <libraries/dos.h>
 #include <libraries/dosextens.h>
 #include <libraries/filehandler.h>
@@ -607,6 +609,74 @@ volume_link(vollist_t *cur)
     cur->vl_in_dos_list = 1;
 }
 
+static struct MsgPort  *event_port;  // input.device, for disk change events
+static struct IOStdReq *event_req;
+
+/*
+ * volume_events_open()
+ *     Opens input.device, so that volume_update() can report volumes
+ *     added to and removed from the DOS list as disk change events.
+ *     Without it, smashfs works as before, just without those events.
+ */
+void
+volume_events_open(void)
+{
+    event_port = CreatePort(NULL, 0);
+    if (event_port != NULL) {
+        event_req = (struct IOStdReq *)
+                    CreateExtIO(event_port, sizeof (*event_req));
+        if ((event_req != NULL) &&
+            (OpenDevice("input.device", 0,
+                        (struct IORequest *) event_req, 0) == 0))
+            return;
+    }
+    printf("smashfs: unable to open input.device\n");
+    volume_events_close();
+}
+
+/*
+ * volume_events_close()
+ *     Closes what volume_events_open() opened.
+ */
+void
+volume_events_close(void)
+{
+    if (event_req != NULL) {
+        if (event_req->io_Device != NULL)
+            CloseDevice((struct IORequest *) event_req);
+        DeleteExtIO((struct IORequest *) event_req);
+        event_req = NULL;
+    }
+    if (event_port != NULL) {
+        DeletePort(event_port);
+        event_port = NULL;
+    }
+}
+
+/*
+ * volume_disk_event()
+ *     Sends a disk inserted or removed event (IECLASS_DISKINSERTED or
+ *     IECLASS_DISKREMOVED) to the input stream, as a filesystem does
+ *     when its media changes. A "Please insert volume" requester retries
+ *     when it gets one, and Workbench and file requesters rescan their
+ *     volumes. Must not be called while holding the DosList lock, as
+ *     those may then read the DOS list.
+ */
+static void
+volume_disk_event(UBYTE class)
+{
+    struct InputEvent ie;
+
+    if (event_req == NULL)
+        return;
+    memset(&ie, 0, sizeof (ie));
+    ie.ie_Class = class;
+    event_req->io_Command = IND_WRITEEVENT;
+    event_req->io_Data    = &ie;
+    event_req->io_Length  = sizeof (ie);
+    DoIO((struct IORequest *) event_req);
+}
+
 /*
  * volume_free()
  *     Closes the host handles of volumes which were removed from the
@@ -666,6 +736,8 @@ volume_update(void)
     vollist_t *next;
     vollist_t *prev = NULL;
     vollist_t *gone = NULL;
+    uint8_t    added = 0;
+    uint8_t    removed = 0;
 
     if (AttemptLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE) == NULL)
         return (-1);
@@ -674,14 +746,17 @@ volume_update(void)
     for (cur = vollist; cur != NULL; cur = next) {
         next = cur->vl_next;
         if (cur->vl_seen) {
-            if (cur->vl_in_dos_list != 1)
+            if (cur->vl_in_dos_list != 1) {
                 volume_link(cur);
+                added = 1;
+            }
             cur->vl_seen = 0;
         } else {
             printf("Flushing %s\n", cur->vl_name);
             if (cur->vl_in_dos_list) {
                 cur->vl_in_dos_list = 0;
                 volnode_remove(cur);
+                removed = 1;
             }
             if (cur->vl_use_count == 0) {
                 /* Okay to finish volume remove, after the unlock */
@@ -702,6 +777,10 @@ volume_update(void)
     UnLockDosList(LDF_DEVICES | LDF_VOLUMES | LDF_WRITE);
 
     volume_free(gone);
+    if (removed)
+        volume_disk_event(IECLASS_DISKREMOVED);
+    if (added)
+        volume_disk_event(IECLASS_DISKINSERTED);
     return (0);
 }
 

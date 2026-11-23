@@ -65,6 +65,8 @@ void volume_boot_attach(struct DeviceNode *dn);
 
 void volume_seen(char *name, uint32_t access_time);
 int  volume_update(void);
+void volume_events_open(void);
+void volume_events_close(void);
 void volume_port_reject(struct MsgPort *mp);
 void volume_abandon(void);
 void volume_reopen_handles(void);

@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <exec/memory.h>
-#include <inline/exec.h>
+#include <proto/exec.h>
 #include "smash_cmd.h"
 #include "host_cmd.h"
 #include "sm_msg.h"
@@ -135,7 +135,7 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
         return (KM_STATUS_FAIL);
     }
     msglen = sizeof (*msg) + namelen;
-    msg = malloc(msglen);
+    msg = AllocVec(msglen, MEMF_PUBLIC);
     if (msg == NULL) {
         printf("Failed to allocate %u bytes\n", msglen);
         return (KM_STATUS_FAIL);
@@ -162,7 +162,7 @@ sm_fopen(handle_t parent_handle, const char *name, uint mode, uint *hm_type,
         if (hm_type != NULL)
             *hm_type = rdata->hm_type;
     }
-    free(msg);
+    FreeVec(msg);
 
     return (sm_check_service(rc));
 }
@@ -192,7 +192,7 @@ sm_fclose(handle_t handle)
     rc = host_msg(&msg, sizeof (msg), (void **) &rdata, &rlen);
 
     if (sm_mbuf != NULL) {
-        free(sm_mbuf);
+        FreeVec(sm_mbuf);
         sm_mbuf = NULL;
     }
 
@@ -270,12 +270,12 @@ sm_fread(handle_t handle, uint readsize, void **data, uint *rlen, uint flags)
 
         if ((sm_mbuf == NULL) || (total_len >= sm_mbuf_size))  {
             if (sm_mbuf != NULL)
-                free(sm_mbuf);
-            sm_mbuf      = malloc(total_len);
+                FreeVec(sm_mbuf);
+            sm_mbuf      = AllocVec(total_len, MEMF_PUBLIC);
             sm_mbuf_size = total_len;
         }
         if (sm_mbuf == NULL) {
-            printf("malloc(%u) failed\n", total_len);
+            printf("AllocVec(%u) failed\n", total_len);
             rc = MSG_STATUS_NO_MEM;
             rcvlen = 0;
             goto sm_read_fail;
@@ -403,8 +403,8 @@ sm_fpath_cont(uint tag, const char *first, uint firstlen, char **name)
     uint rc;
 
     if ((sm_pbuf == NULL) || (sm_pbuf_size < FPATH_MAX)) {
-        free(sm_pbuf);
-        sm_pbuf = malloc(FPATH_MAX);
+        FreeVec(sm_pbuf);
+        sm_pbuf = AllocVec(FPATH_MAX, MEMF_PUBLIC);
         sm_pbuf_size = (sm_pbuf != NULL) ? FPATH_MAX : 0;
         if (sm_pbuf == NULL)
             return (MSG_STATUS_NO_MEM);
@@ -512,9 +512,9 @@ sm_fdelete(handle_t handle, const char *name)
         return (KM_STATUS_FAIL);
     }
     msglen = sizeof (*msg) + namelen;
-    msg = malloc(msglen);
+    msg = AllocVec(msglen, MEMF_PUBLIC);
     if (msg == NULL) {
-        printf("malloc(%u) fail\n", msglen);
+        printf("AllocVec(%u) fail\n", msglen);
         return (MSG_STATUS_NO_MEM);
     }
 
@@ -527,7 +527,7 @@ sm_fdelete(handle_t handle, const char *name)
     if (rc != KM_STATUS_OK)
         printf("Failed to delete %s: %s\n", name, smash_err(rc));
 
-    free(msg);
+    FreeVec(msg);
     return (rc);
 }
 
@@ -563,9 +563,9 @@ sm_frename(handle_t shandle, const char *name_old,
         return (MSG_STATUS_BAD_LENGTH);
     }
     msglen = sizeof (*msg) + len_total;
-    msg = malloc(msglen);
+    msg = AllocVec(msglen, MEMF_PUBLIC);
     if (msg == NULL) {
-        printf("malloc(%u) fail\n", msglen);
+        printf("AllocVec(%u) fail\n", msglen);
         return (MSG_STATUS_NO_MEM);
     }
 
@@ -582,7 +582,7 @@ sm_frename(handle_t shandle, const char *name_old,
                name_old, name_new, smash_err(rc));
     }
 
-    free(msg);
+    FreeVec(msg);
     return (rc);
 }
 
@@ -647,9 +647,9 @@ sm_fcreate(handle_t parent_handle, const char *name, const char *tgt_name,
         return (MSG_STATUS_BAD_LENGTH);
     }
     msglen = sizeof (*msg) + namelen + tgtlen;
-    msg = malloc(msglen);
+    msg = AllocVec(msglen, MEMF_PUBLIC);
     if (msg == NULL) {
-        printf("malloc(%u) fail\n", msglen);
+        printf("AllocVec(%u) fail\n", msglen);
         return (MSG_STATUS_NO_MEM);
     }
 
@@ -667,7 +667,7 @@ sm_fcreate(handle_t parent_handle, const char *name, const char *tgt_name,
     if (rc != KM_STATUS_OK)
         printf("Failed to create %s: %s\n", name, smash_err(rc));
 
-    free(msg);
+    FreeVec(msg);
     return (rc);
 }
 
@@ -769,9 +769,9 @@ sm_fsetdate(handle_t parent_handle, const char *name,
         return (MSG_STATUS_BAD_LENGTH);
     }
     msglen = sizeof (*msg) + namelen;
-    msg = malloc(msglen);
+    msg = AllocVec(msglen, MEMF_PUBLIC);
     if (msg == NULL) {
-        printf("malloc(%u) fail\n", msglen);
+        printf("AllocVec(%u) fail\n", msglen);
         return (MSG_STATUS_NO_MEM);
     }
 
@@ -795,7 +795,7 @@ sm_fsetdate(handle_t parent_handle, const char *name,
         *sec  = rdata->hm_time;
         *nsec = rdata->hm_time_ns;
     }
-    free(msg);
+    FreeVec(msg);
 
     return (rc);
 }
@@ -829,9 +829,9 @@ sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid)
         return (MSG_STATUS_BAD_LENGTH);
     }
     msglen = sizeof (*msg) + namelen;
-    msg = malloc(msglen);
+    msg = AllocVec(msglen, MEMF_PUBLIC);
     if (msg == NULL) {
-        printf("malloc(%u) fail\n", msglen);
+        printf("AllocVec(%u) fail\n", msglen);
         return (MSG_STATUS_NO_MEM);
     }
 
@@ -849,7 +849,7 @@ sm_fsetown(handle_t parent_handle, const char *name, uint oid, uint gid)
                oid, gid, name, smash_err(rc));
     }
 
-    free(msg);
+    FreeVec(msg);
     return (rc);
 }
 
@@ -901,9 +901,9 @@ sm_fsetprotect(handle_t parent_handle, const char *name, uint perms)
         return (MSG_STATUS_BAD_LENGTH);
     }
     msglen = sizeof (*msg) + namelen;
-    msg = malloc(msglen);
+    msg = AllocVec(msglen, MEMF_PUBLIC);
     if (msg == NULL) {
-        printf("malloc(%u) fail\n", msglen);
+        printf("AllocVec(%u) fail\n", msglen);
         return (MSG_STATUS_NO_MEM);
     }
 
@@ -922,6 +922,23 @@ sm_fsetprotect(handle_t parent_handle, const char *name, uint perms)
                perms, name, smash_err(rc));
     }
 
-    free(msg);
+    FreeVec(msg);
     return (rc);
+}
+
+/*
+ * sm_file_exit
+ * ------------
+ * Frees the buffers which are kept between calls. Memory from AllocVec()
+ * is not freed by program exit, so programs must call this before exiting.
+ */
+void
+sm_file_exit(void)
+{
+    FreeVec(sm_mbuf);
+    sm_mbuf      = NULL;
+    sm_mbuf_size = 0;
+    FreeVec(sm_pbuf);
+    sm_pbuf      = NULL;
+    sm_pbuf_size = 0;
 }

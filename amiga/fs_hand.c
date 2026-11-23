@@ -331,6 +331,7 @@ show_usage:
 
     grunning = 1;
     timer_open();
+    volume_events_open();
     if (timer_msg_mask == 0) {
         /* Without the timer, volumes are never refreshed or shut down */
         printf("smashfs: unable to open timer\n");
@@ -384,6 +385,8 @@ go_exit:
     if (rom_startup_pkt != NULL)  // DOS is waiting for the handler startup
         ReplyPkt(rom_startup_pkt, DOSFALSE, ERROR_NO_FREE_STORE);
 #endif
+    volume_events_close();
+    sm_file_exit();
     host_msg_exit();  // I don't know why atexit() doesn't work
     CloseLibrary((struct Library *)DOSBase);
     return (rc);

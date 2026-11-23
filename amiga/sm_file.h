@@ -13,6 +13,7 @@
 #define _SM_FILE_H
 
 uint sm_fservice(void);
+void sm_file_exit(void);
 uint sm_fopen(handle_t parent_handle, const char *name, uint mode,
               uint *hm_type, uint create_perms, handle_t *handle);
 uint sm_fclose(handle_t handle);

@@ -246,11 +246,6 @@ call_main(void)
     /* Move KS communication code to RAM, as it needs to run from there */
     sm_msg_copy_to_ram();
 
-    /* malloc/free() library Constructors / Destructors */
-    void __ctor_stdlib_memory_init(void *);
-    void __dtor_stdlib_memory_exit(void *);
-    __ctor_stdlib_memory_init(SysBase);
-
     dputs(" call main\n");
     extern int main(int argc, char *argv[]);
     char *args[] = { NULL, "-dd" };
@@ -258,7 +253,6 @@ call_main(void)
     /* Execute command line main() */
     int rc = main(ARRAY_SIZE(args), args);
 
-    __dtor_stdlib_memory_exit(SysBase);
     FreeVec(copy_to_ram_ptr);
     return (rc);
 #if 0
@@ -472,8 +466,7 @@ smashboot_scan(void *arg)
     extern struct Library *__UtilityBase;
     extern uint8_t flag_output;
     int refresh_volume_list(uint boot_scan);
-    void __ctor_stdlib_memory_init(void *);
-    void __dtor_stdlib_memory_exit(void *);
+    void sm_file_exit(void);
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds="
@@ -481,16 +474,15 @@ smashboot_scan(void *arg)
 #pragma GCC diagnostic pop
     flag_output = 2;  // Debug output (if any) goes to the serial port
     __UtilityBase = OpenLibrary(UTILITYNAME, 0);
-    __ctor_stdlib_memory_init(SysBase);
     cpu_control_init();
 
     sm_msg_copy_to_ram();
     if (copy_to_ram_ptr != NULL) {
         refresh_volume_list(1);
+        sm_file_exit();
         host_msg_exit();
         FreeVec(copy_to_ram_ptr);
     }
-    __dtor_stdlib_memory_exit(SysBase);
     CloseLibrary(__UtilityBase);
     (void) arg;
     return (0);

@@ -763,15 +763,17 @@ host_msg_exit(void)
 static void
 host_msg_init(void)
 {
-    static uint8_t atexit_registered = 0;
-
     if (msg_sem != NULL)
         return;
 
+#ifndef ROMFS
+    /* ROMFS calls host_msg_exit() itself */
+    static uint8_t atexit_registered = 0;
     if (atexit_registered == 0) {
         atexit_registered = 1;
         atexit(host_msg_exit);
     }
+#endif
     get_msg_semaphore();
 
     if (msg_sem != NULL) {
