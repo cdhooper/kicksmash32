@@ -76,7 +76,7 @@ static const struct option long_opts[] = {
     { "debugmsg", no_argument,       NULL, 0x80 + 'm' },
     { "debugnet", no_argument,       NULL, 0x80 + 'n' },
     { "erase",    no_argument,       NULL, 'e' },
-    { "fill",     no_argument,       NULL, 'f' },
+    { "fill",     no_argument,       NULL, 0x80 + 'F' },
     { "fwread",   required_argument, NULL, 'R' },
     { "fwupdate", required_argument, NULL, 'W' },
     { "fwverify", required_argument, NULL, 'F' },
@@ -109,7 +109,6 @@ static char short_opts[] = {
     'F', ':',    // --fwverify <filename>
     'd', ':',    // --device <filename>
     'e',         // --erase
-    'f',         // --fill
     'h',         // --help
     'i',         // --identify
     'l', ':',    // --len <num>
@@ -144,7 +143,7 @@ static const char usage_text[] =
 "       --debugnet           debug network operations\n"
 "    -e --erase              erase EEPROM (use -a <addr> for sector erase)\n"
 "    -F --fwverify <filename> verify Kicksmash firmware matches file\n"
-"    -f --fill               fill EEPROM with duplicates of the same image\n"
+"       --fill               fill EEPROM with duplicates of the same image\n"
 "    -h --help               display usage\n"
 "    -i --identify           identify installed EEPROM\n"
 "    -l --len <num>          length in bytes\n"
@@ -7302,7 +7301,7 @@ errx(EXIT_FAILURE, "how did we get here?");
                     errx(EXIT_FAILURE, "Only one of -iert may be specified");
                 mode |= MODE_ERASE;
                 break;
-            case 'f':
+            case 0x80 + 'F':  // --fill
                 fill = TRUE;
                 break;
             case 'i':

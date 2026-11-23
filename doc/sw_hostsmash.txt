@@ -247,14 +247,14 @@ Erasing a bank
         11144ef9 .. 1 sec    Done
 
 Writing multiple copies
-    The -f option can be used to repeatedly write the same image until
+    The --fill option can be used to repeatedly write the same image until
     all Kickstart ROM flash has been filled. This option is not as useful
     for KickSmash as it would be for a standard EEPROM such as the
     MX29F1615. The reason is that KickSmash can limit address access of
     the Amiga to a single flash bank, so there is no need to have shadow
     copies in the rest of the flash. Regardless, this option is available.
     Example:
-        % hostsmash -d /dev/ttyACM0 -a 0x200000 -w test.rom -f -s 3210
+        % hostsmash -d /dev/ttyACM0 -a 0x200000 -w test.rom --fill -s 3210
         Writing 0x080000 bytes to EEPROM starting at address 0x200000
         100%
         Wrote 0x80000 bytes to device from file test.rom
@@ -269,7 +269,7 @@ Writing multiple copies
         Wrote 0x80000 bytes to device from file test.rom
     The above filled banks 4 through 7 with the same image. You could
     just as well specify a bank number and even add the verify option:
-        % hostsmash -d /dev/ttyACM0 -b 4 -w test.rom -f -s 3210 -v
+        % hostsmash -d /dev/ttyACM0 -b 4 -w test.rom --fill -s 3210 -v
         Writing 0x080000 bytes to EEPROM starting at address 0x200000
         100%
         Wrote 0x80000 bytes to device from file test.rom
@@ -428,7 +428,7 @@ All hostsmash command options:
     -D --delay <msec>       pacing delay between sent characters (ms)
     -d --device <filename>  serial device to use (e.g. /dev/ttyACM0)
     -e --erase              erase EEPROM (use -a <addr> for sector erase)
-    -f --fill               fill EEPROM with duplicates of the same image
+       --fill               fill EEPROM with duplicates of the same image
     -h --help               display usage
     -i --identify           identify installed EEPROM
     -l --len <num>          length in bytes
@@ -500,7 +500,7 @@ Flash read/write options
         For MacOS, this is typically /dev/cu.usbmodem*
     -e --erase
         Erase all or a portion of the Kickstart ROM flash.
-    -f --fill
+       --fill
         When writing an image to Kickstart ROM flash, fill the remaining
         area of flash with duplicate copies of the image.
     -i --identify
