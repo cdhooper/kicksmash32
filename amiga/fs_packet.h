@@ -16,6 +16,7 @@
 
 void handle_packet(void);
 void fs_packet_cleanup(void);
+LONG packet_fail_res1(LONG type);
 
 extern struct DosPacket *gpack;  // current packet being processed
 

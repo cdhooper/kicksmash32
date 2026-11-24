@@ -852,13 +852,40 @@ action_end(void)
     return (DOSTRUE);
 }
 
+/*
+ * fp_create
+ * ---------
+ * Attaches an open host file handle and its DOS lock to the AmigaOS
+ * FileHandle. Returns the new private file data, or NULL with Res2 set.
+ * On failure, nothing is freed.
+ */
+static fh_private_t *
+fp_create(FileHandle_t *fh, fs_lock_t *lock, handle_t handle)
+{
+    fh_private_t *fp = AllocMem(sizeof (*fp), MEMF_PUBLIC | MEMF_CLEAR);
+
+    if (fp == NULL) {
+        gpack->dp_Res2 = ERROR_NO_FREE_STORE;
+        return (NULL);
+    }
+    /* Position and size start at 0; seek bounds are checked by the host */
+    fp->fp_lock   = lock;
+    fp->fp_fh     = fh;
+    fp->fp_handle = handle;
+
+    fh->fh_Port = NULL;               // Non-zero only if interactive
+    fh->fh_Type = gvol->vl_msgport;   // Handler message port
+    fh->fh_Arg1 = (uintptr_t) fp;     // Filesystem-internal file identifier
+    printf("  fp=%p fh=%p handle=%x\n", fp, fh, handle);
+    return (fp);
+}
+
 static ULONG
 action_findinput(void)
 {
     FileHandle_t *fh     = (FileHandle_t *) BTOC(GARG1);
     fs_lock_t    *lock   = (fs_lock_t *) BTOC(GARG2);
     fs_lock_t    *newlock;
-    fh_private_t *fp;
     char         *bname  = (char *) BTOC(GARG3);
     char         *name   = bname + 1;
     handle_t      phandle = (lock == NULL) ? gvol->vl_handle : lock->fl_Key;
@@ -926,27 +953,104 @@ action_findinput(void)
         return (DOSFALSE);
     }
 
-    fp = AllocMem(sizeof (*fp), MEMF_PUBLIC);
-    if (fp == NULL) {
+    if (fp_create(fh, newlock, handle) == NULL) {
         sm_fclose(handle);
         FreeLock(newlock);
-        gpack->dp_Res2 = ERROR_NO_FREE_STORE;
         return (DOSFALSE);
     }
-    fp->fp_lock    = newlock;
-    fp->fp_fh      = fh;
-    fp->fp_handle  = handle;
-    fp->fp_pos_cur = 0;
-    fp->fp_pos_max = 0;
-    fp->fp_size    = 0;
-    fp->fp_size_known = 0;  // Seek bounds are checked by the host
-    fp->fp_resync  = 0;
+    return (DOSTRUE);
+}
 
-    fh->fh_Port = NULL;            // Non-zero only if interactive
-    fh->fh_Type = gvol->vl_msgport;   // Handler message port
-    fh->fh_Arg1 = (uintptr_t) fp;  // Filesystem-internal file identifier
-    printf("  fp=%p fh=%p handle=%x\n", fp, fh, handle);
+/*
+ * action_fh_from_lock
+ * -------------------
+ * OpenFromLock(): opens the lock's object as FINDINPUT does, and if that
+ * succeeds, the lock is freed, as the file replaces it. As with FFS, the
+ * file keeps the lock's access: a file opened from an exclusive lock is
+ * also exclusive. On failure, the lock is unchanged.
+ *
+ * The host refuses a second open of an exclusively locked object, even
+ * from this lock's own handle. The file is therefore first opened without
+ * a host lock, and once the DOS lock has been freed (releasing its host
+ * lock), the file is reopened with the lock's access.
+ */
+static ULONG
+action_fh_from_lock(void)
+{
+    FileHandle_t *fh     = (FileHandle_t *) BTOC(GARG1);
+    fs_lock_t    *lock   = (fs_lock_t *) BTOC(GARG2);
+    fs_lock_t    *newlock;
+    fh_private_t *fp;
+    handle_t      handle;
+    handle_t      lhandle;
+    handle_t      khandle;
+    LONG          access;
+    uint          mode = HM_MODE_READ | HM_MODE_WRITE;
+    uint          type;
+    uint          rc;
 
+    if (lock == NULL) {
+        /* The volume root, which can't be opened as a file */
+        gpack->dp_Res2 = ERROR_OBJECT_WRONG_TYPE;
+        return (DOSFALSE);
+    }
+    khandle = lock->fl_Key;
+    access  = lock->fl_Access;
+    printf("FH_FROM_LOCK %p %x %s\n", lock, khandle,
+           (access == EXCLUSIVE_LOCK) ? "exclusive" : "shared");
+
+    /* As with FINDINPUT, a write-protected file is opened read-only */
+    rc = sm_fopen(khandle, "", mode, &type, 0, &handle);
+    if (rc != 0) {
+        mode = HM_MODE_READ;
+        rc = sm_fopen(khandle, "", mode, &type, 0, &handle);
+    }
+    if (rc != 0) {
+        gpack->dp_Res2 = km_status_to_amiga_read_error(rc);
+        return (DOSFALSE);
+    }
+    if (hm_type_is_dir(type)) {
+        sm_fclose(handle);
+        gpack->dp_Res2 = ERROR_OBJECT_WRONG_TYPE;
+        return (DOSFALSE);
+    }
+
+    newlock = CreateLock(handle, lock->fl_PHandle, access, type);
+    if (newlock == NULL) {
+        sm_fclose(handle);
+        return (DOSFALSE);
+    }
+    fp = fp_create(fh, newlock, handle);
+    if ((fp == NULL) || (FreeLock(lock) != 0)) {
+        if (fp == NULL) {
+            /* Res2 was set by fp_create() */
+        } else {
+            FreeMem(fp, sizeof (*fp));
+            gpack->dp_Res2 = ERROR_INVALID_LOCK;
+        }
+        FreeLock(newlock);
+        sm_fclose(handle);
+        return (DOSFALSE);
+    }
+    sm_fclose(khandle);  // Releases the host lock held by the DOS lock
+
+    if (sm_host_locks) {
+        /*
+         * Take over the host lock. Nothing can take the object between
+         * the close above and this open, as packets are handled one at a
+         * time. If it fails anyway (for example, a communication error),
+         * the file stays open, without a host lock.
+         */
+        rc = fs_open(handle, "", mode, access, &type, 0, &lhandle);
+        if (rc == 0) {
+            sm_fclose(handle);
+            handle = lhandle;
+            fp->fp_handle   = handle;
+            newlock->fl_Key = handle;
+        } else {
+            printf("  relock failed %d; file is not locked\n", rc);
+        }
+    }
     return (DOSTRUE);
 }
 
@@ -1007,32 +1111,18 @@ action_findoutput(void)
         return (DOSFALSE);
     }
 
-    fp = AllocMem(sizeof (*fp), MEMF_PUBLIC);
+    fp = fp_create(fh, newlock, handle);
     if (fp == NULL) {
         sm_fclose(handle);
         FreeLock(newlock);
-        gpack->dp_Res2 = ERROR_NO_FREE_STORE;
         return (DOSFALSE);
     }
-    fp->fp_lock    = newlock;
-    fp->fp_fh      = fh;
-    fp->fp_handle  = handle;
-    fp->fp_pos_cur = 0;
-    fp->fp_pos_max = 0;
-    fp->fp_resync  = 0;
     /*
      * The file was just truncated, and while the host holds the exclusive
      * lock, only this handle can change its size: track it here so that
      * a seek outside the file fails without a host request.
      */
-    fp->fp_size       = 0;
     fp->fp_size_known = sm_host_locks;
-
-    fh->fh_Port = NULL;            // Non-zero only if interactive
-    fh->fh_Type = gvol->vl_msgport;   // Handler message port
-    fh->fh_Arg1 = (uintptr_t) fp;  // Filesystem-internal file identifier
-    printf("  fp=%p fh=%p handle=%x\n", fp, fh, handle);
-
     return (DOSTRUE);
 }
 
@@ -1589,10 +1679,12 @@ action_same_lock(void)
 
     printf("SAMELOCK %p %u %p %u\n", lock1, handle1, lock2, handle2);
 
-    if (handle1 == handle2) {
-        /* Same exact handle */
-        goto lock_same;
-    }
+    /*
+     * As with FFS, Res2 is only an error code: SameLock() itself works out
+     * LOCK_SAME_VOLUME or LOCK_DIFFERENT from the locks' volumes.
+     */
+    if (handle1 == handle2)
+        return (DOSTRUE);  // Same exact handle
 
     /* Otherwise, we need to compare paths */
     rc = sm_fpath(handle1, &name2);
@@ -1619,22 +1711,7 @@ action_same_lock(void)
     rc = strcmp(name1, name2);
     FreeMem(name1, name1_len);
 
-    if (rc == 0) {
-lock_same:
-        /* Same handle path */
-        gpack->dp_Res2 = LOCK_SAME;
-        return (DOSTRUE);
-    } else if (((lock1 == NULL) ? CTOB(gvol->vl_volnode) : lock1->fl_Volume) ==
-               ((lock2 == NULL) ? CTOB(gvol->vl_volnode) : lock2->fl_Volume)) {
-        /* A NULL lock is the root of this handler's volume */
-        /* Same volume, different handle */
-        gpack->dp_Res2 = LOCK_SAME_VOLUME;
-        return (DOSFALSE);
-    } else {
-        /* Different volume, different handle */
-        gpack->dp_Res2 = LOCK_DIFFERENT;
-        return (DOSFALSE);
-    }
+    return ((rc == 0) ? DOSTRUE : DOSFALSE);
 }
 
 static ULONG
@@ -1881,6 +1958,27 @@ fs_packet_cleanup(void)
     }
 }
 
+/*
+ * packet_fail_res1
+ * ----------------
+ * Returns the Res1 value which reports failure for a packet of the given
+ * type. For READ, WRITE, and SEEK, 0 is a successful result (end of file,
+ * nothing written, or the old position), so failure is -1. For all other
+ * packets, it is DOSFALSE.
+ */
+LONG
+packet_fail_res1(LONG type)
+{
+    switch (type) {
+        case ACTION_READ:
+        case ACTION_WRITE:
+        case ACTION_SEEK:
+            return (-1);
+        default:
+            return (DOSFALSE);
+    }
+}
+
 void
 handle_packet(void)
 {
@@ -1897,7 +1995,7 @@ handle_packet(void)
                 break;
             default:
                 printf("not running, rejected %d\n", gpack->dp_Type);
-                gpack->dp_Res1 = DOSFALSE;
+                gpack->dp_Res1 = packet_fail_res1(gpack->dp_Type);
                 gpack->dp_Res2 = ERROR_DEVICE_NOT_MOUNTED;
                 return;
         }
@@ -1985,26 +2083,9 @@ handle_packet(void)
             else
                 res1 = action_parent();
             break;
-        case ACTION_FH_FROM_LOCK: {
-            /*
-             * OpenFromLock(): open the lock's object (empty name relative
-             * to the lock) as FINDINPUT does, then free the lock, which
-             * the file now replaces.
-             */
-            static char empty_bstr[4] __attribute__((aligned(4)));
-            fs_lock_t  *lock = (fs_lock_t *) BTOC(GARG2);
-
-            gpack->dp_Arg3 = CTOB(empty_bstr);
-            res1 = action_findinput();
-            if (res1 != DOSFALSE) {
-                fh_private_t *fp = (fh_private_t *)
-                                   ((FileHandle_t *) BTOC(GARG1))->fh_Arg1;
-                fp->fp_lock->fl_PHandle = lock->fl_PHandle;
-                gpack->dp_Arg1 = GARG2;
-                action_free_lock();
-            }
+        case ACTION_FH_FROM_LOCK:
+            res1 = action_fh_from_lock();
             break;
-        }
         case ACTION_READ:
             res1 = action_read();
             break;

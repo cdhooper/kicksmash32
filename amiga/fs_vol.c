@@ -799,7 +799,8 @@ volume_port_reject(struct MsgPort *mp)
 
     while ((sp = (struct StandardPacket *) GetMsg(mp)) != NULL) {
         pkt = (struct DosPacket *) (sp->sp_Msg.mn_Node.ln_Name);
-        ReplyPkt(pkt, DOSFALSE, ERROR_DEVICE_NOT_MOUNTED);
+        ReplyPkt(pkt, packet_fail_res1(pkt->dp_Type),
+                 ERROR_DEVICE_NOT_MOUNTED);
     }
 }
 
@@ -878,7 +879,8 @@ volume_abandon(void)
             mp->mp_SigTask = NULL;
             while ((sp = (struct StandardPacket *) GetMsg(mp)) != NULL) {
                 pkt = (struct DosPacket *) (sp->sp_Msg.mn_Node.ln_Name);
-                ReplyPkt(pkt, DOSFALSE, ERROR_DEVICE_NOT_MOUNTED);
+                ReplyPkt(pkt, packet_fail_res1(pkt->dp_Type),
+                         ERROR_DEVICE_NOT_MOUNTED);
             }
         Permit();
         /* The port's signal bit is released when this task exits */

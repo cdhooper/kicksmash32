@@ -495,6 +495,14 @@ get_rel_next:
                 fsprintf("saw ./\n");
 #endif
                 tptr--;
+                if ((*nptr == '\0') && (tptr > pathname) && (tptr[-1] == '/')) {
+                    /*
+                     * A final "." is the directory before it: drop the
+                     * separator too, so "dir/." is the same path as "dir"
+                     * (for example, in fpath compares by SameLock()).
+                     */
+                    tptr--;
+                }
                 goto get_rel_next;
             } else if ((tptr > pathname) && (tptr[-1] == '/') &&
                                                (*nptr == '/')) {
