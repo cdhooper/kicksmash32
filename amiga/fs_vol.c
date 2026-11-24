@@ -175,7 +175,24 @@ fsname(struct DosInfo *info, char *name, void *ignore)
         uint count = 0;
         name[len++] = '.';
         do {
-            sprintf(name + len, "%u", count++);
+            /*
+             * Append count in decimal (sprintf() adds 1.7 KB to the ROM).
+             * Digits are generated least significant first, then reversed.
+             */
+            char *ptr = name + len;
+            char *end;
+            uint  val = count++;
+
+            do {
+                *(ptr++) = '0' + (val % 10);
+                val /= 10;
+            } while (val != 0);
+            *ptr = '\0';
+            for (end = ptr - 1, ptr = name + len; ptr < end; ptr++, end--) {
+                char ch = *ptr;
+                *ptr = *end;
+                *end = ch;
+            }
         } while (name_present_in_dos_devinfo(info, name, ignore));
     }
 }

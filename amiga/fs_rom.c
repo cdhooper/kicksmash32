@@ -234,7 +234,7 @@ call_main(void)
 #endif
 
     if (DOSBase == NULL) {
-        dputs("NULL DOSBase 3\n");
+        dputs("NULL DOSBase\n");
         return (1);
     }
 
@@ -633,7 +633,7 @@ rom_task_entry(void)
 
     DOSBase = (struct DosLibrary *) OpenLibrary(DOSNAME, 34);
     if (DOSBase == NULL) {
-        dputs("NULL DOSBase 2\n");
+        dputs("NULL DOSBase\n");
         goto task_entry_fail;
     }
 
@@ -708,7 +708,7 @@ rom_main(struct ExecBase *SysBase asm("a6"))
     /* Local DOSBase */
     struct DosLibrary *DOSBase = (struct DosLibrary *) OpenLibrary(DOSNAME, 34);
     if (DOSBase == NULL) {
-        dputs("NULL DOSBase 4\n");
+        dputs("NULL DOSBase\n");
         goto rom_main_end;
     }
     /*

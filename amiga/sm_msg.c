@@ -1251,6 +1251,11 @@ host_msg(void *smsg, uint slen, void **rdata, uint *rlen)
     return (rc);
 }
 
+#ifndef NO_DEBUG
+/*
+ * smash_err() and its strings are only used for debug output. Without it
+ * (smashfsrom), every printf() call is removed, so they are not needed.
+ */
 static const char *const ks_status_s[] = {
     "OK",                               // 0x00000000 KS_STATUS_OK
     "KS Failure",                       // 0x00000100 KS_STATUS_FAIL
@@ -1317,3 +1322,4 @@ smash_err(uint status)
     sprintf(buf, "%d %s", status, str);
     return (buf);
 }
+#endif /* !NO_DEBUG */

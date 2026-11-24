@@ -34,10 +34,12 @@ FS_HDRS	     := fs_hand.h fs_packet.h fs_timer.h fs_vol.h printf.h
 FTP_SRCS     := smashftp.c smashftp_cli.c sm_msg.c sm_msg_core.c cpu_control.c \
 		readline.c sm_file.c $(CRC32_C)
 FTP_HDRS     := smashftp.h smashftp_cli.h readline.h
+# smashfsrom is built with NO_DEBUG, which removes all printf() calls, so
+# printf.c is only linked into smashfsrom_d (see FSROM_OBJS_D below).
 FSROM_SRCS   := fs_rom.c \
 		fs_hand.c fs_timer.c fs_vol.c fs_packet.c \
-		printf.c sm_msg.c sm_file.c cpu_control.c \
-		my_createtask.c sm_msg_core.c fs_rom_end.c
+		sm_msg.c sm_file.c cpu_control.c \
+		my_createtask.c sm_msg_core.c rom_string.c fs_rom_end.c
 SWITCH_SRCS  := romswitch.c sm_msg.c cpu_control.c printf.c \
 		sm_msg_core.c fs_rom_end.c
 # smashnet is built two ways from the same sources:
@@ -72,6 +74,9 @@ CFLAGS += -DBUILD_DATE=\"$(DATE)\" -DBUILD_TIME=\"$(TIME)\"
 LDFLAGS_NETDRV = -nostdlib -lgcc -lamiga -lc -nostartfiles -mcrt=clib2
 
 LDFLAGS_FSROM = -nostdlib -lgcc -lamiga -lc -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
+# Do not use -ffunction-sections for the ROM builds: this toolchain's linker
+# mislinks PC-relative calls between sections of the same object (most calls
+# land at the wrong address), which crashes the ROM at cold start.
 LDFLAGS_SWITCH = -nostdlib -lgcc -lamiga -lc -Xlinker --verbose -Tfs_rom.ld -mcrt=clib2 -fbaserel
 
 VERSION := $(shell awk '/Version/{print $$2}' ../fw/version.c)
@@ -133,7 +138,7 @@ $(foreach SRCFILE,$(STOOL_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),ST
 $(foreach SRCFILE,$(FS_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),FS_OBJS)))
 $(foreach SRCFILE,$(FTP_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),FTP_OBJS)))
 $(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR),FSROM_OBJS)))
-$(foreach SRCFILE,$(FSROM_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D),FSROM_OBJS_D)))
+$(foreach SRCFILE,$(FSROM_SRCS) printf.c,$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D),FSROM_OBJS_D)))
 $(foreach SRCFILE,$(SWITCH_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(ROM_OBJDIR_D),SWITCH_OBJS)))
 $(foreach SRCFILE,$(NET_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(OBJDIR),NET_OBJS)))
 $(foreach SRCFILE,$(NETDRV_SRCS),$(eval $(call DEPEND_SRC,$(SRCFILE),$(NETDRV_OBJDIR),NETDRV_OBJS)))
