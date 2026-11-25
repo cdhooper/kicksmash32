@@ -194,9 +194,20 @@ config_set_bank_name(uint bank, const char *name)
 int
 config_set_bank_longreset(uint8_t *banks)
 {
+    uint pos;
     uint bank;
     uint sub;
-    for (bank = 0; bank < ROM_BANKS; bank++) {
+
+    /* Each bank in the sequence must be the first bank of its merge range */
+    for (pos = 0; pos < ROM_BANKS; pos++) {
+        bank = banks[pos];
+        if (bank == 0xff)
+            continue;  // Unused sequence entry
+        if (bank >= ROM_BANKS) {
+            printf("Bank %u is invalid (maximum bank is %u)\n",
+                   bank, ROM_BANKS - 1);
+            return (1);
+        }
         sub = config.bi.bi_merge[bank] & 0x0f;
         if (sub != 0) {
             printf("Bank %u is part of a merged block, but is not the "

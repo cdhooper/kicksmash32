@@ -880,18 +880,19 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             crc = crc32r(0, &rlen, 2);
             crc = crc32r(crc, &status, 2);
             crc = crc32(crc, rbuf1, rlen1);
-            if (rlen1 != 0) {
-                memcpy((void *)&buffer_txd_lo[pos], rbuf1, rlen1);
-                pos += rlen1 / 2;
-            }
-            if (rlen2 != 0) {
-                crc = crc32(crc, rbuf2, rlen2);
-                memcpy((void *)&buffer_txd_lo[pos], rbuf2, rlen2);
-                pos += (rlen2 + 1) / 2;
-            }
+            crc = crc32(crc, rbuf2, rlen2);
+
+            /* Copy data in Amiga (big endian) byte order, as 32-bit mode */
+            uint8_t *dst = (uint8_t *) &buffer_txd_lo[pos];
+            for (count = 0; count < rlen1; count++)
+                dst[count ^ 1] = ((const uint8_t *) rbuf1)[count];
+            for (count = 0; count < rlen2; count++)
+                dst[(rlen1 + count) ^ 1] = ((const uint8_t *) rbuf2)[count];
+
+            /* Amiga expects CRC after data rounded up to a 32-bit boundary */
+            pos += ((rlen + 3) & ~3) / 2;
             buffer_txd_lo[pos++] = crc >> 16;
             buffer_txd_lo[pos++] = (uint16_t) crc;
-            pos = (rlen + 3 + KS_HDR_AND_CRC_LEN) / 2;
         }
 
         /* TIM5 DMA drives low 16 bits */
@@ -1494,7 +1495,10 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 ee_address_override((bank << 4) | 0x7, 0);
             }
             if (cmd & KS_BANK_UNSETTEMP) {
+                /* Restore current bank without losing a pending nextreset */
+                uint8_t nextreset = config.bi.bi_bank_nextreset;
                 ee_set_bank(config.bi.bi_bank_current);
+                config.bi.bi_bank_nextreset = nextreset;
             }
             if (cmd & KS_BANK_SETRESET) {
                 config.bi.bi_bank_nextreset = bank;
