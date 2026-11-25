@@ -343,64 +343,65 @@ utoa_add(uint len, void *ptr)
     return (0);
 }
 
+/*
+ * next_msg_len
+ * ------------
+ * Returns the length of the next message in the specified circular
+ * buffer, or 0 if there is none. If the buffer holds no valid message,
+ * its consumer is advanced to the producer to discard the contents.
+ *
+ * Interrupts are masked while the buffer is checked and discarded, so
+ * that a message added by the Amiga message interrupt between the check
+ * and the discard is not lost. This function may be called from either
+ * the main loop or the Amiga message interrupt.
+ */
 static uint16_t
-atou_next_msg_len(void)
+next_msg_len(const uint8_t *buf, uint bufsize, volatile uint *prod,
+             uint *cons)
 {
-    uint     len;
+    uint     len = 0;
     uint     pos;
-    uint     inuse = SPACE_INUSE_ATOU;
-    uint     count;
-    uint16_t magic;
+    uint     count = ARRAY_SIZE(sm_magic);  // No bad magic reported
+    uint16_t magic = 0;
+    uint32_t irq_mask = cm_mask_interrupts(1);
 
-    if (inuse < KS_HDR_AND_CRC_LEN) {
+    if (((*prod - *cons) & (bufsize - 1)) < KS_HDR_AND_CRC_LEN) {
         /* Invalid */
-        cons_atou = prod_atou;
-        return (0);
+        *cons = *prod;
+        goto next_msg_len_end;
     }
 
     /* Check magic */
-    for (pos = cons_atou, count = 0; count < ARRAY_SIZE(sm_magic); count++) {
-        magic = *(uint16_t *) (msg_atou + pos);
+    for (pos = *cons, count = 0; count < ARRAY_SIZE(sm_magic); count++) {
+        magic = *(const uint16_t *) (buf + pos);
         if (magic != sm_magic[count]) {
-            printf("Bad msg %u %04x != %04x\n", count, magic, sm_magic[count]);
-            cons_atou = prod_atou;
-            return (0);
+            *cons = *prod;
+            break;
         }
-        pos = (pos + 2) & (sizeof (msg_atou) - 1);
+        pos = (pos + 2) & (bufsize - 1);
+    }
+    if (count == ARRAY_SIZE(sm_magic)) {
+        len = *(const uint16_t *) (buf + pos);
+        len = ((len + 3) & ~3) + KS_HDR_AND_CRC_LEN;  // Round up
     }
 
-    len     = *(uint16_t *) (msg_atou + pos);
-    len     = (len + 3) & ~3;  // Round up
-    return (len + KS_HDR_AND_CRC_LEN);
+next_msg_len_end:
+    cm_mask_interrupts(irq_mask);
+    if ((len == 0) && (count < ARRAY_SIZE(sm_magic)))
+        printf("Bad msg %u %04x != %04x\n", count, magic, sm_magic[count]);
+    return (len);
+}
+
+static uint16_t
+atou_next_msg_len(void)
+{
+    return (next_msg_len(msg_atou, sizeof (msg_atou), &prod_atou, &cons_atou));
 }
 
 static uint16_t
 utoa_next_msg_len(void)
 {
-    uint     len;
-    uint     pos;
-    uint     inuse = SPACE_INUSE_UTOA;
-    uint     count;
-    uint16_t magic;
-
-    if (inuse < KS_HDR_AND_CRC_LEN) {
-        cons_utoa = prod_utoa;
-        return (0);
-    }
-    /* Check magic */
-    for (pos = cons_utoa, count = 0; count < ARRAY_SIZE(sm_magic); count++) {
-        magic = *(uint16_t *) (msg_utoa + pos);
-        if (magic != sm_magic[count]) {
-            printf("bad msg %u %04x != %04x\n", count, magic, sm_magic[count]);
-            cons_utoa = prod_utoa;
-            return (0);
-        }
-        pos = (pos + 2) & (sizeof (msg_utoa) - 1);
-    }
-
-    len     = *(uint16_t *) (msg_utoa + pos);
-    len     = (len + 3) & ~3;  // Round up
-    return (len + KS_HDR_AND_CRC_LEN);
+    return (next_msg_len(msg_utoa, sizeof (msg_utoa), &prod_utoa, &cons_utoa));
 }
 
 /*
@@ -1131,11 +1132,12 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             break;
         }
         case KS_CMD_FLASH_CMD: {
-            /* Send a custom command to flash (UNTESTED) */
+            /* Send a custom command to flash */
             uint32_t  values[32];
             uint16_t *valuep = (uint16_t *)values;
             uint      count;
             uint      datalen;
+            uint      copylen;
             uint      pos;
 
             if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
@@ -1146,7 +1148,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 datalen = count * 2;
             }
 
-            if ((count > ARRAY_SIZE(values)) || (count == 0)) {
+            /* 32-bit addresses followed by data must fit in values[] */
+            copylen = count * 4 + datalen;
+            if ((copylen > sizeof (values)) || (count == 0)) {
                 ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
                 break;
             }
@@ -1157,7 +1161,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
 
             /* Capture addresses and data */
-            for (pos = 0; pos < cmd_len / 2; pos++) {
+            for (pos = 0; pos < copylen / 2; pos++) {
                 *(valuep++) = buffer_rxa_lo[cons_s];
                 if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
                     cons_s = 0;

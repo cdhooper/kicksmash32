@@ -2,7 +2,7 @@
  * This is free and unencumbered software released into the public domain.
  * See the LICENSE file for additional details.
  *
- * Designed by Chris Hooper in 20246
+ * Designed by Chris Hooper in 2026
  *
  * ---------------------------------------------------------------------
  *
