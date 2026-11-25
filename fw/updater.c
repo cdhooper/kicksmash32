@@ -720,10 +720,10 @@ set_bank(uint8_t bank)
         case 1:  // 1MB bank (width 2)
             address_override((bank << 4) | 0x6);
             break;
-        case 2:  // 2MB bank (width 4)
+        case 3:  // 2MB bank (width 4)
             address_override((bank << 4) | 0x4);
             break;
-        case 3:  // 4MB bank (width 8)
+        case 7:  // 4MB bank (width 8)
             address_override((bank << 4) | 0x0);
             break;
     }

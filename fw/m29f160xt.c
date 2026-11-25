@@ -1462,10 +1462,10 @@ ee_set_bank(uint8_t bank)
         case 1:  // 1MB bank (width 2)
             ee_address_override((bank << 4) | 0x6, 0);
             break;
-        case 2:  // 2MB bank (width 4)
+        case 3:  // 2MB bank (width 4)
             ee_address_override((bank << 4) | 0x4, 0);
             break;
-        case 3:  // 4MB bank (width 8)
+        case 7:  // 4MB bank (width 8)
             ee_address_override((bank << 4) | 0x0, 0);
             break;
     }

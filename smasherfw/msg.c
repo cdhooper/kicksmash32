@@ -940,7 +940,6 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             reply.si_features = SWAP16(0x0001);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
             reply.si_mode     = ee_mode;
-            reply.si_unused1  = 0;
             reply.si_usbdev   = usb_current_address();
             strcpy(reply.si_name, config.name);
             memset(reply.si_unused, 0, sizeof (reply.si_unused));

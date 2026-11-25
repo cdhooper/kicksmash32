@@ -252,10 +252,10 @@
  *        after setting is complete by adding this option:
  *            KS_BANK_REBOOT
  *   KS_CMD_BANK_MERGE
- *        This command is used to merge a sequence of banks. The first and
- *        last bank in the group must be specified within a 16-bit argument.
- *        The high byte is the start bank number. The low byte is the end
- *        bank number. Adding the following command option will un-merge
+ *        This command is used to merge a sequence of banks. There are
+ *        two arguments. The first byte is the end bank number. The second
+ *        byte is the start bank number.
+ *        Adding the following command option will un-merge
  *        banks:
  *            KS_BANK_UNMERGE
  *   KS_CMD_BANK_NAME

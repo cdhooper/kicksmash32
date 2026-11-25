@@ -145,6 +145,7 @@ $(OBJDIR)/sm_msg.o $(OBJDIR)/sm_msg_core.o $(OBJDIR)/smash.o:: CFLAGS += -I../am
 
 # Used libraries
 DEFS		+= -I$(OPENCM3_DIR)/include
+DEFS		+= -I../fw  # smash_cmd.h is shared with Kicksmash firmware
 LDFLAGS		+= -L$(OPENCM3_DIR)/lib
 LDLIBS		+= -l$(LIBNAME)
 LDLIBS		+= -Wl,--start-group -lc -lgcc -lnosys -Wl,--end-group
