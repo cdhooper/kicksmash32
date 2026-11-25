@@ -1059,7 +1059,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             reply.si_ks_time[1] = temp[1];
             reply.si_ks_time[2] = temp[2];
             reply.si_ks_time[3] = 0;
-            strcpy(reply.si_serial, (const char *)usb_serial_str);
+            /* A 24-character serial fills si_serial[] with no NIL */
+            strncpy(reply.si_serial, (const char *)usb_serial_str,
+                    sizeof (reply.si_serial));
             reply.si_rev      = SWAP16(0x0002);     // Protocol version 0.2
             reply.si_features = SWAP16(0x0007);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
@@ -1329,6 +1331,11 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
                     break;
                 }
+                if (cmd_len < 2 + count) {
+                    /* Message does not contain all the data bytes */
+                    ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                    break;
+                }
                 for (tcount = count; tcount > 0; tcount--) {
                     if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
                         cons_s = 0;
@@ -1353,8 +1360,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
         case KS_CMD_GET: {
             if (cmd & KS_GET_NV) {
                 /* First byte is start position and second is count */
-                uint8_t pos;
-                uint8_t count;
+                uint8_t  pos;
+                uint8_t  count;
+                uint32_t nvbuf[sizeof (config.nv_mem) / 4];
 
                 /* Compute start of message payload */
                 cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
@@ -1366,8 +1374,11 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
                     break;
                 }
+                /* Reply is rounded up to uint32_t, so pad with zeros */
+                memset(nvbuf, 0, sizeof (nvbuf));
+                memcpy(nvbuf, config.nv_mem + pos, count);
                 count = (count + 3) & ~3;  // Round up to uint32_t
-                ks_reply(0, KS_STATUS_OK, count, config.nv_mem + pos, 0, NULL);
+                ks_reply(0, KS_STATUS_OK, count, nvbuf, 0, NULL);
 #if 0
                 printf("get nv pos=%u count=%u: %02x %02x [%02x]\n",
                        pos, count,
@@ -2556,7 +2567,9 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             reply.si_ks_time[1] = temp[1];
             reply.si_ks_time[2] = temp[2];
             reply.si_ks_time[3] = 0;
-            strcpy(reply.si_serial, (const char *)usb_serial_str);
+            /* A 24-character serial fills si_serial[] with no NIL */
+            strncpy(reply.si_serial, (const char *)usb_serial_str,
+                    sizeof (reply.si_serial));
             reply.si_rev      = SWAP16(0x0002);     // Protocol version 0.2
             reply.si_features = SWAP16(0x0007);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID
@@ -2665,6 +2678,10 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
                 state_usb_app = (state_usb_app & ~mask) | (state & mask);
                 expire_update_usb_app = timer_tick_plus_msec(expire);
             }
+            if (timer_tick_has_elapsed(expire_update_amiga_app))
+                state_amiga_app = 0;
+            if (timer_tick_has_elapsed(expire_update_usb_app))
+                state_usb_app = 0;
             reply[0] = SWAP16(state_amiga_app);
             reply[1] = SWAP16(state_usb_app);
             usb_msg_reply(0, KS_STATUS_OK, sizeof (reply), &reply, 0, NULL);

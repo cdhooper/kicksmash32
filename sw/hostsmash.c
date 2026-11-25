@@ -4874,8 +4874,10 @@ show_ks_inquiry(void)
            id.si_ks_date[0], id.si_ks_date[1],
            id.si_ks_date[2], id.si_ks_date[3],
            id.si_ks_time[0], id.si_ks_time[1], id.si_ks_time[2]);
-    printf("  USB %08x  Size %u  Serial \"%s\"  Name \"%s\"\n",
-           SWAP32(id.si_usbid), SWAP32(id.si_size), id.si_serial, id.si_name);
+    printf("  USB %08x  Size %u  Serial \"%.*s\"  Name \"%.*s\"\n",
+           SWAP32(id.si_usbid), SWAP32(id.si_size),
+           (int) sizeof (id.si_serial), id.si_serial,
+           (int) sizeof (id.si_name), id.si_name);
     printf("  Mode: %s\n",
            (id.si_mode == 0) ? "32-bit" :
            (id.si_mode == 1) ? "16-bit" :

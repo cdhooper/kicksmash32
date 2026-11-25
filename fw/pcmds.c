@@ -763,7 +763,7 @@ cmd_reset(int argc, char * const *argv)
         amiga_not_in_reset = 0;
         ee_enable();
         ee_read_mode();
-        ee_set_bank(config.bi.bi_bank_current);
+        ee_update_bank_at_reset();  // Apply a pending nextreset bank
         ee_disable();
         return (RC_SUCCESS);
     } else {

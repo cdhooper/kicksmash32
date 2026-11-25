@@ -1370,7 +1370,7 @@ show_id(void)
             id.si_ks_time[0], id.si_ks_time[1], id.si_ks_time[2]);
     Print(buf, x, y += 9, 0);
 
-    sprintf(buf, "Serial \"%s\"", id.si_serial);
+    sprintf(buf, "Serial \"%.*s\"", (int) sizeof (id.si_serial), id.si_serial);
     Print(buf, x, y += 9, 0);
 
     sprintf(buf, "USB %04x.%04x", id.si_usbid >> 16, (uint16_t) id.si_usbid);
