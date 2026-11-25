@@ -66,7 +66,7 @@ const char cmd_prom_help[] =
 "prom id                 - report EEPROM chip vendor and id\n"
 "prom erase chip|<addr>  - erase EEPROM chip or 128K sector; <len> optional\n"
 "prom log [<count>]      - show log of Amiga address accesses\n"
-"prom mode 0|1|2|3       - set EEPROM access mode (0=32, 1=16lo, 2=16hi)\n"
+"prom mode 0|1|3|4       - set EEPROM access mode (0=32, 1=16, 3=auto, 4=32swap)\n"
 "prom name [<name>]      - set or show name of this board\n"
 "prom read <addr> <len>  - read binary data from EEPROM (to terminal)\n"
 "prom service            - enter Amiga/USB message service mode\n"
@@ -87,7 +87,7 @@ const char cmd_set_help[] =
 "set board_rev <num>        - set board revision\n"
 "set flags <flags> [save]   - set config flags\n"
 "set led <pct>              - set the Power LED brightness level\n"
-"set mode <num>             - set prom mode (0=32, 1=16, 2=16hi, 3=auto)\n"
+"set mode <num>             - set prom mode (0=32, 1=16, 3=auto, 4=32swap)\n"
 "set name <name>            - set Kicksmash board name\n"
 "set sw_bank <num>          - set ROM switcher timeout bank\n"
 "set sw_timeout <num>       - set ROM switcher timeout in seconds";
@@ -584,7 +584,8 @@ cmd_prom(int argc, char * const *argv)
             max = 10;
         return (address_log_replay(max));
     } else if (strcmp("mode", arg) == 0) {
-        if ((argc > 1) && (argv[1][0] >= '0') && (argv[1][0] <= '4')) {
+        if ((argc > 1) && (argv[1][0] >= '0') && (argv[1][0] <= '4') &&
+            (argv[1][0] != '2') && (argv[1][1] == '\0')) {  // 2 was 16-bit high
             uint mode = argv[1][0] - '0';
             prom_mode(mode);
         } else {

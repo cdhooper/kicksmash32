@@ -402,7 +402,7 @@ check_board_standalone(void)
         }
     } else if (saw & BIT(1)) {
         printf(" !Flash0 Flash1 (NOT NORMAL)\n");
-        ee_default_mode = EE_MODE_16_HIGH;
+        ee_default_mode = EE_MODE_32;
         board_state |= BOARD_STATE_BAD_FLASH;
         led_alert(1);
     } else {

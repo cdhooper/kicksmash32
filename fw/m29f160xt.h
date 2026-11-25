@@ -50,7 +50,7 @@ void     oe_output_disable(void);
 
 #define EE_MODE_32      0  // 32-bit flash
 #define EE_MODE_16_LOW  1  // 16-bit flash low device (bits 0-15)
-#define EE_MODE_16_HIGH 2  // 16-bit flash high device (bits 16-31)
+                          // 2 was 16-bit flash high device (no longer supported)
 #define EE_MODE_AUTO    3  // Automatically select mode at boot
 #define EE_MODE_32_SWAP 4  // 32-bit flash high / low swapped
 

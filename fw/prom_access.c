@@ -286,7 +286,6 @@ prom_id(void)
 
     switch (ee_mode) {
         case EE_MODE_16_LOW:
-        case EE_MODE_16_HIGH:
             printf("%08lx %s\n", part1, ee_id_string(part1));
             break;
         case EE_MODE_32:
@@ -567,9 +566,6 @@ prom_show_mode(void)
         case EE_MODE_16_LOW:
             mode = "16-bit low";
             break;
-        case EE_MODE_16_HIGH:
-            mode = "16-bit high";
-            break;
         case EE_MODE_AUTO:
             mode = "auto";
             break;
@@ -589,9 +585,6 @@ prom_show_mode(void)
                 break;
             case 1:
                 mode = "16-bit low";
-                break;
-            case 2:
-                mode = "16-bit high";
                 break;
             case 3:
                 mode = "auto";

@@ -713,11 +713,8 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
      * as the output data register does nothing with writes to the upper
      * 16 bits.
      *
-     * In 16-bit low mode, we just need to do 16-bit DMA from the source
+     * In 16-bit mode, we just need to do 16-bit DMA from the source
      * data to the D0-D15 data register.
-     *
-     * In 16-bit high mode, we need to do 16-bit DMA from the source data
-     * to the D16-D31 data register.
      */
 
     /* Stop timer DMA triggers */

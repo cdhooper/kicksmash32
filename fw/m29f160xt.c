@@ -55,7 +55,6 @@
  * EE_MODE_32      = 32-bit flash
  * EE_MODE_32_SWAP = 32-bit flash low / high flash swapped
  * EE_MODE_16_LOW  = 16-bit flash low device (bits 0-15)
- * EE_MODE_16_HIGH = 16-bit flash high device (bits 16-31)
  */
 uint            ee_mode         = EE_MODE_32;
 uint            ee_default_mode = EE_MODE_32;
@@ -351,19 +350,17 @@ oe_output_disable(void)
 void
 ee_set_mode(uint new_mode)
 {
+    if ((new_mode != EE_MODE_16_LOW) && (new_mode != EE_MODE_32_SWAP))
+        new_mode = EE_MODE_32;  // Unsupported modes fall back to 32-bit
     ee_mode = new_mode;
-    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP)) {
-        ee_cmd_mask = 0xffffffff;  // 32-bit
-        ee_addr_shift = 2;
-        msg_mode(32);
-    } else if (ee_mode == EE_MODE_16_LOW) {
+    if (ee_mode == EE_MODE_16_LOW) {
         ee_cmd_mask = 0x0000ffff;  // 16-bit low
         ee_addr_shift = 1;
         msg_mode(16);
     } else {
-        ee_cmd_mask = 0xffff0000;  // 16-bit high
-        ee_addr_shift = 1;
-        msg_mode(16);
+        ee_cmd_mask = 0xffffffff;  // 32-bit
+        ee_addr_shift = 2;
+        msg_mode(32);
     }
 }
 
@@ -586,10 +583,6 @@ ee_cmd(uint32_t addr, uint32_t cmd)
             break;
         case EE_MODE_16_LOW:
             break;
-        case EE_MODE_16_HIGH:
-            if ((cmd >> 16) == 0)
-                cmd |= (cmd << 16);
-            break;
     }
 
     if ((ccmd & 0xffff) == 0)
@@ -789,9 +782,6 @@ try_again:
                 break;
             case EE_MODE_16_LOW:
                 value = *(uint16_t *) data;
-                break;
-            case EE_MODE_16_HIGH:
-                value = (*(uint16_t *) data) << 16;
                 break;
         }
         rc = ee_program_word(addr, value);
@@ -1128,10 +1118,6 @@ ee_id(uint32_t *part1, uint32_t *part2)
             *part1 = (low << 16) | ((uint16_t) high);
             *part2 = (low & 0xffff0000) | (high >> 16);
             break;
-        case EE_MODE_16_HIGH:
-            *part2 = (low << 16) | ((uint16_t) high);
-            *part1 = (low & 0xffff0000) | (high >> 16);
-            break;
     }
 }
 
@@ -1216,7 +1202,6 @@ ee_test(void)
 
     switch (ee_mode) {
         case EE_MODE_16_LOW:
-        case EE_MODE_16_HIGH:
             if ((strcmp(id1, "Unknown") == 0) ||
                 (cb1->cb_chipid == 0)) {
                 printf("FAIL: ");
