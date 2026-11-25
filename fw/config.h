@@ -57,6 +57,11 @@ void config_read(void);
 int  config_set_bank_name(uint bank, const char *comment);
 int  config_set_bank_longreset(uint8_t *banks);
 int  config_set_bank_merge(uint bank_start, uint bank_end, uint flag_unmerge);
+uint config_check_bank_merge(uint bank_start, uint bank_end, uint flag_unmerge,
+                             uint *badbank);
+#define BANK_MERGE_ERR_MERGED     1  // Bank is already merged
+#define BANK_MERGE_ERR_NOT_MERGED 2  // Bank is not merged
+#define BANK_MERGE_ERR_PARTIAL    3  // Range is not one whole merged group
 int  config_set_bank(uint bank, uint set_cur, uint set_poweron, uint set_reset);
 void config_bank_show(void);
 void config_name(const char *name);

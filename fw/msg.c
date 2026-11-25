@@ -1299,6 +1299,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
                 if ((int) cons_s < 0)
                     cons_s += ARRAY_SIZE(buffer_rxa_lo);
+                memset(config.name, 0, sizeof (config.name));
                 for (pos = 0; pos < sizeof (config.name); pos += 2) {
                     config.name[pos + 0] = buffer_rxa_lo[cons_s] >> 8;
                     if (config.name[pos + 0] == '\0')
@@ -1309,6 +1310,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                     if (++cons_s == ARRAY_SIZE(buffer_rxa_lo))
                         cons_s = 0;
                 }
+                config.name[sizeof (config.name) - 1] = '\0';
                 ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
                 config_updated();
             } else if (cmd & KS_SET_NV) {
@@ -1546,15 +1548,8 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 ks_reply(0, KS_STATUS_BADARG, 0, NULL, 0, NULL);
                 break;
             }
-            for (bank = bank_start; bank <= bank_end; bank++) {
-                if ((((cmd & KS_BANK_UNMERGE) == 0) &&
-                     (config.bi.bi_merge[bank] != 0)) ||
-                    (((cmd & KS_BANK_UNMERGE) != 0) &&
-                     (config.bi.bi_merge[bank] == 0))) {
-                    break;  // Stop early -- invalid bank choice
-                }
-            }
-            if (bank < bank_end) {
+            if (config_check_bank_merge(bank_start, bank_end,
+                                        cmd & KS_BANK_UNMERGE, &bank) != 0) {
                 ks_reply(0, KS_STATUS_FAIL, 0, NULL, 0, NULL);
                 break;
             }
@@ -1592,6 +1587,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 break;
             }
             ks_reply(0, KS_STATUS_OK, 0, NULL, 0, NULL);
+            memset(config.bi.bi_name[bank], 0, sizeof (config.bi.bi_name[0]));
             while (slen > 0) {
                 if (++cons_s >= ARRAY_SIZE(buffer_rxa_lo))
                     cons_s = 0;
@@ -1604,6 +1600,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 else
                     slen -= 2;
             }
+            config.bi.bi_name[bank][sizeof (config.bi.bi_name[0]) - 1] = '\0';
             config_updated();
             break;
         }

@@ -110,6 +110,7 @@ void
 config_read(void)
 {
     uint32_t addr;
+    uint     bank;
     config_t *ptr;
     for (addr = CONFIG_AREA_BASE; addr < CONFIG_AREA_END; addr += 4) {
         ptr = (config_t *) addr;
@@ -123,6 +124,13 @@ config_read(void)
             if (crc == ptr->crc) {
                 printf("    Valid config at %lx", addr);
                 memcpy(&config, (void *) addr, sizeof (config));
+
+                /* Older firmware could store names without a NIL */
+                config.name[sizeof (config.name) - 1] = '\0';
+                for (bank = 0; bank < ROM_BANKS; bank++)
+                    config.bi.bi_name[bank][sizeof (config.bi.bi_name[0]) - 1] =
+                        '\0';
+
                 if (config.name[0] != '\0')
                     printf("  (%s)", config.name);
                 printf("\n");
@@ -220,23 +228,65 @@ config_set_bank_longreset(uint8_t *banks)
     return (0);
 }
 
-int
-config_set_bank_merge(uint bank_start, uint bank_end, uint flag_unmerge)
+/*
+ * config_check_bank_merge
+ * -----------------------
+ * Verifies that a bank range may be merged or unmerged. A merge requires
+ * that no bank in the range is already merged. An unmerge requires that
+ * the range is exactly one whole merged group. The caller must already
+ * have verified the range size and alignment. Returns 0 if the request
+ * is valid, otherwise a BANK_MERGE_ERR_* code, with the offending bank
+ * number in *badbank.
+ */
+uint
+config_check_bank_merge(uint bank_start, uint bank_end, uint flag_unmerge,
+                        uint *badbank)
 {
     uint bank;
     uint banks_add = bank_end - bank_start;
 
     for (bank = bank_start; bank <= bank_end; bank++) {
-        if (!flag_unmerge && (config.bi.bi_merge[bank] != 0)) {
-            uint banks = (config.bi.bi_merge[bank] >> 4) + 1;
+        uint8_t merge = config.bi.bi_merge[bank];
+        *badbank = bank;
+        if (!flag_unmerge) {
+            if (merge != 0)
+                return (BANK_MERGE_ERR_MERGED);
+        } else if (merge == 0) {
+            return (BANK_MERGE_ERR_NOT_MERGED);
+        } else if (merge != ((banks_add << 4) | (bank - bank_start))) {
+            return (BANK_MERGE_ERR_PARTIAL);
+        }
+    }
+    return (0);
+}
+
+int
+config_set_bank_merge(uint bank_start, uint bank_end, uint flag_unmerge)
+{
+    uint bank;
+    uint banks_add = bank_end - bank_start;
+    uint merge;
+    uint banks;
+
+    switch (config_check_bank_merge(bank_start, bank_end, flag_unmerge,
+                                    &bank)) {
+        case 0:
+            break;
+        case BANK_MERGE_ERR_MERGED:
+            banks = (config.bi.bi_merge[bank] >> 4) + 1;
             printf("Bank %u is already part of a%s %u bank range\n",
                    bank, (banks == 8) ? "n" : "", banks);
             return (1);
-        }
-        if (flag_unmerge && (config.bi.bi_merge[bank] == 0)) {
+        case BANK_MERGE_ERR_NOT_MERGED:
             printf("Bank %u is not part of a bank range\n", bank);
             return (1);
-        }
+        default:  // BANK_MERGE_ERR_PARTIAL
+            merge = config.bi.bi_merge[bank];
+            banks = (merge >> 4) + 1;
+            printf("Bank %u is part of the %u bank range %u-%u (unmerge "
+                   "the whole range)\n", bank, banks, bank - (merge & 0xf),
+                   bank - (merge & 0xf) + banks - 1);
+            return (1);
     }
 
     for (bank = bank_start; bank <= bank_end; bank++) {

@@ -2331,6 +2331,18 @@ bank_merge_unmerge:
                                        bank);
                                 return (1);
                             }
+                            if (flag_bank_unmerge &&
+                                (info.bi_merge[bank] !=
+                                 (((bank_end - bank_start) << 4) |
+                                  (bank - bank_start)))) {
+                                uint merge = info.bi_merge[bank];
+                                uint first = bank - (merge & 0xf);
+                                uint banks = (merge >> 4) + 1;
+                                printf("Bank %u is part of the %u bank range "
+                                       "%u-%u (unmerge the whole range)\n",
+                                       bank, banks, first, first + banks - 1);
+                                return (1);
+                            }
                         }
 
                         argval = bank_start | (bank_end << 8);
