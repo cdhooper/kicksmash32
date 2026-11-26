@@ -12,6 +12,7 @@
 #ifdef EMBEDDED_CMD
 #include "printf.h"
 #endif
+#include <string.h>
 #include "cmdline.h"
 #include "main.h"
 #include "mem_access.h"
@@ -75,12 +76,20 @@ rmode_4:
                 *(uint32_t *)buf = *(uint32_t *)(uintptr_t)addr;
                 break;
 #ifndef AMIGA
-            case 8:
+            case 8: {
+                /*
+                 * addr is 8-byte aligned here, but buf may not be. The
+                 * Cortex-M3 faults on a 64-bit (LDRD/STRD) access that is
+                 * not word aligned, so copy through a local variable.
+                 */
+                uint64_t val;
                 if (no_unaligned_access && (addr & 7))
                     goto rmode_4;
                 mode = 8;
-                *(uint64_t *)buf = *(uint64_t *)(uintptr_t)addr;
+                val = *(volatile uint64_t *)(uintptr_t)addr;
+                memcpy(buf, &val, sizeof (val));
                 break;
+            }
 #else /* AMIGA */
             case 8:
 rmode_8:
@@ -161,12 +170,16 @@ wmode_4:
                 *(uint32_t *)(uintptr_t)addr = *(uint32_t *)buf;
                 break;
 #ifndef AMIGA
-            case 8:
+            case 8: {
+                /* addr is 8-byte aligned here, but buf may not be */
+                uint64_t val;
                 if (no_unaligned_access && (addr & 7))
                     goto wmode_4;
                 mode = 8;
-                *(uint64_t *)(uintptr_t)addr = *(uint64_t *)buf;
+                memcpy(&val, buf, sizeof (val));
+                *(volatile uint64_t *)(uintptr_t)addr = val;
                 break;
+            }
 #else /* AMIGA */
             case 8:
 wmode_8:
