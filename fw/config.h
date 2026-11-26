@@ -30,7 +30,8 @@ typedef struct {
     char        name[16];   // Unique name for this board
     uint8_t     led_level;  // Power LED brightness (0 to 100)
     uint8_t     board_rev;  // Board revision
-    uint8_t     unused[29]; // Unused
+    uint8_t     unused[25]; // Unused
+    uint32_t    seq;        // Record sequence number (newest is highest)
     uint32_t    flags;      // Runtime flags
     uint8_t     nv_mem[32]; // Non-volatile storage for Amiga
 } config_t;

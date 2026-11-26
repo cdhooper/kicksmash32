@@ -27,6 +27,12 @@
 #define CONFIG_AREA_BASE 0x3e000
 #define CONFIG_AREA_SIZE 0x02000
 #define CONFIG_AREA_END  (CONFIG_AREA_BASE + CONFIG_AREA_SIZE)
+#define CONFIG_PAGE_SIZE 0x00800  // STM32F107 flash page size
+
+/* seq took the last 4 bytes of unused[]; the record layout must not change */
+extern char config_check_size[(sizeof (config_t) == 256) ? 1 : -1];
+extern char config_check_seq[(offsetof(config_t, seq) == 216) ? 1 : -1];
+extern char config_check_flags[(offsetof(config_t, flags) == 220) ? 1 : -1];
 
 uint64_t config_timer = 0;
 uint32_t board_state  = 0;
@@ -41,11 +47,83 @@ config_updated(void)
 }
 
 /*
+ * config_record_ok
+ * ----------------
+ * Returns true if the specified address holds a valid config record
+ * with a correct CRC.
+ */
+static bool
+config_record_ok(const config_t *ptr)
+{
+    uint crcpos = offsetof(config_t, crc) + sizeof (ptr->crc);
+    uint crclen;
+
+    if ((ptr->magic != CONFIG_MAGIC) || (ptr->valid == 0) ||
+        (ptr->size <= crcpos) ||
+        ((uint32_t) ptr + ptr->size > CONFIG_AREA_END))
+        return (false);
+    crclen = ptr->size - crcpos;
+    if (crclen > 1024)  // sanity check
+        crclen = 1024;
+    return (crc32(0, &ptr->crc + 1, crclen) == ptr->crc);
+}
+
+/*
+ * config_find_newest
+ * ------------------
+ * Returns the address of the newest valid config record, or 0 if there
+ * is none. The newest record has the highest sequence number. Records
+ * written by older firmware have sequence number 0, so among equal
+ * sequence numbers, the last one in the area is the newest.
+ *
+ * More than one valid record exists only if power was lost while
+ * config_write() was updating the area.
+ */
+static uint32_t
+config_find_newest(void)
+{
+    uint32_t addr;
+    uint32_t found = 0;
+    uint32_t found_seq = 0;
+
+    for (addr = CONFIG_AREA_BASE; addr < CONFIG_AREA_END; addr += 4) {
+        const config_t *ptr = (const config_t *) addr;
+        if (config_record_ok(ptr) &&
+            ((found == 0) || ((int32_t) (ptr->seq - found_seq) >= 0))) {
+            found = addr;
+            found_seq = ptr->seq;
+        }
+    }
+    return (found);
+}
+
+/*
+ * config_area_blank
+ * -----------------
+ * Returns true if the specified range of the config area is erased.
+ */
+static bool
+config_area_blank(uint32_t addr, uint len)
+{
+    const uint32_t *ptr = (const uint32_t *) addr;
+    const uint32_t *end = (const uint32_t *) (addr + len);
+
+    for (; ptr < end; ptr++)
+        if (*ptr != 0xffffffff)
+            return (false);
+    return (true);
+}
+
+/*
  * config_write
  * ------------
- * Write new config area. The new record is written before previous
- * records are invalidated, so that a power loss in between leaves at
- * least one valid record. config_read() uses the last valid record.
+ * Write new config record. The config area is used as a ring of flash
+ * pages. A new record is written after the newest record. When that
+ * space is not blank (the ring wrapped), only the page which will hold
+ * the new record is erased; it never holds the newest record. The new
+ * record is written and verified before previous records are invalidated,
+ * so a power loss at any point leaves at least one valid record, and
+ * config_read() picks the newest one by its sequence number.
  */
 static void
 config_write(void)
@@ -53,7 +131,8 @@ config_write(void)
     config_t *ptr;
     uint32_t  addr;
     uint32_t  oaddr;
-    uint16_t  size;
+    uint32_t  newest;
+    uint32_t  page;
     uint      crcpos;
     uint      crclen;
 
@@ -64,35 +143,49 @@ config_write(void)
     crclen       = sizeof (config_t) - crcpos;
     config.crc   = crc32(0, &config.crc + 1, crclen);
 
-    for (addr = CONFIG_AREA_BASE; addr < CONFIG_AREA_END; addr += 4) {
-        ptr = (config_t *) addr;
-        if ((ptr->magic == CONFIG_MAGIC) && (ptr->valid) &&
-            (memcmp(ptr, &config, sizeof (config)) == 0)) {
-            /*
-             * Written record already matches the current config.
-             * No need to write new record.
-             */
-            return;
+    newest = config_find_newest();
+    if ((newest != 0) &&
+        (memcmp((void *) newest, &config, sizeof (config)) == 0)) {
+        /*
+         * Written record already matches the current config.
+         * No need to write new record.
+         */
+        return;
+    }
+
+    /* New record goes after the newest, wrapping at the end of the area */
+    if (newest == 0) {
+        addr = CONFIG_AREA_BASE;
+        config.seq = 1;
+    } else {
+        addr = (newest + ((config_t *) newest)->size + 3) & ~3;
+        config.seq = ((config_t *) newest)->seq + 1;
+    }
+    config.crc = crc32(0, &config.crc + 1, crclen);
+
+    if (addr + config.size > CONFIG_AREA_END)
+        addr = CONFIG_AREA_BASE;
+    if (!config_area_blank(addr, config.size)) {
+        /*
+         * Erase the page which will hold the new record. If the newest
+         * record is in that page, use the start of the next page instead.
+         */
+        page = addr & ~(CONFIG_PAGE_SIZE - 1);
+        if ((newest != 0) &&
+            (newest + config.size > page) &&
+            (newest < page + CONFIG_PAGE_SIZE)) {
+            page += CONFIG_PAGE_SIZE;
+            if (page >= CONFIG_AREA_END)
+                page = CONFIG_AREA_BASE;
+        }
+        addr = page;
+        printf("Config area erase %lx\n", addr);
+        if (stm32flash_erase(addr, CONFIG_PAGE_SIZE) != 0) {
+            printf("Failed to erase config area page %lx\n", addr);
+            return;  // Keep previous records valid
         }
     }
 
-    /* Locate space for new config area */
-    for (addr = CONFIG_AREA_BASE; addr < CONFIG_AREA_END; addr += 4) {
-        ptr = (config_t *) addr;
-        size = ptr->size;
-        if ((ptr->magic == CONFIG_MAGIC) && (size >= 4) && (size < 0x2000))
-            addr += size - 4;  // quickly skip to next area
-        else if (ptr->magic == 0xffffffff)
-            break;
-    }
-    if (addr + config.size > CONFIG_AREA_END) {
-        addr = CONFIG_AREA_BASE;  // Need to erase config area
-        printf("Config area erase %lx\n", addr);
-        if (stm32flash_erase(CONFIG_AREA_BASE, CONFIG_AREA_SIZE) != 0) {
-            printf("Failed to erase config area\n");
-            stm32flash_erase(CONFIG_AREA_BASE, CONFIG_AREA_SIZE);  // try again
-        }
-    }
     printf("config write at %lx\n", addr);
     if ((stm32flash_write(addr, config.size, &config, 0) != 0) ||
         (memcmp((void *) addr, &config, sizeof (config)) != 0)) {
@@ -122,28 +215,10 @@ void
 config_read(void)
 {
     uint32_t addr;
-    uint32_t found = 0;
+    uint32_t found;
     uint     bank;
-    config_t *ptr;
 
-    /*
-     * Find the last valid record. More than one valid record exists
-     * only if power was lost while config_write() was updating the
-     * area, in which case the last one is the newest.
-     */
-    for (addr = CONFIG_AREA_BASE; addr < CONFIG_AREA_END; addr += 4) {
-        ptr = (config_t *) addr;
-        if ((ptr->magic == CONFIG_MAGIC) && (ptr->valid)) {
-            uint crcpos = offsetof(config_t, crc) + sizeof (ptr->crc);
-            uint crclen = ptr->size - crcpos;
-            uint32_t crc;
-            if (crclen > 1024)  // sanity check
-                crclen = 1024;
-            crc = crc32(0, &ptr->crc + 1, crclen);
-            if (crc == ptr->crc)
-                found = addr;
-        }
-    }
+    found = config_find_newest();
     if (found != 0) {
         addr = found;
         printf("    Valid config at %lx", addr);

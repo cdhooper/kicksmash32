@@ -896,6 +896,14 @@ pin_tests(uint verbose, uint force)
         return (RC_SUCCESS);
     }
 
+    /*
+     * The tests below reconfigure the flash pins, so release them first.
+     * Otherwise, a recent flash access (such as "prom id") leaves
+     * ee_enable() believing the pins are still set up, and the following
+     * prom_test() would then talk to the flash with the pins misconfigured.
+     */
+    ee_disable();
+
     /* Make SOCKET_OE an input pull-up */
     gpio_setv(SOCKET_OE_PORT, SOCKET_OE_PIN, 1);
     gpio_setmode(SOCKET_OE_PORT, SOCKET_OE_PIN, GPIO_SETMODE_INPUT_PULLUPDOWN);
