@@ -553,8 +553,14 @@ cdcacm_control_request(usbd_device *usbd_dev, struct usb_setup_data *req,
             memcpy(&line_coding, *buf, sizeof (struct usb_cdc_line_coding));
             return (USBD_REQ_HANDLED);
         case USB_CDC_REQ_GET_LINE_CODING:
-            usbd_ep_write_packet(usbd_gdev, 0x83, &line_coding,
-                                 sizeof (struct usb_cdc_line_coding));
+            /*
+             * Reply in the control data stage. libopencm3 sends *len
+             * bytes from *buf, and does not limit *len (the host's
+             * wLength) to the size of the buffer.
+             */
+            *buf = (uint8_t *) &line_coding;
+            if (*len > sizeof (struct usb_cdc_line_coding))
+                *len = sizeof (struct usb_cdc_line_coding);
             return (USBD_REQ_HANDLED);
     }
     return (USBD_REQ_NOTSUPP);

@@ -129,23 +129,31 @@ stm32flash_write(uint32_t addr, uint len, void *buf, uint flags)
 
     flash_unlock();
     while (len > 0) {
-        uint plen = len;
+        uint plen;
 
         if (addr & 1)
             plen = 1;
-        else if ((addr & 2) && (plen != 1))
-            plen = 2;
-        else if (plen > 4)
+        else if (((addr & 2) == 0) && (len >= 4))
             plen = 4;
+        else if (len >= 2)
+            plen = 2;
+        else
+            plen = 1;
 
         switch (plen) {
             case 1: {
-                uint16_t val = *(uint16_t *) addr;
+                /*
+                 * Flash can only be programmed a halfword at a time, at
+                 * an even address. Merge the byte into its halfword
+                 * (little-endian: an odd address is the high byte).
+                 */
+                uint32_t haddr = addr & ~1;
+                uint16_t val = *(uint16_t *) haddr;
                 if (addr & 1)
-                    val = (val & 0x00ff) | *bufp;
+                    val = (val & 0x00ff) | (*bufp << 8);
                 else
                     val = (val & 0xff00) | *bufp;
-                rc += flash_write16(addr, val);
+                rc += flash_write16(haddr, val);
                 break;
             }
             case 2:

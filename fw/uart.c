@@ -137,48 +137,67 @@ static void
 cons_rb_put(uint ch)
 {
     static uint8_t magic_pos;
-    uint new_prod = ((cons_in_rb_producer + 1) % sizeof (cons_in_rb));
+    static uint    fail_prod = 0;
+    uint           new_prod;
+    bool           magic_hit = false;
+    bool           report_full = false;
+    uint32_t       irq_mask;
 
+    /*
+     * This is called from the UART, USB, and Amiga message interrupts,
+     * which run at different priorities, as well as from the main loop.
+     * Everything that touches shared state happens with interrupts masked,
+     * so that one caller can't preempt another between computing the new
+     * producer and storing it. The caller's interrupt mask is restored.
+     */
+    irq_mask = cm_mask_interrupts(1);
     if (ch == magic_seq[magic_pos]) {
         if (++magic_pos == sizeof (magic_seq)) {
-            uintptr_t sp = (uintptr_t) &new_prod;
-            uint      cur;
-            extern    uint _stack;
-            printf("MAGIC RESET\n");
-            printf("SP %08x", sp);
-            if ((sp & 31) != 0) {
-                uint missing = (sp >> 2) & 7;
-                printf("\n   %*s", missing * 9, "");
-            }
-            for (cur = 0; cur < 64; cur++) {
-                if (sp >= (uintptr_t) &_stack)
-                    break;
-                if ((sp & 31) == 0)
-                    printf("\n   ");
-                printf(" %08lx", *ADDR32(sp));
-                sp += 4;
-            }
-            printf("\nResetting...\n\n");
-            uart_flush();
-            scb_reset_system();
+            magic_pos = 0;
+            magic_hit = true;
         }
     } else {
         magic_pos = 0;
     }
 
+    new_prod = (cons_in_rb_producer + 1) % sizeof (cons_in_rb);
     if (new_prod == cons_in_rb_consumer) {
-        static uint fail_prod = 0;
+        /* Would cause ring buffer overflow */
         if (fail_prod != new_prod) {
             fail_prod = new_prod;
-            uart_putchar('%');
+            report_full = true;
         }
-        return;  // Would cause ring buffer overflow
+    } else {
+        cons_in_rb[cons_in_rb_producer] = (uint8_t) ch;
+        cons_in_rb_producer = new_prod;
     }
+    cm_mask_interrupts(irq_mask);
 
-    disable_irq();
-    cons_in_rb[cons_in_rb_producer] = (uint8_t) ch;
-    cons_in_rb_producer = new_prod;
-    enable_irq();
+    if (report_full)
+        uart_putchar('%');
+
+    if (magic_hit) {
+        uintptr_t sp = (uintptr_t) &irq_mask;
+        uint      cur;
+        extern    uint _stack;
+        printf("MAGIC RESET\n");
+        printf("SP %08x", sp);
+        if ((sp & 31) != 0) {
+            uint missing = (sp >> 2) & 7;
+            printf("\n   %*s", missing * 9, "");
+        }
+        for (cur = 0; cur < 64; cur++) {
+            if (sp >= (uintptr_t) &_stack)
+                break;
+            if ((sp & 31) == 0)
+                printf("\n   ");
+            printf(" %08lx", *ADDR32(sp));
+            sp += 4;
+        }
+        printf("\nResetting...\n\n");
+        uart_flush();
+        scb_reset_system();
+    }
 }
 
 /*
@@ -411,6 +430,8 @@ putchar(int ch)
 
     uart_out_buf[uart_out_prod] = ch;
     uart_out_prod = (uart_out_prod + 1) % sizeof (uart_out_buf);
+    if (uart_out_prod == 0)
+        uart_out_wrapped = 1;
 
     if ((ch == '\n') && (last_putc != '\r') && (last_putc != '\n')) {
         uart_putchar('\r');  // Always do CRLF
@@ -486,16 +507,27 @@ uart_puthex(uint32_t x)
 void
 uart_replay_output(void)
 {
-    uint prod = uart_out_prod;
-    uint cons = 0;
-    if (uart_out_wrapped) {
-        cons = (prod + 1) % sizeof (uart_out_buf);
+    uint    prod    = uart_out_prod;
+    uint8_t wrapped = uart_out_wrapped;
+    uint    cons    = 0;
+    uint    count   = prod;
+
+    if (wrapped) {
+        /* Oldest character is the next one to be overwritten */
+        cons  = prod;
+        count = sizeof (uart_out_buf);
     }
-    while (cons != prod) {
+    /*
+     * putchar() also records to uart_out_buf. When wrapped, it rewrites
+     * each character in place just as it is read. Otherwise, it writes
+     * ahead of what is being read.
+     */
+    while (count-- > 0) {
         putchar(uart_out_buf[cons]);
         cons = (cons + 1) % sizeof (uart_out_buf);
     }
-    uart_out_prod = prod;  // Reset producer
+    uart_out_prod    = prod;     // Reset producer
+    uart_out_wrapped = wrapped;
 }
 
 void

@@ -1015,14 +1015,26 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
             timeout = 1000000;  // 1 second
             enable_irq();
             while (len > 0) {
-                uint32_t addr_mask;
                 uint32_t bsize = cb->cb_bsize << 10;
                 uint     bnum  = addr / bsize;
+                uint32_t send;  // End address of the sector holding addr
+                uint32_t sleft; // Words from addr to the end of the sector
+
+                if (addr >= EE_DEVICE_SIZE) {
+                    /*
+                     * Don't wrap to the start of the device. The outer
+                     * loop will report the failure.
+                     */
+                    break;
+                }
+                send = (addr & ~(bsize - 1)) + bsize;
                 if (bnum == cb->cb_bbnum) {
                     /* Boot block has variable block size */
                     uint soff = addr - bnum * bsize;
                     uint snum = soff / (cb->cb_ssize << 10);
                     uint smap = cb->cb_map;
+                    uint32_t sstart = bnum * bsize +
+                                      snum * (cb->cb_ssize << 10);
 #ifdef ERASE_DEBUG
                     printf("bblock soff=%x snum=%x s_map=%x\n", soff, snum, smap);
 #endif
@@ -1036,6 +1048,7 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
                         printf("   smap=%x bsize=%lx\n", smap, bsize);
 #endif
                     } while (snum < 8);
+                    send = sstart + bsize;
 #ifdef ERASE_DEBUG
                     printf(" bb sector %lx\n", bsize);
 #endif
@@ -1046,22 +1059,27 @@ ee_erase(uint mode, uint32_t addr, uint32_t len, int verbose)
                 }
 #endif
 
-                addr_mask = ~(bsize - 1);
 #ifdef ERASE_DEBUG
-                printf("->ee_erase %lx %x\n", addr & addr_mask, bsize);
+                printf("->ee_erase %lx %x\n", send - bsize, bsize);
 #else
-                ee_write_word(addr & addr_mask, 0x00300030);
+                ee_write_word(send - bsize, 0x00300030);  // Sector start
 #endif
 
                 timeout += 1000000;  // Add 1 second per block
 
-                if (len < bsize) {
+                /*
+                 * Only count the part of the sector at or after addr,
+                 * so that an unaligned start address doesn't cause the
+                 * last sector of the range to be skipped.
+                 */
+                sleft = send - addr;
+                if (len <= sleft) {
                     /* Nothing left to do -- allow erase to start */
                     len = 0;
                     break;
                 }
-                len  -= bsize;
-                addr += bsize;  // Advance to the next sector
+                len  -= sleft;
+                addr  = send;  // Advance to the next sector
 #if 0
                 if (bcount++ > 8)  // Limit count of simultaneous block erases
                     break;

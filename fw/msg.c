@@ -1304,7 +1304,7 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);
             } else {
                 static const uint16_t data[] = {
-                    0x00aa, 0x0055, 0x00a0,
+                    0x00aa, 0x0055, 0x0080,
                     0x00aa, 0x0055, 0x0030
                 };
                 ks_reply(KS_REPLY_WE_RAW, 0, sizeof (data), &data, 0, NULL);

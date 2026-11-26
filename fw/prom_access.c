@@ -184,14 +184,14 @@ prom_write_16(uint32_t addr, uint width, uint8_t *buf)
 static rc_t
 prom_write_32(uint32_t addr, uint width, uint8_t *buf)
 {
-    uint8_t tbuf[2];
+    uint8_t tbuf[4];  // One 32-bit flash word
 
     if (warn_amiga_not_in_reset())
         return (RC_BUSY);
 
     if (addr & 3) {
         /* Handle odd start address */
-        uint copylen = 3 - (addr & 3);
+        uint copylen = 4 - (addr & 3);
 
         if (ee_read(addr >> 2, tbuf, 1))
             return (RC_FAILURE);
