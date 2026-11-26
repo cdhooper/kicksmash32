@@ -228,6 +228,9 @@ make_arglist(const char *cmd, char *argv[])
         do_split += next_split;
         next_split = 0;
 
+        if (cur >= (int) sizeof (buf) - 1)
+            goto too_long;
+
         if (ch == '\\') {
             if (nch != '\0') {
                 buf[cur++] = nch;
@@ -312,6 +315,12 @@ make_arglist(const char *cmd, char *argv[])
 #endif
         args++;
     }
+    goto finish;
+
+too_long:
+    warnx("Argument too long");
+    free_arglist(args, argv);
+    args = 0;
 finish:
     argv[args] = NULL;
     return (args);

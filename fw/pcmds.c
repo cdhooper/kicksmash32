@@ -854,6 +854,11 @@ cmd_gpio(int argc, char * const *argv)
                 port = *(ptr++) - 'A';
 
             /* Find pin, if specified */
+            if ((port == -1) &&
+                (((*ptr >= '0') && (*ptr <= '9')) || (*ptr == '*'))) {
+                printf("A GPIO port must be specified: %s\n", argv[arg]);
+                return (RC_BAD_PARAM);
+            }
             if ((*ptr >= '0') && (*ptr <= '9')) {
                 uint pin = *(ptr++) - '0';
                 if ((*ptr >= '0') && (*ptr <= '9'))
@@ -874,7 +879,7 @@ cmd_gpio(int argc, char * const *argv)
         if (*ptr == '=') {
             assign = ptr + 1;
             ptr = "";
-            if (full_port)
+            if (full_port && (port != -1))
                 pins[port] = 0xffff;
             if (port == -1) {
                 uint tport;

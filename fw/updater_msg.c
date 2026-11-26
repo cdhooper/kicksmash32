@@ -913,7 +913,9 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             reply.si_ks_time[1] = temp[1];
             reply.si_ks_time[2] = temp[2];
             reply.si_ks_time[3] = 0;
-            strcpy(reply.si_serial, (const char *)usb_serial_str);
+            /* A 24-character serial fills si_serial[] with no NIL */
+            strncpy(reply.si_serial, (const char *)usb_serial_str,
+                    sizeof (reply.si_serial));
             reply.si_rev      = SWAP16(0x0003);     // Protocol version 0.3
             reply.si_features = SWAP16(0x000f);     // Features
             reply.si_usbid    = SWAP32(0x12091610); // Matches USB ID

@@ -1148,23 +1148,12 @@ cmd_d(int argc, char * const *argv)
 
     if (width > sizeof (buf))
         width = sizeof (buf);
-    switch (width) {
-        case 1:
-            per_line = 16;
-            break;
-        case 2:
-            per_line = 16;
-            break;
-        case 4:
-            per_line = 16;
-            break;
-        case 8:
-            per_line = 16;
-            break;
-        default:
-            per_line = 16;
-            break;
-    }
+    /*
+     * Use the smallest multiple of width which is at least 16 bytes,
+     * so that each line starts on a whole value and the ASCII buffer
+     * (charbuf) never collects more than one line.
+     */
+    per_line = (16 + width - 1) / width * width;
     if (flag_R)
         flag_A = TRUE;
 
@@ -1379,7 +1368,8 @@ cmd_loop(int argc, char * const *argv)
         }
         if (input_break_pending()) {
             printf("^C\n");
-            return (RC_USR_ABORT);
+            rc = RC_USR_ABORT;
+            goto finish;
         }
     }
 finish:
@@ -1818,6 +1808,7 @@ show_patterns:
     rwmode = RWMODE_WRITE;
     if (strcmp(argv[0], "?") == 0) {
         printf(cmd_test_patterns);
+        return (RC_SUCCESS);
     } else if (strcmp(argv[0], "one") == 0) {
         testmode = TEST_ONE;
         memset(buf, 0xff, width);

@@ -221,6 +221,10 @@ static uint16_t gd32_dwc_ep_write_packet(
         /* Trigger flush of endpoint's transmit FIFO -- required for GD32F107 */
 	const uint32_t fifo = (REBASE(OTG_DIEPCTL(ep)) & OTG_DIEPCTL0_TXFNUM_MASK) >> 22;
 	REBASE(OTG_GRSTCTL) = (fifo << 6U) | OTG_GRSTCTL_TXFFLSH;
+	/* Wait for the flush to finish before writing to the FIFO */
+	for (uint32_t loops = 0; loops < GD32_USB_WAIT_LOOPS; loops++)
+		if ((REBASE(OTG_GRSTCTL) & OTG_GRSTCTL_TXFFLSH) == 0U)
+			break;
 #endif
 
 	/* Configure the endpoint to accept the new packet */

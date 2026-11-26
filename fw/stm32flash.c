@@ -15,6 +15,7 @@
 #include "stm32flash.h"
 #include "cmdline.h"
 #include <string.h>
+#include <libopencm3/cm3/cortex.h>
 #include <libopencm3/stm32/flash.h>
 #include <libopencm3/stm32/common/flash_common_idcache.h>
 
@@ -35,18 +36,50 @@ flash_wait_for_done(void)
         ;
 }
 
+/*
+ * flash_page_erase_ram
+ * --------------------
+ * Performs the page erase. This runs from RAM with interrupts masked,
+ * because the GD32F107 stalls forever if the CPU fetches from flash while
+ * a page erase is in progress.
+ */
+__attribute__((noinline, long_call, section(".ramtext")))
 static void
+flash_page_erase_ram(uint32_t page)
+{
+    while ((FLASH_SR & FLASH_SR_BSY) == FLASH_SR_BSY)
+        ;
+    FLASH_CR |= FLASH_CR_PER;
+    FLASH_AR = page;
+    FLASH_CR |= FLASH_CR_STRT;
+    while ((FLASH_SR & FLASH_SR_BSY) == FLASH_SR_BSY)
+        ;
+    FLASH_CR &= ~FLASH_CR_PER;
+}
+
+/*
+ * flash_page_erase
+ * ----------------
+ * Erases the flash page containing the specified offset, and returns
+ * non-zero if the page was not erased. FLASH_AR requires the bus address
+ * of the page. The GD32F107 does not erase anything if given the offset.
+ */
+static int
 flash_page_erase(uint32_t addr)
 {
-    flash_wait_for_done();
+    uint32_t *ptr;
+    uint32_t  page = (addr & ~(FL_PAGE_SIZE - 1)) | FLASH_BASE;
+    uint32_t  irq_mask;
 
-    FLASH_CR |= FLASH_CR_PER;
-    FLASH_AR = addr;
-    FLASH_CR |= FLASH_CR_STRT;
+    irq_mask = cm_mask_interrupts(1);
+    flash_page_erase_ram(page);
+    cm_mask_interrupts(irq_mask);
 
-    flash_wait_for_done();
-
-    FLASH_CR &= ~FLASH_CR_PER;
+    for (ptr = (uint32_t *) page; ptr < (uint32_t *) (page + FL_PAGE_SIZE);
+         ptr++)
+        if (*ptr != 0xffffffff)
+            return (1);
+    return (0);
 }
 
 static int
@@ -77,10 +110,15 @@ int
 stm32flash_erase(uint32_t addr, uint len)
 {
     uint elen;
+    int  rc = 0;
+
+    if ((addr >= 0x40000) || (len > 0x40000 - addr))
+        return (RC_BAD_PARAM);
 
     flash_unlock();
     while (len > 0) {
-        flash_page_erase(addr);
+        if (flash_page_erase(addr) != 0)
+            rc = RC_FAILURE;
         elen = FL_PAGE_SIZE;
         if ((addr & (FL_PAGE_SIZE - 1)) != 0)
             elen = ((addr + FL_PAGE_SIZE - 1) & ~(FL_PAGE_SIZE - 1)) - addr;
@@ -91,7 +129,7 @@ stm32flash_erase(uint32_t addr, uint len)
         len  -= elen;
     }
     flash_lock();
-    return (0);
+    return (rc);
 }
 
 int

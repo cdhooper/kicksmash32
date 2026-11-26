@@ -904,7 +904,9 @@ static const chip_blocks_t chip_blocks[] = {
     { 0x22D8,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
     { 0x22D6, 15, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
     { 0x2258,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
-    { 0x22C4, 15, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x22C4, 31, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x22CC, 31, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
+    { 0x2223,  7, 32, 4, 0x71 },  // 01110001 8K 4K 4K 16K (top)
     { 0x2249,  0, 32, 4, 0x1d },  // 00011101 16K 4K 4K 8K (bottom)
     { 0x0000,  0, 32, 4, 0x1d },  // Default to bottom boot
 };
@@ -1226,6 +1228,7 @@ ee_test(void)
     uint64_t zerodata;
     uint pos;
     uint check_base;
+    uint wcount;
     int rc = 0;
 
     /* Verify flash parts can be identified */
@@ -1249,7 +1252,7 @@ ee_test(void)
         case EE_MODE_32_SWAP:
             id2 = ee_id_string(part2);
             if ((strcmp(id1, "Unknown") == 0) ||
-                (strcmp(id1, "Unknown") == 0) ||
+                (strcmp(id2, "Unknown") == 0) ||
                 (cb1->cb_chipid == 0) ||
                 (cb2->cb_chipid == 0)) {
                 printf("FAIL: ");
@@ -1440,21 +1443,27 @@ ee_test(void)
      * This allows code to test the lower address pins on most parts.
      */
     check_base = 0x10;
-    if ((part1 == 0x000422d2) || (part1 == 0x000422d2)) {
+    if ((part1 == 0x000422d2) || (part2 == 0x000422d2)) {
         /* M29F160xE */
         check_mask = 0x0000003f; // CFI wrap starts at A6
     } else {
         /* M29F160FT and M29W160EB */
         check_mask = 0x000000ff;
     }
+    /* ee_read() count is in flash words, not bytes */
+    if ((ee_mode == EE_MODE_32) || (ee_mode == EE_MODE_32_SWAP))
+        wcount = sizeof (zerodata) / sizeof (uint32_t);
+    else
+        wcount = sizeof (zerodata) / sizeof (uint16_t);
+
     ee_cmd(0x55, 0x98);
-    ee_read(check_base, &zerodata, sizeof (zerodata));
+    ee_read(check_base, &zerodata, wcount);
     check_mask &= ~check_base;
     for (pos = 0; pos < 24; pos++) {
         uint64_t data;
         if ((check_mask & BIT(pos)) == 0)
             continue;  // Not checking this bit
-        ee_read(check_base + BIT(pos), &data, sizeof (data));
+        ee_read(check_base + BIT(pos), &data, wcount);
         if (data == zerodata) {
             printf("FAIL: CFI wrap at A%d (%016llx)\n", pos, data);
             rc++;

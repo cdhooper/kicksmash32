@@ -134,6 +134,8 @@ TGT_LDFLAGS		+= -T$(LDSCRIPT)
 TGT_LDFLAGS		+= $(ARCH_FLAGS) $(DEBUG)
 TGT_LDFLAGS		+= -Wl,-Map=$(OBJDIR)/$*.map -Wl,--cref
 TGT_LDFLAGS		+= -Wl,--gc-sections
+# Flash erase code runs from RAM (.ramtext), so RAM is executable
+TGT_LDFLAGS		+= -Wl,--no-warn-rwx-segments
 ifeq ($(V),99)
 TGT_LDFLAGS		+= -Wl,--print-gc-sections
 endif
@@ -194,7 +196,7 @@ $(OBJDIR)/%.elf: $(OBJS) $(LDSCRIPT) $(OPENCM3_LIB)
 # $(OBJS) to finally create fw.elf and fw.bin
 $(UBINARY).elf: $(UOBJS) updater.ld $(OPENCM3_LIB)
 	@echo Building $@
-	$(QUIET)$(LD) --static -nostartfiles -nostdlib -Tupdater.ld -mthumb -mcpu=cortex-m3 -msoft-float -ggdb3 -Wl,-Map=$(UBINARY).map -Wl,--cref -Wl,--gc-sections -L$(OPENCM3_DIR)/lib $(UOBJS) $(LDLIBS) -o $@
+	$(QUIET)$(LD) --static -nostartfiles -nostdlib -Tupdater.ld -mthumb -mcpu=cortex-m3 -msoft-float -ggdb3 -Wl,-Map=$(UBINARY).map -Wl,--cref -Wl,--gc-sections -Wl,--no-warn-rwx-segments -L$(OPENCM3_DIR)/lib $(UOBJS) $(LDLIBS) -o $@
 
 $(DFUBIN_OBJ): $(UBINARY).bin Makefile
 	@echo Building $@

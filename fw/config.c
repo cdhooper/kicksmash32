@@ -43,14 +43,16 @@ config_updated(void)
 /*
  * config_write
  * ------------
- * Write new config area
+ * Write new config area. The new record is written before previous
+ * records are invalidated, so that a power loss in between leaves at
+ * least one valid record. config_read() uses the last valid record.
  */
 static void
 config_write(void)
 {
-    /* Locate and invalidate previous config areas */
     config_t *ptr;
     uint32_t  addr;
+    uint32_t  oaddr;
     uint16_t  size;
     uint      crcpos;
     uint      crclen;
@@ -64,16 +66,13 @@ config_write(void)
 
     for (addr = CONFIG_AREA_BASE; addr < CONFIG_AREA_END; addr += 4) {
         ptr = (config_t *) addr;
-        if ((ptr->magic == CONFIG_MAGIC) && (ptr->valid)) {
-            uint16_t buf = 0;
-            if (memcmp(ptr, &config, sizeof (config)) == 0) {
-                /*
-                 * Written record already matches the current config.
-                 * No need to write new record.
-                 */
-                return;
-            }
-            stm32flash_write((uint32_t) &ptr->valid, sizeof (buf), &buf, 0);
+        if ((ptr->magic == CONFIG_MAGIC) && (ptr->valid) &&
+            (memcmp(ptr, &config, sizeof (config)) == 0)) {
+            /*
+             * Written record already matches the current config.
+             * No need to write new record.
+             */
+            return;
         }
     }
 
@@ -95,8 +94,21 @@ config_write(void)
         }
     }
     printf("config write at %lx\n", addr);
-    if (stm32flash_write(addr, config.size, &config, 0) != 0) {
+    if ((stm32flash_write(addr, config.size, &config, 0) != 0) ||
+        (memcmp((void *) addr, &config, sizeof (config)) != 0)) {
         printf("Config area update failed at %lx\n", addr);
+        return;  // Keep previous records valid
+    }
+
+    /* Invalidate previous config records */
+    for (oaddr = CONFIG_AREA_BASE; oaddr < CONFIG_AREA_END; oaddr += 4) {
+        if (oaddr == addr)
+            continue;
+        ptr = (config_t *) oaddr;
+        if ((ptr->magic == CONFIG_MAGIC) && (ptr->valid)) {
+            uint16_t buf = 0;
+            stm32flash_write((uint32_t) &ptr->valid, sizeof (buf), &buf, 0);
+        }
     }
 }
 
@@ -110,8 +122,15 @@ void
 config_read(void)
 {
     uint32_t addr;
+    uint32_t found = 0;
     uint     bank;
     config_t *ptr;
+
+    /*
+     * Find the last valid record. More than one valid record exists
+     * only if power was lost while config_write() was updating the
+     * area, in which case the last one is the newest.
+     */
     for (addr = CONFIG_AREA_BASE; addr < CONFIG_AREA_END; addr += 4) {
         ptr = (config_t *) addr;
         if ((ptr->magic == CONFIG_MAGIC) && (ptr->valid)) {
@@ -121,36 +140,39 @@ config_read(void)
             if (crclen > 1024)  // sanity check
                 crclen = 1024;
             crc = crc32(0, &ptr->crc + 1, crclen);
-            if (crc == ptr->crc) {
-                printf("    Valid config at %lx", addr);
-                memcpy(&config, (void *) addr, sizeof (config));
-
-                /* Older firmware could store names without a NIL */
-                config.name[sizeof (config.name) - 1] = '\0';
-                for (bank = 0; bank < ROM_BANKS; bank++)
-                    config.bi.bi_name[bank][sizeof (config.bi.bi_name[0]) - 1] =
-                        '\0';
-
-                if (config.name[0] != '\0')
-                    printf("  (%s)", config.name);
-                printf("\n");
-                if (cold_poweron) {
-                    config.bi.bi_bank_current = config.bi.bi_bank_poweron;
-                    config.bi.bi_bank_nextreset = 0xff;
-                }
-                config.bi.bi_valid = 1;
-                if (config.led_level == 0)
-                    config.led_level = 100;  // Old board
-                if (config.board_rev == 0)
-                    config.board_rev = 7;
-                if (config.version < 2) {
-                    /* Structure expanded for this new field */
-                    memset(config.nv_mem, 0, sizeof (config.nv_mem));
-                }
-                config.version = CONFIG_VERSION;
-                return;
-            }
+            if (crc == ptr->crc)
+                found = addr;
         }
+    }
+    if (found != 0) {
+        addr = found;
+        printf("    Valid config at %lx", addr);
+        memcpy(&config, (void *) addr, sizeof (config));
+
+        /* Older firmware could store names without a NIL */
+        config.name[sizeof (config.name) - 1] = '\0';
+        for (bank = 0; bank < ROM_BANKS; bank++)
+            config.bi.bi_name[bank][sizeof (config.bi.bi_name[0]) - 1] =
+                '\0';
+
+        if (config.name[0] != '\0')
+            printf("  (%s)", config.name);
+        printf("\n");
+        if (cold_poweron) {
+            config.bi.bi_bank_current = config.bi.bi_bank_poweron;
+            config.bi.bi_bank_nextreset = 0xff;
+        }
+        config.bi.bi_valid = 1;
+        if (config.led_level == 0)
+            config.led_level = 100;  // Old board
+        if (config.board_rev == 0)
+            config.board_rev = 7;
+        if (config.version < 2) {
+            /* Structure expanded for this new field */
+            memset(config.nv_mem, 0, sizeof (config.nv_mem));
+        }
+        config.version = CONFIG_VERSION;
+        return;
     }
     printf("    New config\n");
     memset(&config, 0, sizeof (config));

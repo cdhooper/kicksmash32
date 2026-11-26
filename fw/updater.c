@@ -184,6 +184,11 @@ set_powerled(int state)
     }
 }
 
+/* Flash layout, which must match the DfuSe interface string below */
+#define FLASH_START     0x08000000
+#define FLASH_SIZE      (256 << 10)
+#define FLASH_PAGE_SIZE 2048
+
 /* Commands sent with wBlockNum == 0 as per ST implementation. */
 #define CMD_SETADDR 0x21
 #define CMD_ERASE   0x41
@@ -192,6 +197,7 @@ set_powerled(int state)
 static uint8_t usbd_control_buffer[2048];
 
 static enum dfu_state usbdfu_state = STATE_DFU_IDLE;
+static uint8_t usbdfu_status = DFU_STATUS_OK;  // Reported in dfuERROR
 
 static struct {
     uint8_t buf[sizeof (usbd_control_buffer)];
@@ -466,6 +472,8 @@ usbdfu_getstatus(uint32_t *bwPollTimeout)
                 *bwPollTimeout = 0;   // Set address: nothing to wait for
             }
             return (DFU_STATUS_OK);
+        case STATE_DFU_ERROR:
+            return (usbdfu_status);
         case STATE_DFU_MANIFEST_SYNC:
             /* Device will reset when read is complete. */
             usbdfu_state = STATE_DFU_MANIFEST;
@@ -484,12 +492,31 @@ usbdfu_getstatus_complete(usbd_device *usbd_dev, struct usb_setup_data *req)
     (void) usbd_dev;
 
     switch (usbdfu_state) {
-        case STATE_DFU_DNBUSY:
+        case STATE_DFU_DNBUSY: {
+            uint8_t status = DFU_STATUS_OK;
             flash_unlock();
+            flash_clear_status_flags();
             if (prog.blocknum == 0) {
+                /*
+                 * DfuSe commands are a command byte followed by a
+                 * 32-bit address. A command without the address
+                 * (such as mass erase) is not supported.
+                 */
+                uint32_t dat;
+                if (prog.len != 5) {
+                    status = DFU_STATUS_ERR_STALLEDPKT;
+                    goto dnbusy_done;
+                }
+                memcpy(&dat, prog.buf + 1, sizeof (dat));
                 switch (prog.buf[0]) {
                     case CMD_ERASE: {
-                        uint32_t *dat = (uint32_t *)(prog.buf + 1);
+                        uint32_t *ptr;
+                        uint32_t page = dat & ~(FLASH_PAGE_SIZE - 1);
+                        if ((dat < FLASH_START) ||
+                            (dat >= FLASH_START + FLASH_SIZE)) {
+                            status = DFU_STATUS_ERR_ADDRESS;
+                            break;
+                        }
                         set_powerled(0);
                         set_flashled(1);
                         if (lstate != 1)
@@ -497,19 +524,42 @@ usbdfu_getstatus_complete(usbd_device *usbd_dev, struct usb_setup_data *req)
                         else
                             uart_putc('.');
                         lstate = 1;
-                        flash_erase_page(*dat);
+                        flash_erase_page(dat);
                         set_flashled(0);
+                        if (flash_get_status_flags() &
+                            (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) {
+                            status = DFU_STATUS_ERR_ERASE;
+                            break;
+                        }
+                        for (ptr = (uint32_t *) page;
+                             ptr < (uint32_t *) (page + FLASH_PAGE_SIZE);
+                             ptr++) {
+                            if (*ptr != 0xffffffff) {
+                                status = DFU_STATUS_ERR_CHECK_ERASED;
+                                break;
+                            }
+                        }
                         break;
                     }
-                    case CMD_SETADDR: {
-                        uint32_t *dat = (uint32_t *)(prog.buf + 1);
-                        prog.addr = *dat;
+                    case CMD_SETADDR:
+                        prog.addr = dat;
                         break;
-                    }
+                    default:
+                        status = DFU_STATUS_ERR_STALLEDPKT;
+                        break;
                 }
+            } else if (prog.blocknum == 1) {
+                /* DfuSe data blocks start at 2 */
+                status = DFU_STATUS_ERR_STALLEDPKT;
             } else {
                 uint32_t baseaddr = prog.addr + ((prog.blocknum - 2) *
                                                 dfu_function.wTransferSize);
+                if ((baseaddr < FLASH_START) ||
+                    (baseaddr + prog.len > FLASH_START + FLASH_SIZE) ||
+                    (baseaddr + prog.len < baseaddr) || (baseaddr & 1)) {
+                    status = DFU_STATUS_ERR_ADDRESS;
+                    goto dnbusy_done;
+                }
                 set_powerled(0);
                 set_flashled(1);
                 if (lstate != 2)
@@ -518,16 +568,38 @@ usbdfu_getstatus_complete(usbd_device *usbd_dev, struct usb_setup_data *req)
                     uart_putc('.');
                 lstate = 2;
                 for (i = 0; i < prog.len; i += 2) {
-                    uint16_t *dat = (uint16_t *)(prog.buf + i);
-                    flash_program_half_word(baseaddr + i, *dat);
+                    uint16_t dat;
+                    memcpy(&dat, prog.buf + i, sizeof (dat));
+                    flash_program_half_word(baseaddr + i, dat);
+                    if (flash_get_status_flags() &
+                        (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) {
+                        status = DFU_STATUS_ERR_PROG;
+                        break;
+                    }
+                    if (*(volatile uint16_t *) (baseaddr + i) != dat) {
+                        status = DFU_STATUS_ERR_VERIFY;
+                        break;
+                    }
                 }
                 set_flashled(0);
             }
+dnbusy_done:
             flash_lock();
+
+            if (status != DFU_STATUS_OK) {
+                uart_puts("\nDFU error ");
+                uart_puthex(status);
+                uart_puts("\n");
+                usbdfu_status = status;
+                usbdfu_state = STATE_DFU_ERROR;
+                lstate = 0;
+                break;
+            }
 
             /* Jump straight to dfuDNLOAD-IDLE, skipping dfuDNLOAD-SYNC. */
             usbdfu_state = STATE_DFU_DNLOAD_IDLE;
             break;
+        }
         case STATE_DFU_MANIFEST:
             /* USB device must detach, we just reset... */
             uart_puts("\nReset\n");
@@ -578,9 +650,11 @@ usbdfu_control_request(usbd_device *usbd_dev, struct usb_setup_data *req,
             /* Clear error and return to dfuIDLE. */
             if (usbdfu_state == STATE_DFU_ERROR)
                 usbdfu_state = STATE_DFU_IDLE;
+            usbdfu_status = DFU_STATUS_OK;
             return (USBD_REQ_HANDLED);
         case DFU_ABORT:
             /* Abort returns to dfuIDLE state. */
+            usbdfu_status = DFU_STATUS_OK;
             if (usbdfu_state != STATE_DFU_IDLE) {
                 usbdfu_state = STATE_DFU_IDLE;
                 uart_puts("\nDone");
