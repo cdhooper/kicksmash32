@@ -102,9 +102,10 @@ address_input(void)
  * -------------------
  * Override the Flash A17, A18 and A19 address
  *
- * override = 0  Record new override
+ * override = 0  Record new override (if suspended, it is applied at restore)
  * override = 1  Temporarily disable override
  * override = 2  Restore previous override
+ * override = 3  Force restore previous override (rewrite pin state)
  *
  * bits
  *   0    1=Drive A17
@@ -130,6 +131,14 @@ ee_address_override(uint8_t bits, uint override)
     switch (override) {
         default:
         case 0:  // Record new override
+            if (old != 0xff) {
+                /*
+                 * Override is suspended for flash access. Don't drive
+                 * the pins now; apply the new value at restore.
+                 */
+                old = bits;
+                return;
+            }
             break;
         case 1:  // Temporarily disable override
             if (old == 0xff)
@@ -143,8 +152,17 @@ ee_address_override(uint8_t bits, uint override)
             old = 0xff;
             break;
         case 3:  // Force restore previous override
-            bits = last;
-            last = 0xff;
+            /*
+             * While suspended, last holds the suspended state (0), so
+             * the override to restore is the one saved in old.
+             */
+            if (old != 0xff) {
+                bits = old;
+                old = 0xff;
+            } else {
+                bits = last;
+            }
+            last = 0xff;  // Force pin state to be rewritten
             break;
     }
 
