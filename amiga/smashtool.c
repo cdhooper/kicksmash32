@@ -2936,8 +2936,8 @@ static void
 clock_load(uint from_host)
 {
     const char *source = from_host ? "USB host" : "KickSmash";
-    uint        sec;
-    uint        usec;
+    uint        sec  = 0;  // Always set before use; quiets -Wmaybe-uninitialized
+    uint        usec = 0;
     uint        rc;
 
     if (from_host) {

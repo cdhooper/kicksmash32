@@ -246,7 +246,15 @@ $(OPENCM3_DIR)/Makefile:
 	$(QUIET)git clone https://github.com/libopencm3/libopencm3
 	$(QUIET)(cd $(OPENCM3_DIR); git checkout 2da12dc96e0b9e42a3332348dd9b02a0a17981f8)
 
-$(OPENCM3_DIR)/include/% $(OPENCM3_DIR)/lib/usb/%.h: $(OPENCM3_DIR)/Makefile
+# Separate rules: a pattern rule with two targets is a grouped rule, so
+# make expects one run to create both, with the same stem (for example
+# include/libopencm3/stm32/rcc.h implies lib/usb/libopencm3/stm32/rcc.h.h).
+$(OPENCM3_DIR)/include/%: $(OPENCM3_DIR)/Makefile
+	@echo Building $@
+	$(QUIET)make -C $(OPENCM3_DIR)
+	$(QUIET)touch $@
+
+$(OPENCM3_DIR)/lib/usb/%.h: $(OPENCM3_DIR)/Makefile
 	@echo Building $@
 	$(QUIET)make -C $(OPENCM3_DIR)
 	$(QUIET)touch $@
