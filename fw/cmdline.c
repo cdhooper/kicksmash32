@@ -287,8 +287,9 @@ make_arglist(const char *cmd, char *argv[])
 #endif
                 args++;
                 if (args >= MAX_ARGS - 1) {
+                    /* Don't run a command with arguments missing */
                     warnx("Too many arguments");
-                    goto finish;
+                    goto discard;
                 }
 
                 cmd = ptr;
@@ -319,6 +320,7 @@ make_arglist(const char *cmd, char *argv[])
 
 too_long:
     warnx("Argument too long");
+discard:
     free_arglist(args, argv);
     args = 0;
 finish:

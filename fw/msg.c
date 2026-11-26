@@ -297,17 +297,27 @@ gpio_showbuf(uint count)
 #define SPACE_AVAIL_ATOU (sizeof (msg_atou) - 4 - SPACE_INUSE_ATOU)
 #define SPACE_AVAIL_UTOA (sizeof (msg_utoa) - 4 - SPACE_INUSE_UTOA)
 
+/*
+ * atou_add() and utoa_add() are called both from the Amiga message
+ * interrupt and from the main loop (USB messages, including KS_MSG_ALTBUF
+ * sends). Interrupts are masked so that an Amiga message can't be added
+ * to the same buffer while a USB message is partly added.
+ */
 static uint
 atou_add(uint len, void *ptr)
 {
     uint xlen;
     uint8_t *sptr = ptr;
+    uint32_t irq_mask;
+
     len = (len + 1) & ~1;  // Round up to 16-bit alignment
+    irq_mask = cm_mask_interrupts(1);
     if (len > SPACE_AVAIL_ATOU) {
         /*
          * Should never get this failure on Amiga message side, as the
          * caller first checks for sufficient space.
          */
+        cm_mask_interrupts(irq_mask);
         return (1);
     }
     xlen = sizeof (msg_atou) - prod_atou;
@@ -319,6 +329,7 @@ atou_add(uint len, void *ptr)
     }
     prod_atou = (prod_atou + len) & (sizeof (msg_atou) - 1);
     messages_atou++;
+    cm_mask_interrupts(irq_mask);
     return (0);
 }
 
@@ -327,9 +338,14 @@ utoa_add(uint len, void *ptr)
 {
     uint xlen;
     uint8_t *sptr = ptr;
+    uint32_t irq_mask;
+
     len = (len + 1) & ~1;  // Round up to 16-bit alignment
-    if (len > SPACE_AVAIL_UTOA)
+    irq_mask = cm_mask_interrupts(1);
+    if (len > SPACE_AVAIL_UTOA) {
+        cm_mask_interrupts(irq_mask);
         return (1);
+    }
     xlen = sizeof (msg_utoa) - prod_utoa;
     if (len <= xlen) {
         memcpy(msg_utoa + prod_utoa, sptr, len);
@@ -340,6 +356,7 @@ utoa_add(uint len, void *ptr)
     __asm__ volatile("dmb");
     prod_utoa = (prod_utoa + len) & (sizeof (msg_utoa) - 1);
     messages_utoa++;
+    cm_mask_interrupts(irq_mask);
     return (0);
 }
 
@@ -1386,6 +1403,10 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
                 uint8_t  count;
                 uint32_t nvbuf[sizeof (config.nv_mem) / 4];
 
+                if (cmd_len < 2) {
+                    ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                    break;
+                }
                 /* Compute start of message payload */
                 cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
                 if ((int) cons_s < 0)
@@ -1418,6 +1439,10 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
             uint16_t len;
             uint     maxlen;
 
+            if (cmd_len < 2) {
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                break;
+            }
             cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
             if ((int) cons_s < 0)
                 cons_s += ARRAY_SIZE(buffer_rxa_lo);
@@ -1911,6 +1936,10 @@ execute_cmd(uint16_t cmd, uint16_t cmd_len)
         case KS_CMD_MSG_LOCK: {
             uint lockbits;
 
+            if (cmd_len < 2) {
+                ks_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                break;
+            }
             /* Compute start of message payload */
             cons_s = rx_consumer - (cmd_len + 3) / 4 * 2 - 1;
             if ((int) cons_s < 0)
@@ -2855,8 +2884,13 @@ execute_usb_cmd(uint16_t cmd, uint16_t cmd_len, uint8_t *rawbuf)
             break;
         }
         case KS_CMD_MSG_LOCK: {
-            uint lockbits = (buf[0] << 8) | buf[1];
+            uint lockbits;
 
+            if (cmd_len < 2) {
+                usb_msg_reply(0, KS_STATUS_BADLEN, 0, NULL, 0, NULL);
+                break;
+            }
+            lockbits = (buf[0] << 8) | buf[1];
             if (cmd & KS_MSG_UNLOCK) {
                 msg_lock &= ~lockbits;
             } else {
