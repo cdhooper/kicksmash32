@@ -1066,6 +1066,25 @@ config_dev(void)
         system_error("getting comm state");
     if (BuildCommDCB("baud=115200 parity=n data=8 stop=1", &port) == 0)
         system_error("building comm DCB");
+
+    /*
+     * The link carries binary data, so turn off all flow control and
+     * character processing. BuildCommDCB() leaves XON/XOFF as it was, and
+     * with it enabled, Windows silently drops every 0x11 and 0x13 byte
+     * received (which broke EEPROM verify of most ROM images).
+     */
+    port.fBinary         = TRUE;
+    port.fParity         = FALSE;
+    port.fOutxCtsFlow    = FALSE;
+    port.fOutxDsrFlow    = FALSE;
+    port.fDtrControl     = DTR_CONTROL_ENABLE;
+    port.fDsrSensitivity = FALSE;
+    port.fOutX           = FALSE;
+    port.fInX            = FALSE;
+    port.fErrorChar      = FALSE;
+    port.fNull           = FALSE;
+    port.fRtsControl     = RTS_CONTROL_ENABLE;
+    port.fAbortOnError   = FALSE;
     if (!SetCommState(dev_handle, &port))
         system_error("adjusting port settings");
 
