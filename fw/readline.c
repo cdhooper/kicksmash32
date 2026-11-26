@@ -472,7 +472,7 @@ redraw_prompt:
             if (input_buf[input_pos] == '\0')
                 break;  /* Nothing more to delete at end of line */
             memmove(input_buf + input_pos, input_buf + input_pos + 1,
-                    sizeof (input_buf) - input_pos);
+                    sizeof (input_buf) - input_pos - 1);
             putstr(input_buf + input_pos);
             putchar(KEY_SPACE);
             putchars(KEY_BACKSPACE, strlen(input_buf + input_pos) + 1);

@@ -94,9 +94,7 @@ amiga_is_powered_on(void)
             saw_0++;
         if (saw_0 && saw_1) {
             printf("Unexpected: D31 is changing state\n");
-            return (1);  // Amiga is running (not expected)
-            saw_1 = 1;
-            break;
+            break;  // Amiga is running (not expected); saw_1 reports on
         }
     }
     gpio_setmode(SOCKET_D31_PORT, SOCKET_D31_PIN, GPIO_SETMODE_INPUT);

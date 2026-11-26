@@ -458,8 +458,17 @@ cmd_prom_bank(int argc, char * const *argv)
                    "(range)\n", argv[1]);
             return (1);
         }
-        bank_start = atoi(argv[2]);
-        bank_end   = atoi(argv[3]);
+        int start = atoi(argv[2]);
+        int end   = atoi(argv[3]);
+        if ((start < 0) || (start >= ROM_BANKS) ||
+            (end < 0) || (end >= ROM_BANKS)) {
+            /* Check before storing in uint8_t, which would truncate */
+            printf("Bank range %d-%d is invalid (maximum bank is %u)\n",
+                   start, end, ROM_BANKS - 1);
+            return (1);
+        }
+        bank_start = start;
+        bank_end   = end;
         count = bank_end - bank_start + 1;
         if (bank_start > bank_end) {
             printf("bank %u is not less than end %u\n", bank_start, bank_end);

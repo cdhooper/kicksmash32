@@ -782,8 +782,7 @@ parse_width(const char *arg, uint *width, char *other, size_t other_size)
                         *width += *ptr - '0';
                         ptr++;
                     }
-                    if (*ptr == '\0')
-                        ptr--;
+                    ptr--;  // Let the for loop advance to the next char
                 } else {
                     other[other_count++] = *ptr;
                     if (other_count >= other_size) {

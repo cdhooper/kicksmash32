@@ -188,15 +188,24 @@ kprintn(buf_t *desc, UINTMAX_T value, uint base, int flags, int width, int dot)
         lpad = ' ';
     width -= p - buf;
     if ((flags & FMT_LJUST) == 0) {
-        while (width-- > 0) {
-            put(lpad, desc);
-            ret++;
+        /* Space padding goes before the sign or prefix */
+        if (lpad == ' ') {
+            while (width-- > 0) {
+                put(lpad, desc);
+                ret++;
+            }
         }
-    }
-    if ((flags & FMT_LJUST) == 0) {
+        /* Sign and "0x" / "0" prefix */
         while (p > q) {
             put(*--p, desc);
             ret++;
+        }
+        /* Zero padding goes between the sign or prefix and the digits */
+        if (lpad == '0') {
+            while (width-- > 0) {
+                put(lpad, desc);
+                ret++;
+            }
         }
     }
     do {
@@ -352,7 +361,10 @@ reswitch:
                     p = (char *)"(null)";
                 for (q = p; *q != '\0'; ++q)
                     continue;
-                width -= q - p;
+                if ((mwidth >= 0) && (q - p > mwidth))
+                    width -= mwidth;  // Precision limits the output length
+                else
+                    width -= q - p;
                 if ((flags & FMT_LJUST) == 0)
                     while (width-- > 0) {
                         put(' ', desc);
@@ -439,10 +451,10 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
     int ret;
     buf_t desc;
     desc.buf_cur = buf;
-    desc.buf_end = (buf != NULL) ? buf + size - 1 : buf;
+    desc.buf_end = ((buf != NULL) && (size != 0)) ? buf + size - 1 : buf;
 
     ret = kdoprnt(&desc, fmt, ap);
-    if (buf != NULL)
+    if ((buf != NULL) && (size != 0))
         *desc.buf_cur = '\0';   // terminate the string
     return (ret);
 }

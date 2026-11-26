@@ -858,7 +858,7 @@ invalid_arg1:
                 }
             }
         }
-        while (op_base < ARRAY_SIZE(math_ops)) {
+        while (op_base + 1 < (int) ARRAY_SIZE(math_ops)) {
             if (math_ops[op_base].op_level == math_ops[op_base + 1].op_level) {
                 op_base++;
             } else
@@ -945,8 +945,12 @@ no_whitespace(char *line)
     while (isspace((uint8_t)*line))
         line++;
 
-    /* Remove trailing whitespace */
-    for (ptr = line + strlen(line) - 1; ptr > line; ptr--)
+    /*
+     * Remove trailing whitespace. After the leading whitespace is
+     * removed, line[0] is either non-space or the end of the string,
+     * so the loop always stops by line[0].
+     */
+    for (ptr = line + strlen(line) - 1; ptr >= line; ptr--)
         if (!isspace((uint8_t)*ptr)) {
             *(++ptr) = '\0';
             break;

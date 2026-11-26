@@ -301,7 +301,8 @@ timer_usec_to_tick(uint usec)
 uint32_t
 timer_nsec_to_tick(uint nsec)
 {
-    return (rcc_pclk2_frequency / 1000000 * nsec / 1000);
+    /* Round up so that a delay is never shorter than requested */
+    return ((rcc_pclk2_frequency / 1000000 * nsec + 999) / 1000);
 }
 
 /**
