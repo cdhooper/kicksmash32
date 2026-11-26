@@ -761,11 +761,8 @@ host_msg_exit(void)
  *                 starts.
  */
 static void
-host_msg_init(void)
+msg_sem_attach(void)
 {
-    if (msg_sem != NULL)
-        return;
-
 #ifndef ROMFS
     /* ROMFS calls host_msg_exit() itself */
     static uint8_t atexit_registered = 0;
@@ -775,6 +772,15 @@ host_msg_init(void)
     }
 #endif
     get_msg_semaphore();
+}
+
+static void
+host_msg_init(void)
+{
+    if (msg_sem != NULL)
+        return;
+
+    msg_sem_attach();
 
     if (msg_sem != NULL) {
         hm_version_t msg;
@@ -794,6 +800,96 @@ host_msg_init(void)
         }
     }
 }
+
+#ifndef ROMFS
+/*
+ * host_msg_exclusive_enter
+ * ------------------------
+ * Takes exclusive use of the Kicksmash message buffers, such as for an
+ * interface test which must not be disturbed by other programs (smashfs).
+ * Holding the smashmsg semaphore keeps other tasks from sending or
+ * receiving messages. Messages already in flight are received and queued
+ * for their owners.
+ *
+ * Call host_msg_exclusive_exit() when finished. Returns 0 on success.
+ */
+uint
+host_msg_exclusive_enter(void)
+{
+    smash_msg_info_t mi;
+    msg_buf_t       *mb;
+    km_msg_hdr_t    *msg;
+    uint             quiet = 0;
+    uint             count;
+    uint             rxlen;
+
+    if (msg_sem == NULL)
+        msg_sem_attach();  // No host version query: the host may be down
+    if (msg_sem == NULL)
+        return (MSG_STATUS_NO_MEM);
+
+    MSG_SEM_OBTAIN();
+
+    /*
+     * Wait for requests already sent to the host to be answered. Replies
+     * are queued for their owners, which will get them after exit.
+     * Both buffers must be empty for 100 ms, or give up after ~2 seconds.
+     */
+    for (count = 0; (count < 2000) && (quiet < 100); count++) {
+        if (send_cmd(KS_CMD_MSG_INFO, NULL, 0, &mi, sizeof (mi), NULL) != 0)
+            break;
+        if (mi.smi_utoa_inuse != 0) {
+            quiet = 0;
+            mb = msgbuf_get();
+            if (mb == NULL)
+                break;
+            msg = (km_msg_hdr_t *) mb->mb_data;
+            if (recv_msg(msg, MSG_BUF_SIZE, &rxlen, 0) == KM_STATUS_OK)
+                tag_queue_add(mb, msg->km_tag, rxlen);
+            else
+                msgbuf_put(mb);
+            continue;
+        }
+        if (mi.smi_atou_inuse != 0)
+            quiet = 0;  // Host has not yet taken a request
+        else
+            quiet++;
+        cia_spin(CIA_USEC(1000));
+    }
+    return (0);
+}
+
+/*
+ * host_msg_exclusive_exit
+ * -----------------------
+ * Ends exclusive use of the message buffers (see host_msg_exclusive_enter).
+ */
+void
+host_msg_exclusive_exit(void)
+{
+    MSG_SEM_RELEASE();
+}
+
+/*
+ * host_msg_handoff
+ * ----------------
+ * Queues a message which was received by a caller that does not own it
+ * (such as an interface test), so that its owner will receive it.
+ */
+void
+host_msg_handoff(void *rmsg, uint len)
+{
+    msg_buf_t *mb;
+
+    if ((msg_sem == NULL) || (len > MSG_BUF_SIZE))
+        return;
+    mb = msgbuf_get();
+    if (mb == NULL)
+        return;
+    memcpy(mb->mb_data, rmsg, len);
+    tag_queue_add(mb, ((km_msg_hdr_t *) rmsg)->km_tag, len);
+}
+#endif /* !ROMFS */
 
 #endif /* !STANDALONE */
 
@@ -870,6 +966,13 @@ host_send_msg(void *smsg, uint len)
     if (sendlen > SEND_MSG_MAX)
         sendlen = SEND_MSG_MAX;
 
+    /*
+     * Senders hold the semaphore, as do receivers. This keeps all parts of
+     * a multi-part message together, and lets a program take exclusive use
+     * of the message buffers (see host_msg_exclusive_enter()).
+     */
+    MSG_SEM_OBTAIN();
+
 try_send_again:
     rc = send_cmd_retry(KS_CMD_MSG_SEND, smsg, sendlen, rbuf, sizeof (rbuf),
                         NULL);
@@ -929,6 +1032,7 @@ try_send_again:
             dump_memory(rbuf, sizeof (rbuf), DUMP_VALUE_UNASSIGNED);
 #endif
     }
+    MSG_SEM_RELEASE();
     return (rc);
 }
 

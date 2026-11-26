@@ -332,7 +332,7 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
          word++) {
         if ((word >= WAIT_FOR_MAGIC_LOOPS) && (extra_wait != 0))
             extra_wait--;  // Bound the extended wait in all cases
-        // XXX: This code might need to change for 16-bit Amigas
+        // A 16-bit Amiga reply may begin in the low 16 bits (Example 2)
         if (word & 1) {
             val = (uint16_t) val32;
         } else {
@@ -411,12 +411,16 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
         goto scc_cleanup;
     }
 
-    /* Response is valid so far; read data */
-    if (replybuf == NULL) {
-        pos = 0;
-    } else {
-        uint replymin = (replymax < replylen) ? replymax : replylen;
-        for (pos = 0; pos < replymin; pos += 2, word++) {
+    /*
+     * Response is valid so far; read data, which is padded to a 32-bit
+     * boundary, then the 32-bit CRC. A reply which began in the low 16 bits
+     * of a read (16-bit Amiga) stays that way, so take every value 16 bits
+     * at a time.
+     */
+    {
+        uint replymin = (replybuf == NULL) ? 0 :
+                        (replymax < replylen) ? replymax : replylen;
+        for (pos = 0; pos < replyround + 4; pos += 2, word++) {
             if (word & 1) {
                 val = (uint16_t) val32;
             } else {
@@ -426,22 +430,12 @@ send_cmd_core(uint16_t cmd, void *arg, uint16_t arglen,
 #ifdef SM_MSG_DEBUG
             *(dptr++) = val;
 #endif
-            *(replybuf++) = val;
+            if (pos < replymin)
+                *(replybuf++) = val;
+            else if (pos >= replyround)
+                replycrc = (replycrc << 16) | val;  // CRC
         }
     }
-    if (pos < replylen) {
-        /* Discard data that doesn't fit */
-        for (; pos < replylen; pos += 4)
-            val32 = *VADDR32(rom_base);
-    }
-
-    /* Read CRC */
-    replycrc = *VADDR32(rom_base);
-
-#ifdef SM_MSG_DEBUG
-    *(dptr++) = replycrc >> 16;
-    *(dptr++) = replycrc;
-#endif
 
 scc_cleanup:
     if ((replystatus & 0xffffff00) != 0) {

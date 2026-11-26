@@ -897,6 +897,14 @@ smash_test_msg_loopback(void)
         return (1);
     }
 
+    /* Keep other programs (such as smashfs) away from the message buffers */
+    rc = host_msg_exclusive_enter();
+    if (rc != 0) {
+        printf("Message exclusive access failed: (%s)\n", smash_err(rc));
+        FreeMem(buf, MAX_CHUNK);
+        return (rc);
+    }
+
     /* Lock message buffers */
     lockbits = BIT(0) | BIT(1);
     rc = send_cmd(KS_CMD_MSG_LOCK, &lockbits, sizeof (lockbits), NULL, 0, NULL);
@@ -1097,6 +1105,16 @@ smash_test_msg_loopback(void)
     }
 
 fail:
+    if ((rc != 0) && locked) {
+        /*
+         * Don't leave test messages behind for other programs. With
+         * exclusive use, the buffers hold only this test's messages.
+         */
+        (void) send_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, NULL);
+        (void) send_cmd(KS_CMD_MSG_FLUSH | KS_MSG_ALTBUF, NULL, 0, NULL, 0,
+                        NULL);
+    }
+
     /* Unlock message buffers (only if this test locked them) */
     if (locked) {
         rc2 = send_cmd(KS_CMD_MSG_LOCK | KS_MSG_UNLOCK, &lockbits,
@@ -1107,6 +1125,7 @@ fail:
                 rc = rc2;
         }
     }
+    host_msg_exclusive_exit();
 
     FreeMem(buf, MAX_CHUNK);
 
@@ -1123,6 +1142,29 @@ fail:
         show_test_state("Message buffer", rc);
     }
     return (rc);
+}
+
+/*
+ * recv_loopback_reply
+ * -------------------
+ * Receives the next loopback reply from the USB host. Replies to other
+ * programs (requests sent before the test took exclusive use of the
+ * message buffers) are queued for their owners.
+ */
+static uint
+recv_loopback_reply(void *buf, uint *rlen)
+{
+    km_msg_hdr_t *rkm = (km_msg_hdr_t *) buf;
+    uint count;
+    uint rc;
+
+    for (count = 0; count < 20; count++) {
+        rc = recv_msg(buf, MAX_CHUNK, rlen, 1000);
+        if ((rc != 0) || (rkm->km_op == (KM_OP_LOOPBACK | KM_OP_REPLY)))
+            return (rc);
+        host_msg_handoff(buf, *rlen);  // Not ours
+    }
+    return (MSG_STATUS_BAD_DATA);
 }
 
 static int
@@ -1145,6 +1187,7 @@ smash_test_usb_msg_loopback(void)
     uint      errs = 0;
     uint64_t  time_start;
     uint64_t  time_end;
+    uint      exclusive = 0;
     static uint8_t worked_before = 0;
 
     show_test_state("Remote message", -1);
@@ -1187,18 +1230,23 @@ smash_test_usb_msg_loopback(void)
     skm->km_status = 0xff;
     skm->km_tag = 0;
 
-    /* Discard old messages */
-    if ((rc = send_cmd(KS_CMD_MSG_FLUSH, NULL, 0, NULL, 0, NULL)) != 0) {
-        printf("Msg flush failed: (%s)\n", smash_err(rc));
+    /*
+     * Keep other programs (such as smashfs) away from the message buffers.
+     * Their messages already in flight are queued for them, not discarded.
+     */
+    rc = host_msg_exclusive_enter();
+    if (rc != 0) {
+        printf("Message exclusive access failed: (%s)\n", smash_err(rc));
         goto fail;
     }
+    exclusive = 1;
 
     for (count = 0; count < 10; count++) {
         len = (rand32() % (maxlen / 2)) + sizeof (*skm);
         skm->km_tag = count;
         if ((rc = send_msg_loopback(buf[0], len, 0)) != 0)
             goto fail;
-        if ((rc = recv_msg(buf[1], MAX_CHUNK, &rlen, 1000)) != 0) {
+        if ((rc = recv_loopback_reply(buf[1], &rlen)) != 0) {
             printf("  Expected message len=%u\n", len);
             if (flag_debug) {
                 for (pos = 0; pos < len; pos++)
@@ -1255,7 +1303,7 @@ smash_test_usb_msg_loopback(void)
                 goto fail;
         }
         for (icount = 0; icount < 1; icount++) {
-            if ((rc = recv_msg(buf[1], MAX_CHUNK, &rlen, 1000)) != 0) {
+            if ((rc = recv_loopback_reply(buf[1], &rlen)) != 0) {
                 printf("Expected message len=%u\n", len);
                 if (flag_debug) {
                     for (pos = 0; pos < len; pos++)
@@ -1295,6 +1343,8 @@ smash_test_usb_msg_loopback(void)
     }
 
 fail:
+    if (exclusive)
+        host_msg_exclusive_exit();
     for (pos = 0; pos < ARRAY_SIZE(buf); pos++) {
         if (buf[pos] != NULL)
             FreeMem(buf[pos], MAX_CHUNK);

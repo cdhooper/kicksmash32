@@ -68,6 +68,9 @@ uint host_recv_msg_cont(uint tag, void *buf, uint buf_len);
 uint host_tag_alloc(void);
 void host_tag_free(uint tag);
 void host_msg_exit(void);
+uint host_msg_exclusive_enter(void);
+void host_msg_exclusive_exit(void);
+void host_msg_handoff(void *rmsg, uint len);
 uint host_msg_tag_queued(uint tag);
 void host_msg_set_nread_tags(uint cur, uint cur_valid,
                              uint prev, uint prev_valid);

@@ -797,6 +797,30 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             crc = crc32r(crc, &status, 2);
             crc = crc32(crc, rbuf1, rlen1);
 
+            if ((rlen2 != 0) && (rlen1 & 1)) {
+                /*
+                 * The first chunk ends in the middle of a 16-bit word,
+                 * so the second chunk is not aligned. Copy one byte at
+                 * a time (this is rare: wrapped console output).
+                 */
+                const uint8_t *src1 = rbuf1;
+                const uint8_t *src2 = rbuf2;
+                uint8_t        b[4];
+                uint           bpos;
+
+                crc = crc32(crc, rbuf2, rlen2);
+                for (count = 0; count < rlen; count += 4) {
+                    for (bpos = 0; bpos < 4; bpos++) {
+                        uint i = count + bpos;
+                        b[bpos] = (i < rlen1) ? src1[i] :
+                                  (i < rlen)  ? src2[i - rlen1] : 0;
+                    }
+                    *(txh++) = (b[0] << 8) | b[1];
+                    *(txl++) = (b[2] << 8) | b[3];
+                }
+                goto encap_add_crc;
+            }
+
             for (count = (rlen1 + 3) / 4; count > 0; count--) {
                 val = *(rbp++);
                 *(txh++) = (val << 8)  | ((val >> 8) & 0x00ff);
@@ -832,6 +856,7 @@ ks_reply(uint flags, uint status, uint rlen1, const void *rbuf1,
             } else if (rlen1_odd) {
                 txl[-1] = 0xbbbb;  // Alignment data (DEBUG)
             }
+encap_add_crc:
             *(txh++) = crc >> 16;
             *(txl++) = (uint16_t) crc;
             pos = (rlen + 3 + KS_HDR_AND_CRC_LEN) / 4;

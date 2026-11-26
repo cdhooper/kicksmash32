@@ -5104,7 +5104,18 @@ uint
 send_msg_wait(void *buf, uint len, uint *status, uint pos)
 {
     uint rc;
+    uint timeout;
     rc = send_ks_cmd(KS_CMD_MSG_SEND, buf, len, NULL, 0, status, NULL, 0);
+    for (timeout = 5000; (rc == 0) && (*status == KS_STATUS_LOCKED) &&
+                         (timeout > 0); timeout--) {
+        /*
+         * An Amiga program (such as smash test) has locked the message
+         * buffer for its exclusive use. Wait for it to finish, rather
+         * than dropping this message.
+         */
+        time_delay_msec(1);
+        rc = send_ks_cmd(KS_CMD_MSG_SEND, buf, len, NULL, 0, status, NULL, 0);
+    }
     if (*status == KS_STATUS_BADLEN) {
         /*
          * The check for space significantly impacts file send time,
