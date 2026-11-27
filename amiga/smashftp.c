@@ -77,6 +77,9 @@ static const char cmd_get_help[] =
 "    get <name1> <name2> <name3...>  - get multiple files from remote\n"
 "    get [path/]<pat*>               - get remote files matching wildcard\n"
 "    get <pat*> <localdir>           - get matching files to local dir\n"
+"    get -c <name...>                - continue (resume) a partial get\n"
+"Options:\n"
+"    -c, --continue  resume getting a partial local file (append to it)\n"
 "Wildcards '*' (any) and '?' (any one character) may be used in the filename\n"
 ;
 
@@ -88,6 +91,9 @@ static const char cmd_put_help[] =
 "    put <name1> <name2> <name3...>  - send multiple files to remote dir\n"
 "    put [path/]<pat*>               - send local files matching wildcard\n"
 "    put <pat*> <remotedir>          - send matching files to remote dir\n"
+"    put -c <name...>                - continue (resume) a partial put\n"
+"Options:\n"
+"    -c, --continue  resume sending a partial remote file (append to it)\n"
 "Wildcards '*' (any) and '?' (any one character) may be used in the filename\n"
 ;
 
@@ -1677,8 +1683,173 @@ progress_update(progress_t *prog, uint64_t pos)
     fflush(stdout);
 }
 
+/*
+ * local_file_size
+ * ---------------
+ * Gets the size of a local file. Returns 0 on success, or 1 if the
+ * file does not exist or can not be examined.
+ */
+static uint
+local_file_size(const char *filename, uint64_t *size)
+{
+    BPTR                 lock;
+    struct FileInfoBlock fib;
+
+    lock = Lock(filename, ACCESS_READ);
+    if (lock == 0L)
+        return (1);
+    if (Examine(lock, &fib) == 0) {
+        UnLock(lock);
+        return (1);
+    }
+    UnLock(lock);
+    *size = (uint) fib.fib_Size;
+    return (0);
+}
+
+/*
+ * remote_file_stat
+ * ----------------
+ * Gets the size, Amiga protection bits, and modification time of a
+ * remote file. Returns KM_STATUS_OK on success, or the failure status.
+ * Any of size, perms, or mtime may be NULL if not wanted.
+ */
+static uint
+remote_file_stat(const char *name, uint64_t *size, uint *perms, uint *mtime)
+{
+    uint          rc;
+    uint          type;
+    uint          rlen;
+    handle_t      handle;
+    hm_fdirent_t *dent;
+
+    rc = sm_fopen(cwd_handle, name, HM_MODE_READDIR, &type, 0, &handle);
+    if (rc != KM_STATUS_OK)
+        return (rc);
+
+    rc = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen, 0);
+    if (rlen == 0) {
+        sm_fclose(handle);
+        return ((rc == KM_STATUS_OK) ? KM_STATUS_FAIL : rc);
+    }
+    if (size != NULL)
+        *size = ((uint64_t) dent->hmd_size_hi << 32) | dent->hmd_size_lo;
+    if (perms != NULL)
+        *perms = dent->hmd_aperms;
+    if (mtime != NULL)
+        *mtime = dent->hmd_mtime;
+    sm_fclose(handle);
+    return (KM_STATUS_OK);
+}
+
+/*
+ * print_size
+ * ----------
+ * Displays a transfer size in bytes or KB.
+ */
+static void
+print_size(uint64_t size)
+{
+    if (size < 1000000)
+        printf("(%u bytes) ", (uint) size);
+    else
+        printf("(%u KB) ", (uint) ((size + 512) >> 10));
+}
+
+#define RESUME_CHECK_LEN 1024  // Bytes compared at each end before resume
+
+/*
+ * resume_compare_range
+ * --------------------
+ * Compares len bytes at offset pos of the open remote and local files.
+ * Returns 0 if they match, 1 if they differ, or 2 on a read failure.
+ */
+static uint
+resume_compare_range(handle_t handle, FILE *fp, uint64_t pos, uint len)
+{
+    uint     rc;
+    uint     rlen;
+    uint     got;
+    uint8_t *data;
+    static uint8_t lbuf[RESUME_CHECK_LEN];  // Static: keep off small stack
+
+    if ((fseek(fp, (long) pos, SEEK_SET) != 0) ||
+        (fread(lbuf, 1, len, fp) != len)) {
+        printf("Failed to read local file at pos %x\n", (uint) pos);
+        return (2);
+    }
+    rc = sm_fseek(handle, SEEK_OFFSET_BEGINNING, pos, NULL, NULL,
+                  HM_SEEK_FLAG_NOEXTEND);
+    if (rc != KM_STATUS_OK)
+        return (2);
+    for (got = 0; got < len; got += rlen) {
+        rc = sm_fread(handle, len - got, (void **) &data, &rlen, 0);
+        if (rlen == 0) {
+            printf("Failed to read remote file at pos %x: %s\n",
+                   (uint) (pos + got), smash_err(rc));
+            return (2);
+        }
+        if (rlen > len - got)
+            rlen = len - got;
+        if (memcmp(data, lbuf + got, rlen) != 0)
+            return (1);
+    }
+    return (0);
+}
+
+/*
+ * resume_check
+ * ------------
+ * Before resuming a transfer, verifies that the first and last
+ * RESUME_CHECK_LEN bytes of the len bytes already transferred are the
+ * same in the remote and local files. Returns RC_SUCCESS if they match.
+ */
 static rc_t
-get_file(const char *src, const char *dst)
+resume_check(const char *remote, const char *local, uint64_t len)
+{
+    uint     rc;
+    uint     type;
+    uint     clen = RESUME_CHECK_LEN;
+    handle_t handle;
+    FILE    *fp;
+
+    if (len == 0)
+        return (RC_SUCCESS);
+    if (clen > len)
+        clen = len;
+
+    rc = sm_fopen(cwd_handle, remote, HM_MODE_READ, &type, 0, &handle);
+    if (rc != KM_STATUS_OK) {
+        printf("\nFailed to open %s for read: %s\n", remote, smash_err(rc));
+        return (RC_FAILURE);
+    }
+    fp = fopen(local, "r");
+    if (fp == NULL) {
+        printf("\nFailed to open %s for read\n", local);
+        sm_fclose(handle);
+        return (RC_FAILURE);
+    }
+    rc = resume_compare_range(handle, fp, 0, clen);
+    if ((rc == 0) && (len > clen))
+        rc = resume_compare_range(handle, fp, len - clen, clen);
+    fclose(fp);
+    sm_fclose(handle);
+
+    if (rc == 1) {
+        printf("\nContents of %s and %s differ; can not continue\n",
+               remote, local);
+    }
+    return ((rc == 0) ? RC_SUCCESS : RC_FAILURE);
+}
+
+/*
+ * get_file
+ * --------
+ * Gets a single remote file. If resume is set and the local file exists,
+ * the transfer continues from the end of the local file.
+ */
+static rc_t
+get_file(const char *src, const char *dst, uint resume)
 {
     int      bytes;
     uint     diff;
@@ -1691,40 +1862,43 @@ get_file(const char *src, const char *dst)
     handle_t handle;
     uint8_t *data;
     uint64_t pos = 0;
+    uint64_t start_pos = 0;
     uint64_t filesize = 0;
     uint64_t time_start;
     uint64_t time_end;
     FILE    *fp;
-    hm_fdirent_t *dent;
     progress_t prog;
     struct DateStamp datestamp;
 
-    rc = sm_fopen(cwd_handle, src, HM_MODE_READDIR, &type, 0, &handle);
+    rc = remote_file_stat(src, &filesize, &fileperms, &filemtime);
     if (rc != KM_STATUS_OK) {
-        printf("Failed to open %s for stat: %s\n", src, smash_err(rc));
-        return (RC_FAILURE);
-    }
-
-    rc = sm_fread(handle, DIRBUF_SIZE, (void **) &dent, &rlen, 0);
-    if (rlen == 0) {
         printf("Failed to stat remote file %s: %s\n", src, smash_err(rc));
         return (RC_FAILURE);
     }
-
-    filesize = ((uint64_t) dent->hmd_size_hi << 32) | dent->hmd_size_lo;
-    fileperms = dent->hmd_aperms;
-    filemtime = dent->hmd_mtime;
-    sm_fclose(handle);
 
     if (is_user_abort()) {
         printf("^C\n");
         return (RC_USR_ABORT);
     }
+    if (resume && (local_file_size(dst, &start_pos) != 0))
+        start_pos = 0;  // Local file does not exist: get the whole file
+
     printf("Get %s as %s ", src, dst);
-    if (filesize < 1000000)
-        printf("(%u bytes) ", (uint) filesize);
-    else
-        printf("(%u KB) ", (uint) ((filesize + 512) >> 10));
+    print_size(filesize);
+    if (resume && (start_pos != 0)) {
+        if (start_pos > filesize) {
+            printf("\nLocal file %s is larger than remote; can not "
+                   "continue\n", dst);
+            return (RC_FAILURE);
+        }
+        if (resume_check(src, dst, start_pos) != RC_SUCCESS)
+            return (RC_FAILURE);
+        if (start_pos == filesize) {
+            printf("already complete\n");
+            return (RC_SUCCESS);
+        }
+        printf("continue at %u KB ", (uint) ((start_pos + 512) >> 10));
+    }
     fflush(stdout);
 
     rc = sm_fopen(cwd_handle, src, HM_MODE_READ, &type, 0, &handle);
@@ -1732,12 +1906,25 @@ get_file(const char *src, const char *dst)
         printf("Failed to open %s for read: %s\n", src, smash_err(rc));
         return (RC_FAILURE);
     }
-    fp = fopen(dst, "w");
+    if (start_pos != 0) {
+        uint64_t new_pos;
+        rc = sm_fseek(handle, SEEK_OFFSET_BEGINNING, start_pos, &new_pos,
+                      NULL, HM_SEEK_FLAG_NOEXTEND);
+        if ((rc != KM_STATUS_OK) || (new_pos != start_pos)) {
+            printf("Failed to seek %s to %u\n", src, (uint) start_pos);
+            sm_fclose(handle);
+            return (RC_FAILURE);
+        }
+        fp = fopen(dst, "a");
+    } else {
+        fp = fopen(dst, "w");
+    }
     if (fp == NULL) {
         printf("Failed to open %s for write\n", dst);
         sm_fclose(handle);
         return (RC_FAILURE);
     }
+    pos = start_pos;
 
     rc = RC_SUCCESS;
     progress_start(&prog, filesize);
@@ -1779,7 +1966,7 @@ failed_to_read:
     diff = (uint) (time_end - time_start);
     if (flag_debug)
         printf("%u usec  ", diff);
-    printf(" %u KB/sec\n", calc_kb_sec(diff, filesize));
+    printf(" %u KB/sec\n", calc_kb_sec(diff, pos - start_pos));
     fclose(fp);
     sm_fclose(handle);
 
@@ -1795,7 +1982,7 @@ failed_to_read:
 }
 
 static rc_t
-get_files(const char *src, const char *dst)
+get_files(const char *src, const char *dst, uint resume)
 {
     rc_t     rc;
     handle_t handle;
@@ -1879,7 +2066,7 @@ get_files(const char *src, const char *dst)
         }
         strcpy(dstpath + dstlen, srcname);
 
-        rc = get_file(srcpath, dstpath);
+        rc = get_file(srcpath, dstpath, resume);
         free(dstpath);
         free(srcpath);
         sm_fclose(handle);
@@ -1891,7 +2078,7 @@ get_files(const char *src, const char *dst)
                    "does not exist\n", src, dst);
             return (RC_FAILURE);
         }
-        rc = get_file(src, dst);
+        rc = get_file(src, dst, resume);
     }
     return (rc);
 }
@@ -1906,12 +2093,23 @@ cmd_get(int argc, char * const *argv)
     rc_t        rc2;
     const char *dst = NULL;
     const char *names[MAX_ARGS];
+    uint        resume = 0;
+
+    /* "reget" is an alias for "get -c" */
+    if (strncmp(argv[0], "re", 2) == 0)
+        resume = 1;
 
     for (arg = 1; arg < argc; arg++) {
         const char *ptr = argv[arg];
-        if (*ptr == '-') {
+        if (strcmp(ptr, "--continue") == 0) {
+            resume = 1;
+        } else if (*ptr == '-') {
             while (*(++ptr) != '\0') {
                 switch (*ptr) {
+                    case 'c':  // Continue (resume) a partial transfer
+                    case 'z':  // Hidden alias for -c
+                        resume = 1;
+                        break;
                     default:
                         printf("Unknown argument -%s\n", ptr);
                         printf(cmd_get_help);
@@ -1969,7 +2167,7 @@ cmd_get(int argc, char * const *argv)
             if (wild && wl.wl_ent[cur].we_isdir)
                 continue;  // Directories matched by wildcard are skipped
             did_get++;
-            rc2 = get_files(wl.wl_ent[cur].we_name, dst);
+            rc2 = get_files(wl.wl_ent[cur].we_name, dst, resume);
             if (rc2 != RC_SUCCESS) {
                 rc = rc2;
                 if ((rc2 == RC_USR_ABORT) || !wild) {
@@ -3407,8 +3605,15 @@ diff_dstamp(struct DateStamp *ds1, struct DateStamp *ds2)
             (uint64_t) ds_val.ds_Days * 24 * 60 * 60 * 1000);
 }
 
+/*
+ * put_file
+ * --------
+ * Sends a single local file to the remote. If resume is set and the
+ * remote file exists, the transfer continues from the end of the
+ * remote file.
+ */
 static rc_t
-put_file(const char *src, const char *dst)
+put_file(const char *src, const char *dst, uint resume)
 {
     int      bytes;
     uint     diff;
@@ -3417,11 +3622,13 @@ put_file(const char *src, const char *dst)
     uint     rlen;
     uint     type;
     uint     buflen = 32768;
+    uint     mode = HM_MODE_WRITE | HM_MODE_CREATE | HM_MODE_TRUNC;
     char    *bufptr;
     char    *bufdata;
     FILE    *fp;
     handle_t handle;
     uint64_t pos = 0;
+    uint64_t start_pos = 0;
     uint64_t time_start;
     uint64_t time_end;
     progress_t prog;
@@ -3434,19 +3641,53 @@ put_file(const char *src, const char *dst)
 
     filesize = fib.fib_Size;
 
+    if (resume) {
+        if (remote_file_stat(dst, &start_pos, NULL, NULL) != KM_STATUS_OK)
+            start_pos = 0;  // Remote file does not exist: put whole file
+        if (start_pos > filesize) {
+            printf("Remote file %s is larger than local; can not "
+                   "continue\n", dst);
+            return (RC_FAILURE);
+        }
+        if (start_pos != 0) {
+            printf("Put %s as %s ", src, dst);
+            print_size(filesize);
+            if (resume_check(dst, src, start_pos) != RC_SUCCESS)
+                return (RC_FAILURE);
+            if (start_pos == filesize) {
+                printf("already complete\n");
+                return (RC_SUCCESS);
+            }
+            printf("continue at %u KB ", (uint) ((start_pos + 512) >> 10));
+        }
+        if (start_pos != 0)
+            mode &= ~HM_MODE_TRUNC;
+    }
+
     fp = fopen(src, "r");
     if (fp == NULL) {
         printf("Failed to open %s for read\n", src);
         return (RC_FAILURE);
     }
 
-    rc = sm_fopen(cwd_handle, dst,
-                  HM_MODE_WRITE | HM_MODE_CREATE | HM_MODE_TRUNC,
-                  &type, fib.fib_Protection, &handle);
+    rc = sm_fopen(cwd_handle, dst, mode, &type, fib.fib_Protection, &handle);
     if (rc != KM_STATUS_OK) {
         printf("Failed to open %s for write: %s\n", dst, smash_err(rc));
         fclose(fp);
         return (RC_FAILURE);
+    }
+    if (start_pos != 0) {
+        uint64_t new_pos;
+        rc = sm_fseek(handle, SEEK_OFFSET_BEGINNING, start_pos, &new_pos,
+                      NULL, HM_SEEK_FLAG_NOEXTEND);
+        if ((rc != KM_STATUS_OK) || (new_pos != start_pos) ||
+            (fseek(fp, (long) start_pos, SEEK_SET) != 0)) {
+            printf("Failed to seek %s to %u\n", dst, (uint) start_pos);
+            fclose(fp);
+            sm_fclose(handle);
+            return (RC_FAILURE);
+        }
+        pos = start_pos;
     }
     bufptr = malloc(buflen + sizeof (hm_freadwrite_t));
     if (bufptr == NULL) {
@@ -3456,12 +3697,11 @@ put_file(const char *src, const char *dst)
         sm_fclose(handle);
         return (RC_FAILURE);
     }
-    printf("Put %s as %s ", src, dst);
     bufdata = bufptr + sizeof (hm_freadwrite_t);
-    if (filesize < 1000000)
-        printf("(%u bytes) ", (uint) filesize);
-    else
-        printf("(%u KB) ", (uint) ((filesize + 512) >> 10));
+    if (start_pos == 0) {
+        printf("Put %s as %s ", src, dst);
+        print_size(filesize);
+    }
     fflush(stdout);
 
     rc = RC_SUCCESS;
@@ -3502,7 +3742,7 @@ put_file(const char *src, const char *dst)
     diff = (uint) (time_end - time_start);
     if (flag_debug)
         printf("%u usec  ", diff);
-    printf(" %u KB/sec\n", calc_kb_sec(diff, filesize));
+    printf(" %u KB/sec\n", calc_kb_sec(diff, pos - start_pos));
     free(bufptr);
     fclose(fp);
     sm_fclose(handle);
@@ -3510,7 +3750,7 @@ put_file(const char *src, const char *dst)
 }
 
 static rc_t
-put_files(const char *src, const char *dst)
+put_files(const char *src, const char *dst, uint resume)
 {
     rc_t     rc;
     char    *dstbuf = NULL;
@@ -3557,7 +3797,7 @@ put_files(const char *src, const char *dst)
     }
 
     /* Simple file put (for now) */
-    rc = put_file(src, dst);
+    rc = put_file(src, dst, resume);
 
     if (dstbuf != NULL)
         free(dstbuf);
@@ -3575,12 +3815,23 @@ cmd_put(int argc, char * const *argv)
     rc_t        rc2;
     const char *dst = NULL;
     const char *names[MAX_ARGS];
+    uint        resume = 0;
+
+    /* "reput" is an alias for "put -c" */
+    if (strncmp(argv[0], "re", 2) == 0)
+        resume = 1;
 
     for (arg = 1; arg < argc; arg++) {
         const char *ptr = argv[arg];
-        if (*ptr == '-') {
+        if (strcmp(ptr, "--continue") == 0) {
+            resume = 1;
+        } else if (*ptr == '-') {
             while (*(++ptr) != '\0') {
                 switch (*ptr) {
+                    case 'c':  // Continue (resume) a partial transfer
+                    case 'z':  // Hidden alias for -c
+                        resume = 1;
+                        break;
                     default:
                         printf("Unknown argument -%s\n", ptr);
                         printf(cmd_put_help);
@@ -3643,7 +3894,7 @@ cmd_put(int argc, char * const *argv)
             if (wild && wl.wl_ent[cur].we_isdir)
                 continue;  // Directories matched by wildcard are skipped
             did_put++;
-            rc2 = put_files(wl.wl_ent[cur].we_name, dst);
+            rc2 = put_files(wl.wl_ent[cur].we_name, dst, resume);
             if (rc2 != RC_SUCCESS) {
                 rc = rc2;
                 if ((rc2 == RC_USR_ABORT) || !wild) {
